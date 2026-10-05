@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>5. Vertex Processing 與 Drawing Commands</title><link rel="stylesheet" href="style.css">
+<style>
+#modeCv,#interpCv{border:1px solid var(--line);border-radius:6px;background:#fff}
+.mem td{font:12px ui-monospace,monospace;text-align:center;padding:3px 4px}
+.mem .p{background:#dbeafe}.mem .c{background:#fde7b6}.mem .t{background:#c6f0d6}
+#divTbl td,#divTbl th{text-align:center;font:12px ui-monospace,monospace}
+</style></head>
+<body><main>
+<h1>5. Vertex Processing 與 Drawing Commands</h1>
+<p class="mut">對應講義 05。重點：資料怎麼進到 vertex shader、vertex shader 輸出什麼、各種 draw command 怎麼用。</p>
+<div class="toc"><a href="#overview">總覽</a><a href="#spec">Vertex Specification</a><a href="#layout">Stacked vs Interleaved</a><a href="#out">VS 輸出</a><a href="#interp">插值修飾詞</a><a href="#modes">Primitive 模式</a><a href="#elements">Indexed 繪製</a><a href="#cube">範例：旋轉立方體</a><a href="#restart">Strip 與 Restart</a><a href="#inst">Instancing</a><a href="#indirect">Indirect Draw</a><a href="#ver">版本對照</a></div>
+
+<h2 id="overview">總覽：一個頂點怎麼進 Vertex Shader</h2>
+<svg viewBox="0 0 960 170" style="width:100%" font-size="13" text-anchor="middle">
+<defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="10" y="20" width="190" height="50" rx="8" fill="#e5e7eb" stroke="#999"/><text x="105" y="42">Draw Command</text><text x="105" y="60" font-size="11" fill="#666">決定「怎麼取」(how)</text>
+<rect x="10" y="100" width="190" height="50" rx="8" fill="#e5e7eb" stroke="#999"/><text x="105" y="122">VAO（Vertex Specification）</text><text x="105" y="140" font-size="11" fill="#666">決定「從哪取」(where)</text>
+<rect x="270" y="55" width="170" height="60" rx="8" fill="#fde7b6" stroke="#999"/><text x="355" y="80">Vertex Fetch</text><text x="355" y="98" font-size="11" fill="#666">組出每個頂點的 attribute</text>
+<rect x="510" y="55" width="170" height="60" rx="8" fill="#c6f0d6" stroke="#999"/><text x="595" y="80">Vertex Shader</text><text x="595" y="98" font-size="11" fill="#666">每個頂點跑一次</text>
+<rect x="750" y="20" width="200" height="50" rx="8" fill="#dbeafe" stroke="#999"/><text x="850" y="42">gl_Position 等內建輸出</text><text x="850" y="60" font-size="11" fill="#666">gl_PerVertex</text>
+<rect x="750" y="100" width="200" height="50" rx="8" fill="#dbeafe" stroke="#999"/><text x="850" y="122">使用者自訂 out</text><text x="850" y="140" font-size="11" fill="#666">→ 下一個 stage</text>
+<path d="M200 45 L268 75" stroke="#555" stroke-width="2" marker-end="url(#a5)" fill="none"/><path d="M200 125 L268 95" stroke="#555" stroke-width="2" marker-end="url(#a5)" fill="none"/>
+<path d="M440 85 h68" stroke="#555" stroke-width="2" marker-end="url(#a5)"/><text x="475" y="78" font-size="11" fill="#2563eb">in 變數</text>
+<path d="M680 75 L748 45" stroke="#555" stroke-width="2" marker-end="url(#a5)" fill="none"/><path d="M680 95 L748 125" stroke="#555" stroke-width="2" marker-end="url(#a5)" fill="none"/>
+</svg>
+<ul>
+<li>VS 的輸入分兩種：
+<ul><li><b>內建</b>：<code>gl_VertexID</code>（第幾個頂點）、<code>gl_InstanceID</code>（第幾個 instance，範圍 [0, instancecount)，非 instanced draw 時恆為 0）</li>
+<li><b>使用者自訂 attribute</b>：<code>layout(location = 0) in vec3 position;</code>，值由 vertex fetch 依 VAO 設定填入</li></ul></li>
+<li>VAO 不只存「attribute 怎麼讀」，<b>沒有綁有效的 VAO 就不能 draw</b>。</li>
+</ul>
+
+<h2 id="spec">Vertex Specification：三種設定 attribute 的方式</h2>
+<table>
+<tr><th>方式</th><th>API</th><th>效果</th><th>何時用</th></tr>
+<tr><td>1. 常數值</td><td><code>glVertexAttrib*</code>（如 <code>glVertexAttrib3fv</code>）</td><td>該 attribute <b>關閉陣列</b>時，所有頂點都讀到同一個值</td><td>不改 shader、暫時固定某個輸入（例如整個物體同一個顏色）</td></tr>
+<tr><td>2. 從 buffer 讀</td><td><code>glVertexAttribPointer</code> + <code>glEnableVertexAttribArray</code></td><td>每個頂點從 VBO 讀自己的值</td><td><b>最常用</b></td></tr>
+<tr><td>3. 格式與 buffer 分開設定（4.3+）</td><td><code>glVertexAttribFormat</code> / <code>glVertexAttribBinding</code> / <code>glBindVertexBuffer</code></td><td>「格式」和「哪個 buffer」拆成兩步，換 buffer 只要改一行</td><td>進階；macOS（4.1）不能用</td></tr>
+</table>
+<div class="warn">方式 3 <b>不能和 1、2 混用</b>。Attribute 陣列預設是 <b>disabled</b>，所以沒呼叫 <code>glEnableVertexAttribArray</code> 時，shader 讀到的就是 <code>glVertexAttrib*</code> 設定的常數（預設 (0,0,0,1)）。</div>
+
+<div class="ex"><b>範例：方式 1 + 2 混用（講義例子）</b>
+<p>位置從 VBO 讀（每個頂點不同），顏色用常數（整個三角形同色）：</p>
+<pre><code><span class="c">// C++</span>
+glBindVertexArray(vao);
+glEnableVertexAttribArray(0);                          <span class="c">// attrib 0：開陣列 → 從 buffer 讀</span>
+glDisableVertexAttribArray(1);                         <span class="c">// attrib 1：關陣列 → 用常數</span>
+glBindBuffer(GL_ARRAY_BUFFER, vbo);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+glVertexAttrib3fv(1, &amp;color[0]);                       <span class="c">// 所有頂點的 attrib 1 = color</span>
+glDrawArrays(GL_TRIANGLES, 0, 3);
+
+<span class="c">// Vertex shader</span>
+layout(location = 0) in vec3 vertex;
+layout(location = 1) in vec3 color;                    <span class="c">// shader 不用改，C++ 決定它從哪來</span></code></pre></div>
+
+<h3>glVertexAttribPointer 的三個版本（重要！）</h3>
+<table>
+<tr><th>函式</th><th>shader 端型別</th><th>說明</th></tr>
+<tr><td><code>glVertexAttribPointer</code></td><td><code>float / vec*</code></td><td>資料一律轉成 float。整數資料搭配 <code>normalized = GL_TRUE</code> 會正規化：有號 → [-1, 1]、無號 → [0, 1]（例如 <code>GL_UNSIGNED_BYTE</code> 的 255 → 1.0，常用於顏色）</td></tr>
+<tr><td><code>glVertexAttribIPointer</code></td><td><code>int / uint / ivec* / uvec*</code></td><td>保持整數。<b>shader 宣告 <code>in int</code> / <code>in uint</code> 時必須用這個</b>，用錯會讀到亂碼</td></tr>
+<tr><td><code>glVertexAttribLPointer</code></td><td><code>double / dvec*</code></td><td>雙精度（少用）</td></tr>
+</table>
+
+<div class="ex"><b>範例：方式 3（4.3+）</b>
+<p>同一個 VBO 裡每個頂點是 position(3 float) + color(3 float) = 24 bytes：</p>
+<pre><code>glVertexAttribFormat(0, 3, GL_FLOAT, GL_FALSE, 0);    <span class="c">// attrib 0：3 個 float，在頂點內 offset 0</span>
+glVertexAttribBinding(0, 0);                          <span class="c">// attrib 0 從 binding point 0 讀</span>
+glVertexAttribFormat(1, 3, GL_FLOAT, GL_FALSE, 12);   <span class="c">// attrib 1：offset 12（跳過 position）</span>
+glVertexAttribBinding(1, 0);                          <span class="c">// 也從 binding point 0 讀</span>
+glBindVertexBuffer(0, vbo, 0, 24);                    <span class="c">// binding point 0 ← vbo，起點 0，stride 24</span>
+glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
+<span class="c">// 換另一個模型（相同格式）只要：glBindVertexBuffer(0, otherVbo, 0, 24);</span></code></pre>
+<p class="mut">講義範例讓 attrib 0、1 各用 binding 0、1 但綁同一個 vbo，效果相同。這裡的 relativeoffset 是「頂點內」的位移，buffer 起點位移則在 glBindVertexBuffer 的 offset。</p></div>
+
+<h2 id="layout">Stacked vs Interleaved：stride 和 offset 怎麼算</h2>
+<p class="mut">4 個頂點，每個有 position(4 float)、color(4 float)、texcoord(2 float)。切換看記憶體排法與對應的程式碼。</p>
+<div class="tabs"><button class="b" data-pane="lyI">Interleaved（交錯）</button><button class="b" data-pane="lyS">Stacked（分段）</button></div>
+<div class="pane" id="lyI"></div>
+<div class="pane" id="lyS"></div>
+<ul>
+<li><b>Interleaved</b>：一個頂點的資料放在一起，<b>stride = 一個頂點的總大小</b>，offset = 該 attribute 在頂點內的位置。快取友善，模型資料常用。</li>
+<li><b>Stacked</b>：同類資料放一起（先所有位置、再所有顏色…），<b>stride = 0</b>（緊密排列），offset = 前面所有區段的大小。方便只更新某一類資料（例如每幀更新顏色）。</li>
+<li>兩者畫出來一樣，只是 <code>glVertexAttribPointer</code> 的最後兩個參數不同。</li>
+</ul>
+
+<h2 id="out">Vertex Shader 的輸出</h2>
+<ul>
+<li>輸出送往「下一個存在的 stage」：Tessellation（沒有 TCS 就給 TES）→ Geometry → Vertex Post-Processing（rasterizer 前的固定處理）。</li>
+<li>內建輸出 block <code>gl_PerVertex</code>（沒有 instance 名，直接寫 <code>gl_Position</code> 即可）：</li>
+</ul>
+<pre><code>out gl_PerVertex {
+    vec4  gl_Position;       <span class="c">// clip space 位置，必須寫</span>
+    float gl_PointSize;      <span class="c">// 畫 GL_POINTS 時點的大小（pixel）</span>
+    float gl_ClipDistance[]; <span class="c">// 自訂裁切平面的距離</span>
+};</code></pre>
+<table>
+<tr><th>變數</th><th>重點</th><th>範例</th></tr>
+<tr><td><code>gl_Position</code></td><td>Object space 經 MVP 轉到 clip space 的齊次座標</td><td><code>gl_Position = mvp * vec4(pos, 1.0);</code></td></tr>
+<tr><td><code>gl_PointSize</code></td><td>只對點有意義；<b>要先 <code>glEnable(GL_PROGRAM_POINT_SIZE)</code></b>，否則被忽略、改用 <code>glPointSize</code> 的值。大小會被限制在 <code>GL_POINT_SIZE_RANGE</code> 內</td><td><pre style="margin:0"><code>GLint r[2];
+glGetIntegerv(GL_POINT_SIZE_RANGE, r);
+glEnable(GL_PROGRAM_POINT_SIZE);
+<span class="c">// VS: gl_PointSize = 32.0;</span></code></pre></td></tr>
+<tr><td><code>gl_ClipDistance[i]</code></td><td>≥ 0 = 在平面內側（保留）、&lt; 0 = 外側（裁掉）。需在 shader 重新宣告大小，並 <code>glEnable(GL_CLIP_DISTANCE0 + i)</code></td><td><pre style="margin:0"><code><span class="c">// 只保留 y &gt; 0 的部分（如水面反射）</span>
+out float gl_ClipDistance[1];
+gl_ClipDistance[0] = worldPos.y;</code></pre></td></tr>
+</table>
+
+<h2 id="interp">插值修飾詞（Interpolation Qualifiers）</h2>
+<p>使用者自訂的 out 變數可以加修飾詞，控制 rasterizer 怎麼在三角形內部插值：</p>
+<table>
+<tr><th>修飾詞</th><th>效果</th><th>用途</th></tr>
+<tr><td><code>smooth</code>（預設）</td><td>透視校正（perspective-correct）插值</td><td>幾乎所有情況：顏色、UV、法向量</td></tr>
+<tr><td><code>flat</code></td><td>不插值，整個 primitive 都用 <b>provoking vertex</b>（預設是最後一個頂點）的值</td><td>整數（<b>int / uint 輸出必須 flat</b>）、物件 ID、flat shading</td></tr>
+<tr><td><code>noperspective</code></td><td>在螢幕空間線性插值，不做透視校正</td><td>少用；螢幕空間效果（例如線框寬度）</td></tr>
+</table>
+<div class="grid2">
+<div><pre><code>out VertexData {
+    vec4 vertex;
+    smooth vec3 color;   <span class="c">// 平滑（預設）</span>
+    flat int vertexID;   <span class="c">// 不插值</span>
+} vertexData;
+void main() {
+    vertexData.vertex = vertex;
+    vertexData.vertexID = gl_VertexID;
+    gl_Position = vertex;
+}</code></pre>
+<p class="mut">FS 端的 in 要用相同修飾詞。</p></div>
+<div><div class="ctrl"><button class="b iq on" data-m="smooth">smooth</button><button class="b iq" data-m="flat">flat</button></div>
+<canvas id="interpCv" width="300" height="220"></canvas>
+<p class="mut">三個頂點：紅、綠、藍。flat 時全部用最後一個頂點（藍）。</p></div>
+</div>
+<div class="note"><b>smooth vs noperspective 差在哪？</b> 透視下，遠處的半個三角形在螢幕上看起來比較小。如果直接在螢幕上線性插值（noperspective），貼圖在遠處會被「拉歪」。smooth 會考慮深度做修正，所以斜看地板的磁磚貼圖才會正確。</div>
+
+<h2 id="modes">Primitive 模式（mode 參數）</h2>
+<p class="mut">選模式並調整 count，看同一組頂點會組成什麼。灰色數字是頂點編號，彩色數字是第幾個 primitive。</p>
+<div class="ctrl" id="modeBtns"></div>
+<div class="ctrl"><label>count <input type="range" id="mCount" min="1" max="8" value="8"></label><span id="mCountV"></span></div>
+<div class="grid2"><canvas id="modeCv" width="440" height="260"></canvas><div class="card" id="modeTxt"></div></div>
+<p class="mut">另有 <code>GL_LINES_ADJACENCY</code>、<code>GL_LINE_STRIP_ADJACENCY</code>、<code>GL_TRIANGLES_ADJACENCY</code>、<code>GL_TRIANGLE_STRIP_ADJACENCY</code>（給 geometry shader 用，額外提供相鄰頂點）、<code>GL_PATCHES</code>（給 tessellation）。<b>沒有 <code>GL_QUADS</code></b>。</p>
+
+<h2 id="elements">Indexed 繪製：glDrawArrays vs glDrawElements</h2>
+<div class="grid2">
+<div class="card"><b>glDrawArrays（non-indexed）</b>
+<ul><li>頂點依 buffer 中的順序直接送進 VS</li>
+<li>共用的頂點要重複存</li>
+<li><code>glDrawArrays(GL_TRIANGLES, first, count)</code></li></ul></div>
+<div class="card"><b>glDrawElements（indexed）</b>
+<ul><li>多一層間接：先讀 <b>index buffer</b>（綁在 <code>GL_ELEMENT_ARRAY_BUFFER</code>），再用 index 去頂點陣列取資料</li>
+<li>共用頂點只存一次</li>
+<li><code>glDrawElements(GL_TRIANGLES, count, type, offset)</code></li></ul></div>
+</div>
+<div class="ex"><b>範例：正方形，兩種寫法比較</b>
+<pre><code><span class="c">// glDrawArrays：6 個頂點（左下、右上各重複一次）</span>
+float v[] = { 0,0,  1,0,  1,1,     0,0,  1,1,  0,1 };
+glDrawArrays(GL_TRIANGLES, 0, 6);
+
+<span class="c">// glDrawElements：4 個頂點 + 6 個 index</span>
+float v[]          = { 0,0,  1,0,  1,1,  0,1 };    <span class="c">// 頂點 0,1,2,3</span>
+unsigned int idx[] = { 0,1,2,  0,2,3 };            <span class="c">// 三角形 (0,1,2) 和 (0,2,3)</span>
+glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);        <span class="c">// 在 VAO 綁定期間綁 → 會記在 VAO 裡</span>
+glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);</code></pre>
+<p>正方形省 2 個頂點看似不多，但一般模型每個頂點平均被 ~6 個三角形共用，indexed 能省下大量記憶體與 VS 計算（GPU 會快取已算過的頂點）。</p></div>
+
+<h3>Index 型別：選夠用的最小型別</h3>
+<table>
+<tr><th>type</th><th>大小</th><th>可表示的 index</th><th>適用</th></tr>
+<tr><td><code>GL_UNSIGNED_BYTE</code></td><td>1 byte</td><td>0 ~ 255</td><td>頂點數 ≤ 256 的小模型</td></tr>
+<tr><td><code>GL_UNSIGNED_SHORT</code></td><td>2 bytes</td><td>0 ~ 65,535</td><td>一般模型（講義立方體用這個）</td></tr>
+<tr><td><code>GL_UNSIGNED_INT</code></td><td>4 bytes</td><td>0 ~ 4,294,967,295</td><td>大模型（Assimp 載入通常用這個）</td></tr>
+</table>
+<div class="warn">C++ 陣列型別要和 type 參數一致：<code>GLushort idx[]</code> 配 <code>GL_UNSIGNED_SHORT</code>、<code>GLuint idx[]</code> 配 <code>GL_UNSIGNED_INT</code>。不一致 → 畫出亂七八糟的三角形。</div>
+
+<div class="ex"><b>offset 是 byte，不是第幾個 index</b>
+<pre><code><span class="c">// index buffer 有 12 個 GLuint，想從第 3 個 index 開始畫 6 個</span>
+glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)(3 * sizeof(GLuint)));  <span class="c">// = 12 bytes</span>
+<span class="c">// 講義寫法 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 12) 意思相同（12 bytes = 3 個 index）</span></code></pre></div>
+
+<div class="ex"><b>BaseVertex：每個 index 自動加上一個值</b>
+<pre><code>glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, 2);
+<span class="c">// index buffer 是 {0,1,2, 0,2,3} → 實際取頂點 {2,3,4, 2,4,5}</span></code></pre>
+<p>用途：多個模型的頂點接在<b>同一個 VBO</b> 後面，每個模型的 index 都從 0 開始寫，畫第二個模型時用 basevertex = 第一個模型的頂點數，就不用改 index 資料。</p></div>
+
+<h2 id="cube">範例：旋轉立方體（講義 Spinning Cube 整理）</h2>
+<p>8 個頂點 + 36 個 index（6 面 × 2 三角形 × 3 頂點），用 <code>glDrawElements</code> 畫：</p>
+<pre><code><span class="c">// ---- Vertex shader ----</span>
+#version 410 core
+in vec4 vertex;
+out VS_OUT { vec4 color; } vs_out;
+uniform mat4 mv_matrix;
+uniform mat4 proj_matrix;
+void main() {
+    gl_Position = proj_matrix * mv_matrix * vertex;
+    vs_out.color = vertex * 2.0 + vec4(0.5, 0.5, 0.5, 0.0);  <span class="c">// 用位置當顏色：(-0.25~0.25)*2+0.5 → 0~1</span>
+}
+<span class="c">// ---- Fragment shader ----</span>
+#version 410 core
+in VS_OUT { vec4 color; } fs_in;
+out vec4 color;
+void main() { color = fs_in.color; }
+
+<span class="c">// ---- 資料 ----</span>
+static const GLfloat vertex_positions[] = {
+    -0.25f,-0.25f,-0.25f,  -0.25f, 0.25f,-0.25f,   0.25f,-0.25f,-0.25f,   0.25f, 0.25f,-0.25f,
+     0.25f,-0.25f, 0.25f,   0.25f, 0.25f, 0.25f,  -0.25f,-0.25f, 0.25f,  -0.25f, 0.25f, 0.25f };
+static const GLushort vertex_indices[] = {
+    0,1,2, 2,1,3,   2,3,4, 4,3,5,   4,5,6, 6,5,7,
+    6,7,0, 0,7,1,   6,0,2, 2,4,6,   7,5,3, 7,3,1 };
+
+<span class="c">// ---- Setup（VAO 綁定中）----</span>
+glGenBuffers(1, &amp;position_buffer);
+glBindBuffer(GL_ARRAY_BUFFER, position_buffer);
+glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_positions), vertex_positions, GL_STATIC_DRAW);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);   <span class="c">// vec4 in 只給 3 個 → w 自動補 1</span>
+glEnableVertexAttribArray(0);
+glGenBuffers(1, &amp;index_buffer);
+glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
+glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(vertex_indices), vertex_indices, GL_STATIC_DRAW);
+
+<span class="c">// ---- 視窗大小改變 ----</span>
+aspect = (float)w / (float)h;
+proj_matrix = glm::perspective(glm::radians(50.0f), aspect, 0.1f, 1000.0f);
+
+<span class="c">// ---- 每幀 ----</span>
+float f = (float)currentTime * 0.3f;
+glm::mat4 mv = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -4.0f));        <span class="c">// 推到相機前方 4 單位</span>
+mv = glm::translate(mv, glm::vec3(sinf(2.1f*f)*0.5f, cosf(1.7f*f)*0.5f,
+                                  sinf(1.3f*f)*cosf(1.5f*f)*2.0f));                 <span class="c">// 隨時間飄動</span>
+mv = glm::rotate(mv, glm::radians((float)currentTime * 45.0f), glm::vec3(0, 1, 0));  <span class="c">// 繞 y 轉</span>
+mv = glm::rotate(mv, glm::radians((float)currentTime * 81.0f), glm::vec3(1, 0, 0));  <span class="c">// 繞 x 轉</span>
+static const GLfloat green[] = { 0.0f, 0.25f, 0.0f, 1.0f };
+glClearBufferfv(GL_COLOR, 0, green);
+glUseProgram(program);
+glUniformMatrix4fv(mv_location, 1, GL_FALSE, glm::value_ptr(mv));
+glUniformMatrix4fv(proj_location, 1, GL_FALSE, glm::value_ptr(proj_matrix));
+glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, 0);</code></pre>
+<div class="note"><b>和講義投影片的差異</b>（照抄會編譯錯誤或結果不對）：
+<ul><li>投影片的 <code>deg2rad(...)</code> → 用 <code>glm::radians(...)</code>（投影片註解也提醒「should use radians in glm」）</li>
+<li><code>aspect = (float)w / (float)f</code> 是筆誤，應為 <code>h</code></li>
+<li><code>glUniformMatrix4fv(..., mv_matrix)</code> 不能直接傳 glm::mat4，要 <code>glm::value_ptr(mv_matrix)</code></li>
+<li>這裡補上了 <code>glEnableVertexAttribArray(0)</code>，以及 depth test 的提醒：要有正確前後關係需 <code>glEnable(GL_DEPTH_TEST)</code> 並清 depth buffer</li></ul></div>
+
+<h2 id="restart">Triangle Strip 與 Primitive Restart</h2>
+<ul>
+<li><b>Triangle soup</b>（GL_TRIANGLES）：每個三角形 3 個頂點，彼此獨立。</li>
+<li><b>Triangle strip</b>：第一個三角形 3 個頂點，<b>之後每多 1 個頂點就多 1 個三角形</b>（與前兩個頂點組成）。資料量約為 1/3，有工具能把 soup「stripify」成 strip。</li>
+<li>問題：一次 draw call 只能畫<b>一條</b> strip。要畫多條 → 用 <b>primitive restart</b>：在 index 中放一個特殊值，遇到它就結束目前的 strip、從下一個 index 開始新的一條。</li>
+<li>適用模式：<code>GL_TRIANGLE_STRIP</code>、<code>GL_TRIANGLE_FAN</code>、<code>GL_LINE_STRIP</code>、<code>GL_LINE_LOOP</code>；只對 <b>indexed</b> draw 有效（glDrawArrays 會忽略）。</li>
+</ul>
+<pre><code>GLuint idx[] = { 0,1,2,3,  0xFFFFFFFF,  4,5,6,7 };   <span class="c">// 兩條 strip，中間用 restart index 隔開</span>
+glEnable(GL_PRIMITIVE_RESTART);                       <span class="c">// 預設關閉</span>
+glPrimitiveRestartIndex(0xFFFFFFFF);                  <span class="c">// 選一個不會用到的 index 值（預設 0）</span>
+glDrawElements(GL_TRIANGLE_STRIP, 9, GL_UNSIGNED_INT, 0);
+glDisable(GL_PRIMITIVE_RESTART);</code></pre>
+<p class="mut">上方「Primitive 模式」互動圖選 TRIANGLE_STRIP 並勾選 restart，可以看到斷成兩條的效果。restart index 最好選該型別的最大值（如 GL_UNSIGNED_INT 用 0xFFFFFFFF），避免和真實頂點編號衝突。講義例子用 9。</p>
+
+<h2 id="inst">Instancing：一次 draw call 畫很多份</h2>
+<div class="ex"><b>為什麼需要？</b>
+<p>要畫 10 萬根草，每根草的幾何形狀一樣，只有位置 / 長度 / 方向不同。用迴圈：</p>
+<pre><code>for (int n = 0; n &lt; numGrass; n++) {
+    SetupGrassBladeParameters();             <span class="c">// 設 uniform</span>
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);   <span class="c">// 10 萬次 draw call</span>
+}</code></pre>
+<p>每根草對 GPU 來說很便宜，但 <b>CPU 送 10 萬次指令</b>才是瓶頸。Instanced draw 只送 1 次指令：</p>
+<pre><code>glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 6, numGrass);   <span class="c">// 6 個頂點 × numGrass 份</span></code></pre></div>
+<table>
+<tr><th></th><th>迴圈版</th><th>Instanced 版</th></tr>
+<tr><td>每份之間改狀態</td><td>可以（換 uniform、換 texture）</td><td><b>不行</b>，所有 instance 用同一組狀態</td></tr>
+<tr><td>速度</td><td>慢（N 次 draw call）</td><td>快（狀態只處理一次）</td></tr>
+<tr><td><code>gl_InstanceID</code></td><td>永遠 0</td><td>0 ~ instancecount−1</td></tr>
+</table>
+<p>既然不能改狀態，每個 instance 怎麼長得不一樣？講義三種方法：</p>
+<div class="grid2">
+<div class="card"><b>1. 用 gl_InstanceID 算出參數</b>
+<pre><code><span class="c">// 排成 100 × 100 的方陣</span>
+int id = gl_InstanceID;
+vec3 offset = vec3(id / 100, mod(id, 100), 0);
+gl_Position = vec4(vertex + offset, 1.0);</code></pre>
+<p class="mut">不用額外資料，適合規則排列。</p></div>
+<div class="card"><b>2. 用 gl_InstanceID 查 uniform 陣列</b>
+<pre><code>uniform MyUniformBlock { vec4 offset[1000]; };
+gl_Position = vec4(vertex + offset[gl_InstanceID].xyz, 1.0);</code></pre>
+<p class="mut">受限於 uniform 大小（UBO 通常 16KB~64KB）。</p></div>
+</div>
+<div class="card"><b>3. Instanced attribute（<code>glVertexAttribDivisor</code>）— 最常用</b>
+<p>正常 attribute 是「每個頂點讀下一筆」。設 divisor 後變成「每 N 個 <b>instance</b> 讀下一筆」：</p>
+<ul><li><code>divisor = 0</code>：每個頂點讀一筆（預設，一般 attribute）</li>
+<li><code>divisor = 1</code>：每個 instance 讀一筆（同一 instance 的所有頂點拿到相同值）</li>
+<li><code>divisor = N</code>：每 N 個 instance 才換下一筆</li></ul>
+<p>讀取的 index = <code>floor(gl_InstanceID / divisor) + baseInstance</code>。</p>
+<pre><code>layout(location = 0) in vec4 vertex;              <span class="c">// 每頂點</span>
+layout(location = 1) in vec4 instance_color;      <span class="c">// 每 instance</span>
+layout(location = 2) in vec4 instance_position;   <span class="c">// 每 instance</span>
+...
+gl_Position = mvp * (vertex + instance_position);
+
+<span class="c">// C++：三段資料放在同一個 buffer（stacked）</span>
+glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, (void*)sizeof(square_vertices));
+glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 0, (void*)(sizeof(square_vertices) + sizeof(instance_colors)));
+glEnableVertexAttribArray(0); glEnableVertexAttribArray(1); glEnableVertexAttribArray(2);
+glVertexAttribDivisor(1, 1);
+glVertexAttribDivisor(2, 1);
+glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, 4);   <span class="c">// 4 個方塊，各自顏色與位置</span></code></pre></div>
+
+<h3>互動：divisor 決定誰讀到哪一筆</h3>
+<p class="mut">畫 1 個三角形（3 個頂點）× 4 個 instance。表格內是「該頂點的 attribute 讀到陣列第幾筆」。</p>
+<div class="ctrl"><label>divisor <select id="dv"><option>0</option><option selected>1</option><option>2</option></select></label>
+<label>baseInstance <select id="bi"><option selected>0</option><option>1</option><option>2</option></select></label></div>
+<table id="divTbl"></table>
+<p class="mut" id="divTxt"></p>
+<ul>
+<li><b>Base instance</b>（<code>glDrawArraysInstancedBaseInstance</code>，4.2+）：讓 instanced attribute 從第 baseInstance 筆開始讀。<b>不影響 gl_InstanceID</b>（仍從 0 開始）。</li>
+<li>Indexed 版：<code>glDrawElementsInstanced</code>、<code>glDrawElementsInstancedBaseVertexBaseInstance</code>。</li>
+</ul>
+
+<h2 id="indirect">Indirect Draw：draw 參數放在 buffer 裡</h2>
+<ul>
+<li><b>Direct</b>：參數（count、first…）由 CPU 在呼叫時直接給。</li>
+<li><b>Indirect</b>：參數事先寫進綁在 <code>GL_DRAW_INDIRECT_BUFFER</code> 的 buffer，呼叫時只給「在 buffer 的哪裡」。</li>
+<li>好處：參數可以離線預先算好、用多執行緒產生、或<b>由 GPU（compute shader）自己產生</b> → GPU-driven rendering（期末相關）。</li>
+<li><code>glMultiDraw*Indirect</code>：一次呼叫執行 buffer 中的<b>一整串</b> draw 指令。</li>
+</ul>
+<div class="grid2">
+<pre><code>typedef struct {
+    GLuint vertexCount;      <span class="c">// = count</span>
+    GLuint instanceCount;
+    GLuint firstVertex;      <span class="c">// = first</span>
+    GLuint baseInstance;
+} DrawArraysIndirectCommand;
+<span class="c">// 對應 glDrawArraysInstancedBaseInstance</span></code></pre>
+<pre><code>typedef struct {
+    GLuint vertexCount;      <span class="c">// = count（index 數）</span>
+    GLuint instanceCount;
+    GLuint firstIndex;       <span class="c">// offset = firstIndex * sizeof(type)</span>
+    GLint  baseVertex;
+    GLuint baseInstance;
+} DrawElementsIndirectCommand;
+<span class="c">// 對應 glDrawElementsInstancedBaseVertexBaseInstance</span></code></pre>
+</div>
+<pre><code><span class="c">// 準備 N 個 draw 指令</span>
+std::vector&lt;DrawElementsIndirectCommand&gt; cmds(N);
+for (int i = 0; i &lt; N; i++)
+    cmds[i] = { indexCount[i], 1, firstIndex[i], baseVertex[i], (GLuint)i };
+glGenBuffers(1, &amp;indirectBuf);
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBuf);
+glBufferData(GL_DRAW_INDIRECT_BUFFER, N * sizeof(DrawElementsIndirectCommand), cmds.data(), GL_STATIC_DRAW);
+
+<span class="c">// 一次畫完 N 個物件；indirect 參數是 buffer 內的 byte offset</span>
+glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, (void*)0, N, 0);   <span class="c">// stride 0 = 緊密排列</span></code></pre>
+<div class="ex"><b>講義 Asteroid 範例的技巧</b>
+<p>畫幾萬顆小行星：每顆是一個 indirect 指令，<code>baseInstance = i</code>。再建一個 attribute <code>draw_id</code>，內容是 0,1,2,…，設 <code>glVertexAttribDivisor(10, 1)</code>。因為 instanced attribute 的讀取 index = instanceID / divisor + baseInstance，每顆小行星的 VS 就會讀到自己的編號 i（<code>gl_InstanceID</code> 都是 0，做不到這件事），再用它在 shader 內算出各自的旋轉、位置、縮放。</p>
+<pre><code>glVertexAttribIPointer(10, 1, GL_UNSIGNED_INT, 0, NULL);   <span class="c">// 整數 attribute 用 IPointer！</span>
+glVertexAttribDivisor(10, 1);
+glEnableVertexAttribArray(10);
+<span class="c">// VS: layout(location = 10) in uint draw_id;</span>
+glMultiDrawArraysIndirect(GL_TRIANGLES, NULL, NUM_DRAWS, 0);</code></pre></div>
+
+<h2 id="ver">版本對照（macOS 只到 4.1）</h2>
+<table>
+<tr><th>功能</th><th>需要版本</th><th>macOS</th></tr>
+<tr><td>glDrawArrays / glDrawElements / glVertexAttrib*Pointer</td><td>核心</td><td>✓</td></tr>
+<tr><td>glDrawArraysInstanced / glDrawElementsInstanced、Primitive restart</td><td>3.1</td><td>✓</td></tr>
+<tr><td>glDrawElementsBaseVertex</td><td>3.2</td><td>✓</td></tr>
+<tr><td>glVertexAttribDivisor</td><td>3.3</td><td>✓</td></tr>
+<tr><td>glDrawArraysIndirect / glDrawElementsIndirect</td><td>4.0</td><td>✓</td></tr>
+<tr><td>BaseInstance 系列</td><td>4.2</td><td>✗</td></tr>
+<tr><td>glMultiDraw*Indirect、glVertexAttribFormat / Binding、glBindVertexBuffer</td><td>4.3</td><td>✗</td></tr>
+</table>
+</main>
+<script src="common.js"></script>
+<script>
+// ---------- Stacked vs Interleaved ----------
+(function(){
+ const A=[['p','pos',4],['c','color',4],['t','uv',2]], NV=4, per=10;
+ function build(inter){
+  let cells=[];
+  if(inter){for(let v=0;v<NV;v++)A.forEach(([k,n,s])=>{for(let i=0;i<s;i++)cells.push([k,`${n[0]}${v}.${'xyzw'[i]}`]);});}
+  else A.forEach(([k,n,s])=>{for(let v=0;v<NV;v++)for(let i=0;i<s;i++)cells.push([k,`${n[0]}${v}.${'xyzw'[i]}`]);});
+  let rows='';for(let r=0;r<cells.length;r+=10){rows+=`<tr><th>float ${r}~${r+9}</th>`+cells.slice(r,r+10).map(([k,t])=>`<td class="${k}">${t}</td>`).join('')+'</tr>';}
+  let off=0, code=A.map(([k,n,s],i)=>{let o,st;
+   if(inter){o=off;off+=s;st=`sizeof(GLfloat)*${per}`;}else{o=off;off+=s*NV;st='0';}
+   return `glVertexAttribPointer(${i}, ${s}, GL_FLOAT, GL_FALSE, ${st}, (void*)(sizeof(GLfloat)*${o}));   <span class="c">// ${n}</span>`;}).join('\n');
+  return `<table class="mem">${rows}</table><pre><code>${code}\nglDrawArrays(GL_TRIANGLE_STRIP, 0, 4);</code></pre>`+
+   (inter?'<p class="mut">stride = 10 個 float = 40 bytes；color 在頂點內第 4 個 float、uv 在第 8 個。</p>':'<p class="mut">stride = 0（每段內緊密排列）；color 段從第 16 個 float 開始（4 頂點 × 4）、uv 段從第 32 個開始（16 + 16）。</p>');}
+ document.getElementById('lyI').innerHTML=build(true);document.getElementById('lyS').innerHTML=build(false);
+})();
+
+// ---------- flat vs smooth ----------
+(function(){
+ const cv=document.getElementById('interpCv'),cx=cv.getContext('2d'),W=cv.width,H=cv.height;
+ const P=[[30,200],[270,200],[150,20]],C=[[230,40,40],[40,190,40],[40,80,240]];
+ function draw(m){const img=cx.createImageData(W,H);const e=(a,b,p)=>(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);const ar=e(P[0],P[1],P[2]);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const p=[x+.5,y+.5],w=[e(P[1],P[2],p)/ar,e(P[2],P[0],p)/ar,e(P[0],P[1],p)/ar],o=(y*W+x)*4;
+   if(w.some(v=>v<0)){img.data.set([255,255,255,255],o);continue;}
+   const c=m==='flat'?C[2]:[0,1,2].map(k=>C[0][k]*w[0]+C[1][k]*w[1]+C[2][k]*w[2]);img.data.set([...c,255],o);}
+  cx.putImageData(img,0,0);cx.fillStyle='#000';cx.font='12px sans-serif';P.forEach((p,i)=>cx.fillText('v'+i,p[0]+(i===2?8:-4),p[1]+(i===2?4:14)));}
+ document.querySelectorAll('.iq').forEach(b=>b.onclick=()=>{document.querySelectorAll('.iq').forEach(x=>x.classList.toggle('on',x===b));draw(b.dataset.m);});
+ draw('smooth');
+})();
+
+// ---------- Primitive modes ----------
+(function(){
+ const cv=document.getElementById('modeCv'),cx=cv.getContext('2d');
+ const ZZ=[[50,70],[50,200],[150,70],[150,200],[250,70],[250,200],[350,70],[350,200]];
+ const FAN=[[220,140],[340,140],[305,60],[220,35],[135,60],[100,140],[135,220],[220,245]];
+ const M={GL_POINTS:'每個頂點畫一個點。',GL_LINES:'每 2 個頂點一條線：(0,1)(2,3)…，多出來的單一頂點被忽略。',GL_LINE_STRIP:'連續折線：0-1-2-3…，n 個頂點 n−1 條線。',GL_LINE_LOOP:'同 LINE_STRIP，最後再接回第一個頂點形成封閉迴圈。',
+  GL_TRIANGLES:'每 3 個頂點一個獨立三角形：(0,1,2)(3,4,5)…，不足 3 個的尾巴被忽略。',GL_TRIANGLE_STRIP:'第 i 個三角形 = 頂點 (i, i+1, i+2)：n 個頂點 n−2 個三角形。奇數個三角形 OpenGL 會自動交換前兩個頂點順序，讓所有三角形的 winding（正反面）一致。',
+  GL_TRIANGLE_FAN:'所有三角形共用第一個頂點：(0,1,2)(0,2,3)(0,3,4)…，適合畫圓盤、凸多邊形。'};
+ const COL=['#e53e3e','#3182ce','#38a169','#d69e2e','#805ad5','#dd6b20','#319795'];
+ let mode='GL_TRIANGLE_STRIP',restart=false;
+ const bx=document.getElementById('modeBtns');
+ bx.innerHTML=Object.keys(M).map(k=>`<button class="b" data-m="${k}">${k.slice(3)}</button>`).join('')+' <label><input type="checkbox" id="rs"> primitive restart（index 3 後斷開）</label>';
+ function prims(n){const r=[];
+  if(mode==='GL_POINTS')for(let i=0;i<n;i++)r.push([i]);
+  if(mode==='GL_LINES')for(let i=0;i+1<n;i+=2)r.push([i,i+1]);
+  if(mode==='GL_LINE_STRIP'||mode==='GL_LINE_LOOP'){for(let i=0;i+1<n;i++)r.push([i,i+1]);if(mode==='GL_LINE_LOOP'&&n>2)r.push([n-1,0]);}
+  if(mode==='GL_TRIANGLES')for(let i=0;i+2<n;i+=3)r.push([i,i+1,i+2]);
+  if(mode==='GL_TRIANGLE_FAN')for(let i=1;i+1<n;i++)r.push([0,i,i+1]);
+  if(mode==='GL_TRIANGLE_STRIP'){const seg=restart?[[0,Math.min(n,4)],[4,n]]:[[0,n]];seg.forEach(([a,b])=>{for(let i=a;i+2<b;i++)r.push((i-a)%2?[i+1,i,i+2]:[i,i+1,i+2]);});}
+  return r;}
+ function draw(){const n=+document.getElementById('mCount').value;document.getElementById('mCountV').textContent=`使用頂點 0 ~ ${n-1}`;
+  const V=mode==='GL_TRIANGLE_FAN'?FAN:ZZ, pr=prims(n);
+  cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);
+  pr.forEach((p,j)=>{const c=COL[j%COL.length];cx.strokeStyle=c;cx.fillStyle=c+'33';cx.lineWidth=2;cx.beginPath();p.forEach((i,k)=>cx[k?'lineTo':'moveTo'](...V[i]));
+   if(p.length===3){cx.closePath();cx.fill();cx.stroke();const ct=[0,1].map(a=>p.reduce((s,i)=>s+V[i][a],0)/3);cx.fillStyle=c;cx.font='bold 13px sans-serif';cx.fillText(j,ct[0]-4,ct[1]+4);}
+   else if(p.length===2){cx.stroke();}});
+  V.forEach((p,i)=>{const used=i<n;cx.fillStyle=used?(mode==='GL_POINTS'?COL[i%COL.length]:'#333'):'#ccc';cx.beginPath();cx.arc(...p,mode==='GL_POINTS'?7:4,0,7);cx.fill();cx.fillStyle=used?'#666':'#ccc';cx.font='12px sans-serif';cx.fillText(i,p[0]+7,p[1]-7);});
+  const showR=mode==='GL_TRIANGLE_STRIP'&&restart;
+  document.getElementById('modeTxt').innerHTML=`<b>${mode}</b><p>${M[mode]}</p><p>count = ${n} → <b>${pr.length}</b> 個 primitive</p>`+
+   (pr.length&&pr[0].length>1?`<p class="mut">${pr.map(p=>'('+p.join(',')+')').join(' ')}</p>`:'')+
+   (showR?'<p class="mut">index buffer = {0,1,2,3, RESTART, 4,5,6,7}：遇到 restart 後重新開始一條 strip，所以 (2,3,4)(3,4,5) 這兩個連接三角形消失。</p>':'')+
+   (mode==='GL_TRIANGLE_STRIP'?`<p class="mut">比較：GL_TRIANGLES 畫同樣 ${Math.max(n-2,0)} 個三角形需要 ${Math.max(n-2,0)*3} 個頂點。</p>`:'');
+  bx.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));document.getElementById('rs').disabled=mode!=='GL_TRIANGLE_STRIP';}
+ bx.querySelectorAll('button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;draw();});
+ document.getElementById('rs').onchange=e=>{restart=e.target.checked;draw();};
+ document.getElementById('mCount').oninput=draw;draw();
+})();
+
+// ---------- divisor ----------
+(function(){
+ function draw(){const d=+document.getElementById('dv').value,b=+document.getElementById('bi').value;
+  let h='<tr><th></th><th>gl_InstanceID</th><th>頂點 (gl_VertexID)</th><th>vertex attr<br>(divisor 0)</th><th>instance attr<br>(divisor '+d+')</th></tr>';
+  for(let i=0;i<4;i++)for(let v=0;v<3;v++){const idx=d===0?v:Math.floor(i/d)+b;
+   h+=`<tr${v===0?' style="border-top:2px solid #999"':''}>${v===0?`<th rowspan="3">instance ${i}</th><td rowspan="3">${i}</td>`:''}<td>${v}</td><td>[${v}]</td><td style="background:${['#dbeafe','#fde7b6','#c6f0d6','#fbd5d5','#e9d8fd'][idx%5]}">[${idx}]</td></tr>`;}
+  document.getElementById('divTbl').innerHTML=h;
+  document.getElementById('divTxt').textContent=d===0?'divisor 0：和一般 attribute 一樣每個頂點讀不同筆，每個 instance 都重複讀 [0],[1],[2]（baseInstance 對 divisor 0 無效）→ 所有 instance 長得一樣。':
+   `divisor ${d}：同一個 instance 內所有頂點讀到同一筆，index = floor(instanceID / ${d}) + ${b}。${d===2?'每 2 個 instance 共用一筆。':''}${b?' baseInstance 讓讀取從第 '+b+' 筆開始，但 gl_InstanceID 不變。':''}`;}
+ ['dv','bi'].forEach(id=>document.getElementById(id).onchange=draw);draw();
+})();
+</script></body></html>

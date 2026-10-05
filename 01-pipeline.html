@@ -54,6 +54,8 @@ glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 �
 <div id="info" class="card"></div>
 <div class="note"><b>Vertex Processing</b> = Vertex / Tessellation / Geometry shader；其中<b>最後一個啟用的 stage 必須輸出 <code>gl_Position</code>（clip space 座標）</b>給 Rasterizer。只有 VS + FS 時就是 VS 負責。</div>
 
+<p class="mut">Vertex Specification 與 Vertex Shader 的細節（attribute 設定方式、draw command 種類、instancing）見 <a href="05-vertex-draw.html">第 5 頁</a>。</p>
+
 <h2 id="walk">一個三角形的旅程</h2>
 <p class="mut">按「下一步」：上方 pipeline 圖會同步高亮。最後一步可切換 fixed-function 狀態看效果（灰色方塊為先畫好的物件，depth = 0.5）。</p>
 <div class="ctrl">

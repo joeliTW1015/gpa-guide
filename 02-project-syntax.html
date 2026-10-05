@@ -14,7 +14,7 @@
 </style></head>
 <body><main>
 <h1>2. 專案結構與語法</h1>
-<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a></div>
+<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a></div>
 
 <h2 id="tree">專案結構（Template）</h2>
 <p class="mut">點資料夾看說明。</p>
@@ -351,6 +351,47 @@ float quad[] = {
 <li>Depth texture 可設 <code>GL_TEXTURE_COMPARE_MODE</code> 做 shadow mapping（之後課程）。</li>
 <li>影像通常上下顛倒：OpenGL UV 原點在左下，多數圖檔在左上 → 載入時 flip（如 <code>stbi_set_flip_vertically_on_load(true)</code>）。</li>
 </ul>
+
+<h3 id="stb">載入圖片：stb_image（Appendix - Image Loading）</h3>
+<ul>
+<li>圖檔（png / jpg）是壓縮過的格式，OpenGL 看不懂 → 要先<b>解碼</b>成一格一格的 RGBA bytes（bitmap），再交給 <code>glTexSubImage2D</code>。</li>
+<li>解碼方式：自己照檔案格式規格寫（不實際）、單一格式 library（libpng、libjpeg）、影像處理 library（OpenCV）、或課程用的 <b>stb_image</b>。</li>
+<li><b>stb_image.h</b>：單一 header 檔、支援 png / jpg / tga / bmp / psd / gif / hdr / pic。同系列還有 <code>stb_image_write.h</code>（存圖，例如截圖）、<code>stb_image_resize.h</code>（縮放）。網站：<a href="https://stb.handmade.network">stb.handmade.network</a></li>
+</ul>
+<div class="warn"><b>Header-only library 的規則</b>：所有檔案都可以 <code>#include "STB/stb_image.h"</code>，但<b>只有一個 .cpp</b> 要在 include 前加 <code>#define STB_IMAGE_IMPLEMENTATION</code>（產生函式本體）。<br>
+沒加 → link error「undefined reference to stbi_load」；兩個 .cpp 都加 → link error「multiple definition」。</div>
+<pre><code><span class="c">// texture.h —— 只放宣告</span>
+#include "STB/stb_image.h"
+struct texture_data { int width; int height; unsigned char* data; };
+texture_data load_Image(const char* path);
+
+<span class="c">// main.cpp —— 唯一一處放實作</span>
+#define STB_IMAGE_IMPLEMENTATION
+#include "STB/stb_image.h"
+
+texture_data load_Image(const char* path) {
+    texture_data tex = {};
+    int n;                                                  <span class="c">// 原圖的通道數（RGB=3、RGBA=4）</span>
+    stbi_set_flip_vertically_on_load(true);                 <span class="c">// 上下翻轉，配合 OpenGL UV 原點在左下</span>
+    stbi_uc* data = stbi_load(path, &amp;tex.width, &amp;tex.height, &amp;n, 4);  <span class="c">// 最後的 4 = 強制轉成 RGBA</span>
+    if (data != NULL) {
+        size_t size = tex.width * tex.height * 4;           <span class="c">// 每個 pixel 4 bytes</span>
+        tex.data = new unsigned char[size];
+        memcpy(tex.data, data, size);
+        stbi_image_free(data);                              <span class="c">// stb 配置的記憶體要用 stb 的函式釋放</span>
+    } else {
+        printf("load %s failed: %s\n", path, stbi_failure_reason());   <span class="c">// 最常見：路徑錯</span>
+    }
+    return tex;                                             <span class="c">// 用完記得 delete[] tex.data</span>
+}
+
+<span class="c">// 上傳到 OpenGL</span>
+texture_data img = load_Image("assets/wood.png");
+glBindTexture(GL_TEXTURE_2D, tex);
+glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, img.width, img.height);
+glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, img.width, img.height, GL_RGBA, GL_UNSIGNED_BYTE, img.data);
+delete[] img.data;</code></pre>
+<p class="mut">強制 4 通道（最後參數填 4）的好處：不管原圖是 RGB 還是 RGBA，上傳時都用 <code>GL_RGBA</code>，也不會遇到 RGB 每列沒對齊 4 bytes 的 <code>glPixelStorei</code> 問題。</p>
 
 <h2 id="glsl">GLSL 速查</h2>
 <div class="grid2">
