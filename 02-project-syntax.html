@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2. 專案結構與語法</title><link rel="stylesheet" href="style.css">
+<style>
+.tree{font:13px/1.8 ui-monospace,monospace;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.tree span{cursor:pointer;border-bottom:1px dashed #999}
+.tree span.on{background:#fde7b6}
+#treeInfo{min-height:60px}
+.dbuf{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.buf{width:180px;height:110px;border:2px solid #999;border-radius:8px;position:relative;font-size:13px;display:flex;align-items:center;justify-content:center;text-align:center;transition:background .3s}
+.buf b{position:absolute;top:4px;left:8px;font-size:12px}
+.chain svg text{font-size:12px}
+#wrapCv,#magA,#magB{border:1px solid var(--line);image-rendering:auto}
+</style></head>
+<body><main>
+<h1>2. 專案結構與語法</h1>
+<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a></div>
+
+<h2 id="tree">專案結構（Template）</h2>
+<p class="mut">點資料夾看說明。</p>
+<div class="grid2">
+<div class="tree" id="treeBox">
+📁 &lt;project&gt;/<br>
+├─ <span data-k="assets">assets/</span><br>
+├─ <span data-k="shaders">shaders/</span><br>
+├─ <span data-k="builder">builder/</span><br>
+│&nbsp;&nbsp;├─ <span data-k="cml">CMakeLists.txt</span><br>
+│&nbsp;&nbsp;└─ <span data-k="sub">GLFW/ Assimp/ …（submodules）</span><br>
+├─ <span data-k="src">src/</span><br>
+└─ <span data-k="build">build/</span> <span class="mut">← 自己建，不進 git</span>
+</div>
+<div class="card" id="treeInfo"></div>
+</div>
+
+<h2 id="cmake">CMake 在做什麼（builder/CMakeLists.txt）</h2>
+<ul>
+<li>CMake 不是編譯器，是「產生專案檔」的工具：讀 <code>CMakeLists.txt</code> → 產生 VS solution / Xcode 專案 / Makefile / Ninja。</li>
+<li>Template 的 CMakeLists 大致做四件事：
+<ol><li>設定 C++ 標準等編譯選項</li>
+<li>有 CMakeLists 的 library（GLFW、Assimp…）用 <code>add_subdirectory</code> 一起編</li>
+<li>把 <code>src/</code> 的檔案編成執行檔，<code>target_link_libraries</code> 連結 library</li>
+<li>Header-only / 沒有 CMakeLists 的 library（GLM、stb…）手動 <code>include_directories</code>；並設定路徑方便 IDE 找資源</li></ol></li>
+<li><b>新增 .cpp 檔</b>：若 CMakeLists 用 <code>file(GLOB ...)</code> 收集 src，新增檔後要<b>重新 Configure</b> 才會被加入。</li>
+</ul>
+<div class="ex"><b>範例：從原始碼到執行檔的三個階段</b>
+<table>
+<tr><th>階段</th><th>做什麼</th><th>Windows（CMake GUI + VS）</th><th>Linux（CLI）</th></tr>
+<tr><td>Configure</td><td>讀 CMakeLists、找編譯器、檢查 library 能不能編</td><td>按 Configure</td><td rowspan="2"><code>cmake -S builder -B build</code></td></tr>
+<tr><td>Generate</td><td>產生 IDE 專案檔 / Makefile</td><td>按 Generate → 得到 <code>.sln</code></td></tr>
+<tr><td>Build</td><td>真正呼叫編譯器把 .cpp 編成 exe</td><td>VS 裡按 ▶ / Ctrl+Shift+B</td><td><code>cmake --build build</code></td></tr>
+</table>
+<p>日常開發只要改 <code>src/</code> 的程式 → 重新 Build 即可，<b>不用每次跑 CMake</b>。只有「新增 / 刪除檔案」或「改 CMakeLists」才要重新 Configure + Generate。</p>
+<p>例：CMakeLists 中常見的寫法與意思</p>
+<pre><code>cmake_minimum_required(VERSION 3.16)
+project(GPA)
+set(CMAKE_CXX_STANDARD 17)                     <span class="c"># 用 C++17</span>
+add_subdirectory(glfw)                         <span class="c"># 編 GLFW（它有自己的 CMakeLists）</span>
+file(GLOB SRC ../src/*.cpp)                    <span class="c"># 收集 src 下所有 .cpp</span>
+add_executable(${PROJECT_NAME} ${SRC})         <span class="c"># 產生執行檔</span>
+target_include_directories(${PROJECT_NAME} PRIVATE glm)   <span class="c"># header-only：只要告訴編譯器路徑</span>
+target_link_libraries(${PROJECT_NAME} glfw)    <span class="c"># 連結 GLFW</span></code></pre>
+<p class="mut">實際內容以 template 為準，上面是典型結構示意。</p></div>
+
+<h2 id="skel">程式骨架（GLFW + GLAD）</h2>
+<ul>
+<li><b>GLAD</b>：OpenGL function loader，讓你能呼叫 3.3 / 4.x 的函式（沒載入就呼叫 → 直接 crash）。</li>
+<li><b>GLFW</b>：建立視窗、OpenGL context、處理輸入。</li>
+<li><b>順序重要</b>：GLFW init → hint → 建視窗 → <code>glfwMakeContextCurrent</code> → <b>才能</b> init GLAD → 之後才能呼叫任何 <code>gl*</code>。</li>
+</ul>
+<pre><code>#include &lt;glad/glad.h&gt;   <span class="c">// 一定要在 GLFW 之前 include</span>
+#include &lt;GLFW/glfw3.h&gt;
+
+int main() {
+    <span class="c">// 1. Init GLFW + 指定 OpenGL 版本（依 template 設定，macOS 最高 4.1）</span>
+    glfwInit();
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+    GLFWwindow* window = glfwCreateWindow(800, 600, "GPA", nullptr, nullptr);
+    glfwMakeContextCurrent(window);
+
+    <span class="c">// 2. Callbacks</span>
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetKeyCallback(window, key_callback);
+
+    <span class="c">// 3. Init GLAD（GLAD1 寫法；GLAD2 為 gladLoadGL(glfwGetProcAddress)）</span>
+    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+
+    <span class="c">// 4. Setup：shader program、VAO/VBO、texture…（只做一次）</span>
+    glEnable(GL_DEPTH_TEST);
+
+    double last = glfwGetTime();
+    while (!glfwWindowShouldClose(window)) {
+        double now = glfwGetTime(), dt = now - last; last = now;
+        update(dt);                                          <span class="c">// 用 deltaTime 做動畫，速度不受 FPS 影響</span>
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        render();                                            <span class="c">// glUseProgram → bind VAO → glUniform → glDraw*</span>
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+    <span class="c">// 5. Cleanup</span>
+    glDeleteVertexArrays(1, &amp;vao); glDeleteProgram(program);
+    glfwTerminate();
+}</code></pre>
+
+<details><summary>完整最小範例：彩色三角形（單一 main.cpp，可直接對照）</summary>
+<p class="mut">把 shader 寫成字串以便單檔閱讀；作業中通常放在 <code>shaders/*.glsl</code> 再讀檔。</p>
+<pre><code>#include &lt;glad/glad.h&gt;
+#include &lt;GLFW/glfw3.h&gt;
+#include &lt;cstdio&gt;
+
+const char* vsSrc = R"(
+#version 410 core
+layout(location = 0) in vec2 aPos;     <span class="c">// attrib 0：位置</span>
+layout(location = 1) in vec3 aColor;   <span class="c">// attrib 1：顏色</span>
+out vec3 vColor;                       <span class="c">// 傳給 fragment shader</span>
+void main() {
+    vColor = aColor;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+})";
+const char* fsSrc = R"(
+#version 410 core
+in vec3 vColor;                        <span class="c">// 名稱、型別要和 VS 的 out 一樣</span>
+out vec4 fragColor;
+void main() { fragColor = vec4(vColor, 1.0); })";
+
+GLuint compile(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &amp;src, NULL);
+    glCompileShader(s);
+    GLint ok; glGetShaderiv(s, GL_COMPILE_STATUS, &amp;ok);
+    if (!ok) { char log[1024]; glGetShaderInfoLog(s, 1024, NULL, log); printf("%s\n", log); }
+    return s;
+}
+
+int main() {
+    glfwInit();
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    GLFWwindow* win = glfwCreateWindow(800, 600, "Triangle", NULL, NULL);
+    glfwMakeContextCurrent(win);
+    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+
+    <span class="c">// --- shader program ---</span>
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc), fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs); glAttachShader(prog, fs); glLinkProgram(prog);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    <span class="c">// --- 頂點資料：x, y, r, g, b ---</span>
+    float verts[] = {
+        -0.5f, -0.5f,   1, 0, 0,    <span class="c">// 左下 紅</span>
+         0.5f, -0.5f,   0, 1, 0,    <span class="c">// 右下 綠</span>
+         0.0f,  0.5f,   0, 0, 1,    <span class="c">// 上   藍</span>
+    };
+    GLuint vao, vbo;
+    glGenVertexArrays(1, &amp;vao); glBindVertexArray(vao);
+    glGenBuffers(1, &amp;vbo); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    while (!glfwWindowShouldClose(win)) {
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(prog);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glfwSwapBuffers(win);
+        glfwPollEvents();
+    }
+    glDeleteBuffers(1, &amp;vbo); glDeleteVertexArrays(1, &amp;vao); glDeleteProgram(prog);
+    glfwTerminate();
+}</code></pre>
+<p>練習：(1) 把某個頂點顏色改白色；(2) 在 FS 加 <code>uniform float time;</code> 讓顏色隨 <code>glfwGetTime()</code> 變化；(3) 加第 4 個頂點用 <code>glDrawElements</code> 畫正方形。</p>
+</details>
+
+<h3>Double Buffering</h3>
+<p class="mut">按「下一個動作」逐步看一幀。畫面只會顯示 front buffer，所以你永遠看不到「畫到一半」的畫面。</p>
+<div class="ctrl"><button class="b" id="dbNext">下一個動作 ▶</button><code id="dbCode"></code></div>
+<div class="dbuf"><div class="buf" id="bufA"><b>Buffer A</b><span></span></div><div class="buf" id="bufB"><b>Buffer B</b><span></span></div><div class="mut" id="dbTxt"></div></div>
+
+<h2 id="cb">Callbacks</h2>
+<div class="ex"><b>Callback 是什麼？</b>
+<p>你寫一個函式，<b>交給 GLFW 保管</b>；等事件發生（按鍵、移動滑鼠），GLFW 在 <code>glfwPollEvents()</code> 裡<b>幫你呼叫</b>它。你不會自己呼叫 callback。</p>
+<pre><code>bool wireframe = false;                         <span class="c">// callback 要改的狀態放全域（或用 glfwSetWindowUserPointer）</span>
+
+void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_F &amp;&amp; action == GLFW_PRESS) wireframe = !wireframe;
+}
+
+int main() {
+    ...
+    glfwSetKeyCallback(window, key_callback);   <span class="c">// 註冊：只傳函式名，不加 ()</span>
+    while (...) {
+        glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+        ...
+        glfwPollEvents();                       <span class="c">// 按了 F → key_callback 在這裡被呼叫</span>
+    }
+}</code></pre>
+<p>函式的參數型別必須和 GLFW 規定的簽名完全一樣（見下表），否則編譯錯誤。</p></div>
+<table>
+<tr><th>用途</th><th>註冊</th><th>Callback 簽名 / 備註</th></tr>
+<tr><td>鍵盤</td><td><code>glfwSetKeyCallback</code></td><td><code>void(GLFWwindow*, int key, int scancode, int action, int mods)</code><br>例：<code>key==GLFW_KEY_E &amp;&amp; action==GLFW_PRESS</code>；組合鍵 <code>mods &amp; GLFW_MOD_CONTROL</code></td></tr>
+<tr><td>滑鼠位置</td><td><code>glfwSetCursorPosCallback</code></td><td><code>void(GLFWwindow*, double x, double y)</code>；或每幀 <code>glfwGetCursorPos</code> 主動查</td></tr>
+<tr><td>滑鼠按鍵 / 滾輪</td><td><code>glfwSetMouseButtonCallback</code> / <code>glfwSetScrollCallback</code></td><td>做相機操作常用</td></tr>
+<tr><td>視窗大小</td><td><code>glfwSetFramebufferSizeCallback</code></td><td><code>void(GLFWwindow*, int w, int h)</code> → <code>glViewport(0,0,w,h)</code>，重算 projection aspect；有自訂 FBO 要重建。<b>HW2 / Final 會用到</b></td></tr>
+</table>
+<div class="note">持續按住移動相機：用 <code>glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS</code> 在 update 中每幀查詢，比 key callback 的 PRESS/REPEAT 平順。</div>
+
+<h2 id="shader">Shader Program 建立流程</h2>
+<div id="shFlow"></div>
+<pre><code>GLuint compile(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);           <span class="c">// GL_VERTEX_SHADER / GL_FRAGMENT_SHADER</span>
+    glShaderSource(s, 1, &amp;src, NULL);
+    glCompileShader(s);
+    GLint ok; glGetShaderiv(s, GL_COMPILE_STATUS, &amp;ok);
+    if (!ok) { char log[1024]; glGetShaderInfoLog(s, 1024, NULL, log); printf("%s\n", log); }  <span class="c">// 一定要印！</span>
+    return s;
+}
+GLuint program = glCreateProgram();
+GLuint vs = compile(GL_VERTEX_SHADER, vsSrc), fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+glAttachShader(program, vs); glAttachShader(program, fs);
+glLinkProgram(program);                        <span class="c">// 檢查 GL_LINK_STATUS / glGetProgramInfoLog</span>
+glDeleteShader(vs); glDeleteShader(fs);        <span class="c">// link 完 shader object 可刪</span>
+<span class="c">// render 時：</span> glUseProgram(program);</code></pre>
+<ul>
+<li>Compile 很吃 CPU → 所有 shader 在<b>啟動時</b>載入，不要每幀 compile。</li>
+<li>Shader 寫在 <code>shaders/*.glsl</code>，C++ 讀檔成字串再丟 <code>glShaderSource</code>；<b>執行時的工作目錄</b>錯了會讀不到檔（黑畫面）。</li>
+<li>一個 shader object 可被多個 program 共用（in/out 介面要相符）。</li>
+</ul>
+
+<h2 id="obj">OpenGL Objects：資料怎麼進 Shader</h2>
+<p class="mut">四種最常用的資料通道。黃色 = 「binding point / unit」這個中介編號，最容易搞混。</p>
+<div class="tabs"><button class="b" data-pane="pVao">VAO + VBO</button><button class="b" data-pane="pUni">Uniform</button><button class="b" data-pane="pUbo">UBO</button><button class="b" data-pane="pTex">Texture</button></div>
+
+<div class="pane" id="pVao"><div class="chain" data-c='[["float verts[] (CPU)","",0],["VBO (GPU)","glBufferData",0],["VAO: attrib 0","glVertexAttribPointer\n+ glEnableVertexAttribArray",1],["layout(location=0)\nin vec3 pos","glDraw* 時餵入",0]]'></div>
+<pre><code>GLuint vao, vbo;
+glGenVertexArrays(1, &amp;vao); glBindVertexArray(vao);      <span class="c">// 先 bind VAO，後面設定都記在它身上</span>
+glGenBuffers(1, &amp;vbo);       glBindBuffer(GL_ARRAY_BUFFER, vbo);
+glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+<span class="c">// 每個 vertex: pos(3) + color(3)，stride = 6 floats</span>
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)0);
+glEnableVertexAttribArray(0);
+glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)(3*sizeof(float)));
+glEnableVertexAttribArray(1);
+<span class="c">// index buffer（可選）：glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo) 也會記在 VAO → glDrawElements</span>
+glBindVertexArray(0);
+<span class="c">// render: glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES, 0, 3);</span></code></pre>
+<div class="ex"><b>白話解釋 VBO 與 VAO</b>
+<ul><li><b>VBO</b> = GPU 上的一塊記憶體，裡面只有一長串數字，GPU <b>不知道</b>哪些是位置、哪些是顏色。</li>
+<li><b>VAO</b> = 一張「讀法說明書」：attrib 0 從哪個 VBO、第幾個 byte 開始、每次讀幾個 float、讀完跳幾個 byte 到下一個頂點。</li></ul>
+<p>上面程式的 VBO 記憶體長這樣（每格 4 bytes 的 float）：</p>
+<table style="text-align:center;font:12px ui-monospace,monospace">
+<tr><th>byte</th><td>0</td><td>4</td><td>8</td><td>12</td><td>16</td><td>20</td><td>24</td><td>28</td><td>32</td><td>36</td><td>40</td><td>44</td><td>…</td></tr>
+<tr><th>內容</th><td style="background:#dbeafe">x₀</td><td style="background:#dbeafe">y₀</td><td style="background:#dbeafe">z₀</td><td style="background:#fde7b6">r₀</td><td style="background:#fde7b6">g₀</td><td style="background:#fde7b6">b₀</td><td style="background:#dbeafe">x₁</td><td style="background:#dbeafe">y₁</td><td style="background:#dbeafe">z₁</td><td style="background:#fde7b6">r₁</td><td style="background:#fde7b6">g₁</td><td style="background:#fde7b6">b₁</td><td>…</td></tr></table>
+<ul><li>attrib 0（位置）：size = 3、<b>offset = 0</b>、<b>stride = 24</b>（6 個 float × 4 bytes，跳到下一個頂點的距離）</li>
+<li>attrib 1（顏色）：size = 3、<b>offset = 12</b>（跳過 x,y,z）、stride = 24</li>
+<li>Shader 端 <code>layout(location = 0) in vec3 aPos;</code> 的 0 就對應 attrib 0。</li></ul>
+<p>好處：畫圖時只要 <code>glBindVertexArray(vao)</code> 一行就恢復所有設定；多個模型 = 多個 VAO，切換很快。</p></div>
+<table><tr><th>Buffer target</th><th>用途</th></tr>
+<tr><td><code>GL_ARRAY_BUFFER</code></td><td>Vertex buffer（VBO）</td></tr>
+<tr><td><code>GL_ELEMENT_ARRAY_BUFFER</code></td><td>Index buffer（EBO）</td></tr>
+<tr><td><code>GL_UNIFORM_BUFFER</code></td><td>Uniform block 資料（UBO）</td></tr>
+<tr><td><code>GL_SHADER_STORAGE_BUFFER</code></td><td>SSBO（4.3+，compute 用）</td></tr>
+<tr><td><code>GL_COPY_READ/WRITE_BUFFER</code>、<code>GL_TEXTURE_BUFFER</code>、<code>GL_TRANSFORM_FEEDBACK_BUFFER</code></td><td>複製、texture buffer、transform feedback</td></tr></table>
+<p><b>Usage hint</b>（只是提示，不影響正確性）：<code>STATIC</code> 設一次用很多次｜<code>DYNAMIC</code> 常改常用｜<code>STREAM</code> 設一次用幾次；× <code>DRAW</code>（App→GPU）/ <code>READ</code>（GPU→App）/ <code>COPY</code>（GPU→GPU）。部分更新用 <code>glBufferSubData</code> 或 <code>glMapBuffer</code>/<code>glUnmapBuffer</code>。</p>
+</div>
+
+<div class="pane" id="pUni"><div class="chain" data-c='[["glm::mat4 mvp (CPU)","",0],["location (GLint)","glGetUniformLocation\n(program, \"mvp\")",0],["program 的 uniform","glUseProgram(program)\n+ glUniformMatrix4fv",0],["uniform mat4 mvp;","每個 vertex/fragment\n讀到相同值",0]]'></div>
+<pre><code>GLint loc = glGetUniformLocation(program, "mvp");   <span class="c">// 回傳 -1 = 名字錯或被 compiler 優化掉（沒用到）</span>
+glUseProgram(program);                              <span class="c">// glUniform* 作用在「目前使用中的 program」</span>
+glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(mvp));  <span class="c">// GL_FALSE：GLM 已是 column-major，不用轉置</span>
+glUniform1f(glGetUniformLocation(program, "time"), t);
+glUniform3fv(loc2, 1, &amp;color[0]);</code></pre>
+<ul><li>Uniform 在一次 draw call 內對所有頂點 / fragment 都是同一個值（相機、光源、時間）。</li>
+<li>值存在 program 內：換 program 要重設；location 可在 init 時查一次存起來。</li>
+<li>VS 和 FS 宣告同名同型的 uniform 視為同一個。</li></ul>
+<div class="ex"><b>Attribute vs Uniform 怎麼選？</b>
+<table><tr><th></th><th>Vertex attribute（<code>in</code>）</th><th>Uniform</th></tr>
+<tr><td>每個頂點的值</td><td>不同（每個頂點自己的位置、顏色）</td><td>相同（整個 draw call 共用）</td></tr>
+<tr><td>資料來源</td><td>VBO + VAO</td><td><code>glUniform*</code></td></tr>
+<tr><td>例子</td><td>位置、法向量、UV、頂點色</td><td>MVP 矩陣、光源位置、時間、材質顏色、sampler</td></tr>
+<tr><td>多久改一次</td><td>通常載入模型時一次</td><td>每幀 / 每個物件</td></tr></table>
+<p>例：畫 100 顆位置不同的同一顆球 → 共用一個 VAO，每顆畫之前用 <code>glUniformMatrix4fv</code> 換 model matrix 再 draw。</p></div>
+</div>
+
+<div class="pane" id="pUbo"><div class="chain" data-c='[["UBO\n(GL_UNIFORM_BUFFER)","",0],["Binding point N","glBindBufferBase\n(GL_UNIFORM_BUFFER, N, ubo)",1],["uniform block\n(在 program 內)","glUniformBlockBinding\n(prog, blockIdx, N)",2]]'></div>
+<pre><code><span class="c">// GLSL</span>
+layout(std140) uniform Matrices { mat4 view; mat4 proj; };
+<span class="c">// C++</span>
+GLuint idx = glGetUniformBlockIndex(program, "Matrices");
+glUniformBlockBinding(program, idx, 0);          <span class="c">// block → binding point 0</span>
+glGenBuffers(1, &amp;ubo); glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+glBufferData(GL_UNIFORM_BUFFER, 2*sizeof(glm::mat4), NULL, GL_DYNAMIC_DRAW);
+glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);     <span class="c">// buffer → binding point 0</span>
+glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::mat4), glm::value_ptr(view));</code></pre>
+<ul><li>多個 program 共用同一份資料（例如相機矩陣）時用 UBO，更新一次全部生效。</li>
+<li><b>std140 對齊</b>：<code>vec3</code> 佔 16 bytes、array 每個元素補齊到 16 bytes → C++ struct 要自己補 padding（或直接用 vec4）。</li></ul>
+</div>
+
+<div class="pane" id="pTex"><div class="chain" data-c='[["影像資料\n(stb_image 等)","",0],["Texture object","glTexStorage2D\n+ glTexSubImage2D",0],["Texture unit N","glActiveTexture(GL_TEXTURE0+N)\n+ glBindTexture",1],["uniform sampler2D tex;","glUniform1i(loc, N)",2]]'></div>
+<pre><code>GLuint tex; glGenTextures(1, &amp;tex);
+glBindTexture(GL_TEXTURE_2D, tex);
+glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, w, h);                       <span class="c">// 配置空間（immutable）</span>
+glPixelStorei(GL_UNPACK_ALIGNMENT, 1);                                       <span class="c">// RGB 且寬度非 4 倍數時必要</span>
+glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data); <span class="c">// 上傳 level 0</span>
+glGenerateMipmap(GL_TEXTURE_2D);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+<span class="c">// render:</span>
+glActiveTexture(GL_TEXTURE0 + 0); glBindTexture(GL_TEXTURE_2D, tex);
+glUniform1i(glGetUniformLocation(program, "tex"), 0);   <span class="c">// sampler 存的是 unit 編號，不是 texture ID！</span></code></pre>
+</div>
+
+<h2 id="tex">Texture 要點</h2>
+<div class="ex"><b>UV 座標是什麼？</b>
+<p>貼圖不管實際多少 pixel，都用 <b>(u, v) ∈ [0, 1]</b> 表示位置：(0,0) 左下、(1,1) 右上、(0.5,0.5) 正中央。每個頂點帶一組 UV（從模型檔來），rasterizer 插值後，FS 用 <code>texture(tex, uv)</code> 取色。</p>
+<pre><code><span class="c">// 一個貼滿整張圖的正方形：位置 (x,y) + UV (u,v)</span>
+float quad[] = {
+    -1, -1,   0, 0,     <span class="c">// 左下 ↔ 圖片左下</span>
+     1, -1,   1, 0,     <span class="c">// 右下 ↔ 圖片右下</span>
+     1,  1,   1, 1,     <span class="c">// 右上</span>
+    -1,  1,   0, 1,     <span class="c">// 左上</span>
+};
+<span class="c">// UV 改成 0~3 → 搭配 GL_REPEAT 會重複貼 3×3 次（地板磁磚常用）</span></code></pre>
+<p>流程整理：<b>載入圖片</b>（stb_image）→ <b>建立 texture 並上傳</b> → <b>設定 filter / wrap</b> → 畫圖前 <b>綁到 texture unit</b> → shader 的 <code>sampler2D</code> 設成該 unit 編號 → FS 用 UV 取樣。</p></div>
+<div class="grid2">
+<div class="card"><b>Filter（Magnification：貼圖被放大）</b>
+<div class="ctrl"><span>GL_NEAREST</span><span style="margin-left:110px">GL_LINEAR</span></div>
+<canvas id="magA" width="160" height="160"></canvas> <canvas id="magB" width="160" height="160"></canvas>
+<ul class="mut"><li>NEAREST：最近 texel（像素風、Minecraft）</li><li>LINEAR：2×2 texel 雙線性插值</li>
+<li>Minification（縮小）用 <b>mipmap</b>：每層是上一層 2×2 平均，<code>GL_LINEAR_MIPMAP_LINEAR</code> = trilinear；斜角更清楚用 anisotropic filtering</li>
+<li><b>MIN_FILTER 預設帶 mipmap</b>：沒產生 mipmap 又沒改 filter → texture incomplete → 取樣得黑色</li></ul></div>
+<div class="card"><b>Wrap mode（UV 超出 [0,1]）</b>
+<div class="ctrl"><button class="b wm" data-m="0">REPEAT</button><button class="b wm" data-m="1">MIRRORED_REPEAT</button><button class="b wm" data-m="2">CLAMP_TO_EDGE</button></div>
+<canvas id="wrapCv" width="300" height="150"></canvas>
+<p class="mut">示意 UV 範圍 [-1, 2]（中間格為 [0,1]）。設定：<code>GL_TEXTURE_WRAP_S / _T</code>。</p></div>
+</div>
+<ul>
+<li>GLSL 取樣：<code>texture(sampler, uv)</code> 走 filter + wrap；<code>texelFetch(sampler, ivec2, lod)</code> 直接用整數座標拿 texel、不過濾。</li>
+<li>Texture target：<code>GL_TEXTURE_2D</code>（最常用）、<code>GL_TEXTURE_CUBE_MAP</code>（skybox / environment map）、<code>GL_TEXTURE_2D_ARRAY</code>、<code>GL_TEXTURE_3D</code>…對應 sampler 型別 <code>sampler2D</code>、<code>samplerCube</code>、<code>sampler2DArray</code>。</li>
+<li>Depth texture 可設 <code>GL_TEXTURE_COMPARE_MODE</code> 做 shadow mapping（之後課程）。</li>
+<li>影像通常上下顛倒：OpenGL UV 原點在左下，多數圖檔在左上 → 載入時 flip（如 <code>stbi_set_flip_vertically_on_load(true)</code>）。</li>
+</ul>
+
+<h2 id="glsl">GLSL 速查</h2>
+<div class="grid2">
+<div><pre><code><span class="c">// vertex shader</span>
+#version 410 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aColor;
+uniform mat4 mvp;
+out VS_OUT { vec3 color; } vs_out;   <span class="c">// interface block</span>
+void main() {
+    vs_out.color = aColor;
+    gl_Position = mvp * vec4(aPos, 1.0);
+}</code></pre></div>
+<div><pre><code><span class="c">// fragment shader</span>
+#version 410 core
+in VS_OUT { vec3 color; } fs_in;     <span class="c">// block 名稱要相同</span>
+uniform sampler2D tex;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(fs_in.color, 1.0);
+}</code></pre></div>
+</div>
+<div class="ex"><b>讀上面的程式</b>
+<ul><li><code>#version 410 core</code>：第一行，宣告 GLSL 版本（4.1、core profile）。少了或打錯就無法編譯。</li>
+<li><code>layout(location = 0) in vec3 aPos;</code>：從 VAO 的 attrib 0 讀進來的 vec3，每個頂點不同。</li>
+<li><code>out VS_OUT { vec3 color; } vs_out;</code>：要交給下一個 stage 的資料。<b>FS 必須宣告同名的 <code>in</code> block</b>（block 名 <code>VS_OUT</code> 要相同，instance 名 <code>vs_out</code> / <code>fs_in</code> 可以不同）。不用 block 時，<code>out vec3 vColor;</code> ↔ <code>in vec3 vColor;</code> 名稱要完全一樣。</li>
+<li><code>gl_Position</code>：內建變數，不用宣告，VS 一定要寫入。</li>
+<li><code>out vec4 fragColor;</code>：FS 的輸出，名字自取，就是這個像素的顏色 (r,g,b,a)，範圍 0~1。</li></ul>
+<p>Swizzle 範例：<code>vec4 c = vec4(0.1, 0.2, 0.3, 1.0);</code> → <code>c.rgb</code> = (0.1,0.2,0.3)、<code>c.bgr</code> = (0.3,0.2,0.1)、<code>c.xx</code> = (0.1,0.1)、<code>vec4(c.rgb * 2.0, c.a)</code> 只把顏色加倍、alpha 不動。</p></div>
+<table>
+<tr><th>項目</th><th>重點</th></tr>
+<tr><td>型別</td><td><code>float int uint bool</code>；<code>vec2/3/4</code>、<code>ivec*</code>、<code>uvec*</code>、<code>bvec*</code>；<code>mat2/3/4</code>（column-major）；<code>sampler2D</code>…</td></tr>
+<tr><td>Constructor</td><td>✓ <code>vec3(1.0)</code>、<code>vec4(v3, 1.0)</code>、<code>vec3(v4)</code>｜✗ <code>vec2 a = (1.0, 1.0);</code>、✗ <code>vec4 b(1,2,3,4);</code></td></tr>
+<tr><td>Swizzle</td><td><code>.xyzw</code> = <code>.rgba</code> = <code>.stpq</code>；可重複/重排 <code>v.zyx</code>、<code>v.rrrr</code>；<b>不能混用</b> <code>v.xyba</code> ✗</td></tr>
+<tr><td>運算</td><td><code>*</code> 對 vector 是逐元素；<code>mat * vec</code> 是矩陣乘；內積用 <code>dot()</code>。內建 <code>normalize cross dot length mix clamp max pow reflect transpose inverse</code></td></tr>
+<tr><td>長度</td><td>向量長度 <code>length(v)</code>；陣列/矩陣元素數 <code>m.length()</code></td></tr>
+<tr><td>型別嚴格</td><td>不會自動轉型：<code>float x = 1;</code> 在舊版會錯，寫 <code>1.0</code>；<code>gl_FragCoord - vec2(1)</code> ✗ → <code>gl_FragCoord.xy - vec2(1)</code></td></tr>
+<tr><td>陣列 / struct</td><td><code>float a[3] = float[3](1.,2.,3.);</code>；支援 array of arrays、struct（同 C）</td></tr>
+<tr><td>Qualifier</td><td><code>in / out</code>（stage 間傳遞，同名相連）、<code>uniform</code>、<code>layout(location=N)</code>、<code>flat</code>（不插值）</td></tr>
+<tr><td>Built-in</td><td>VS：<code>gl_Position</code>（out）、<code>gl_VertexID</code>、<code>gl_InstanceID</code>；FS：<code>gl_FragCoord</code>（視窗座標 x,y,z,1/w）</td></tr>
+</table>
+<div class="warn">不要從投影片複製 code：會混入非 ASCII 字元（全形引號、減號 –）→ shader compile error。看 console 的錯誤行號。</div>
+
+<h2 id="glm">GLM 速查</h2>
+<ul><li>Header-only，語法仿 GLSL；<code>#include &lt;glm/glm.hpp&gt;</code> + <code>&lt;glm/gtc/matrix_transform.hpp&gt;</code> + <code>&lt;glm/gtc/type_ptr.hpp&gt;</code></li>
+<li>要 swizzle（<code>v.xyz()</code>）需在 include 前 <code>#define GLM_FORCE_SWIZZLE</code>；GTX 擴充需 <code>#define GLM_ENABLE_EXPERIMENTAL</code></li></ul>
+<pre><code>using namespace glm;                        <span class="c">// 可選，程式較短</span>
+mat4 I(1.0f);                               <span class="c">// identity（新版 GLM mat4 m; 不保證是 identity，請明寫 1.0f）</span>
+mat4 M = translate(I, vec3(tx, ty, tz));
+M = rotate(M, radians(45.0f), vec3(0, 1, 0));  <span class="c">// 角度用弧度！</span>
+M = scale(M, vec3(2.0f));                   <span class="c">// 結果 M = T * R * S：「後寫的先作用在頂點上」</span>
+mat4 V = lookAt(vec3(0, 2, 5) <span class="c">/*eye*/</span>, vec3(0) <span class="c">/*center*/</span>, vec3(0, 1, 0) <span class="c">/*up*/</span>);
+mat4 P = perspective(radians(45.0f), (float)w / h, 0.1f, 100.0f);
+mat4 Po = ortho(-1.f, 1.f, -1.f, 1.f, 0.1f, 100.f);
+mat4 mvp = P * V * M;
+glUniformMatrix4fv(loc, 1, GL_FALSE, value_ptr(mvp));
+
+vec3 n = normalize(v); float d = dot(a, b); vec3 c = cross(a, b);
+float x = M[3][0];                          <span class="c">// M[col][row]：第 3 個 column 是 translation</span></code></pre>
+<div class="ex"><b>範例：讓立方體在 (2,0,0) 原地自轉，每秒 90°</b>
+<pre><code>float t = (float)glfwGetTime();
+glm::mat4 model(1.0f);
+model = glm::translate(model, glm::vec3(2, 0, 0));                  <span class="c">// ③ 最後：搬到 (2,0,0)</span>
+model = glm::rotate(model, glm::radians(90.0f * t), glm::vec3(0,1,0)); <span class="c">// ② 再：繞自己的 y 軸轉</span>
+model = glm::scale(model, glm::vec3(0.5f));                         <span class="c">// ① 先：縮成一半</span>
+<span class="c">// 程式由上往下寫 ③②①，實際作用在頂點上的順序是 ①②③</span>
+
+glm::mat4 view = glm::lookAt(glm::vec3(0, 3, 8), glm::vec3(0), glm::vec3(0, 1, 0));
+glm::mat4 proj = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
+glm::mat4 mvp  = proj * view * model;
+glUseProgram(prog);
+glUniformMatrix4fv(glGetUniformLocation(prog, "mvp"), 1, GL_FALSE, glm::value_ptr(mvp));</code></pre>
+<p>若把 translate 和 rotate 兩行對調，立方體會變成繞世界原點公轉（半徑 2）。</p></div>
+<div class="note"><code>translate(M, t)</code> 回傳 <code>M * T</code>（右乘）→ 對頂點來說是「先做 t、再做原本的 M」。所以 code 由上往下寫 T、R、S，實際作用順序是 S → R → T。</div>
+
+<h2 id="pit">常見坑（黑畫面檢查表）</h2>
+<ol>
+<li>Shader compile / link 有錯但沒印 log</li>
+<li>沒 bind VAO 就 draw（core profile 必須有 VAO）</li>
+<li><code>glUniform*</code> 前沒 <code>glUseProgram</code>；location = -1</li>
+<li><code>glVertexAttribPointer</code> 的 stride / offset 以 <b>byte</b> 計，算錯</li>
+<li>開了 depth test 但沒 clear depth buffer；或 near/far 設錯讓物體在視錐外</li>
+<li>矩陣乘法順序寫反；rotate 傳了角度不是弧度</li>
+<li>相機看錯方向（OpenGL 相機看 -z），物體在背後</li>
+<li>Texture 沒 mipmap 但 MIN_FILTER 用 mipmap 模式；sampler 設成 texture ID 而非 unit 編號</li>
+<li>檔案路徑：執行時工作目錄不是專案根 → assets / shaders 讀不到</li>
+<li>Face culling 開著但模型頂點順序是 CW</li>
+</ol>
+<p class="mut">Debug 好用：<code>glGetError()</code>、<code>glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)</code> 看線框、FS 直接輸出常數色或 normal 檢查管線。</p>
+</main>
+<script src="common.js"></script>
+<script>
+// 專案樹說明
+const TI={assets:'<b>assets/</b>：模型（.obj）、貼圖（.png/.jpg）等資源。程式用相對路徑讀取 → 注意執行時工作目錄。',
+shaders:'<b>shaders/</b>：.glsl shader 原始碼（vertex / fragment / …）。改 shader 通常不用重編 C++，重跑即可。',
+builder:'<b>builder/</b>：CMake 的 source 目錄（CMake GUI 的 "Where is the source code" 指這裡，<b>不是專案根目錄</b>）。',
+cml:'<b>CMakeLists.txt</b>：描述如何編 library 與你的程式。一般不用改；加了新 library 才需要動。',
+sub:'<b>submodules</b>：GLFW、Assimp（模型載入）等第三方 library，以 git submodule 形式存在 → clone 要加 <code>--recursive</code>，否則資料夾是空的、CMake 會失敗。',
+src:'<b>src/</b>：<b>你寫程式的地方</b>（main.cpp 等）。',
+build:'<b>build/</b>：CMake 產生的專案檔與編譯產物，自己建立；可隨時刪掉重來，不要 commit。'};
+const tb=document.getElementById('treeBox');
+tb.querySelectorAll('span[data-k]').forEach(s=>s.onclick=()=>{tb.querySelectorAll('span').forEach(x=>x.classList.remove('on'));s.classList.add('on');document.getElementById('treeInfo').innerHTML=TI[s.dataset.k];});
+tb.querySelector('[data-k=src]').click();
+
+// Double buffering
+const DB=[['glClearColor + glClear','back',c=>c.back='清空（背景色）'],['render(): glUseProgram / glBindVertexArray / glDrawArrays','back',c=>c.back='🔺 畫好新的一幀'],
+['glfwSwapBuffers(window)','swap',null],['glfwPollEvents()','none',null]];
+let dbi=-1, dbFront=0, dbc={front:'上一幀畫面',back:'（舊內容）'};
+function dbRender(){const A=document.getElementById('bufA'),B=document.getElementById('bufB'),bufs=[A,B];
+ bufs.forEach((el,i)=>{const isF=i===dbFront;el.style.background=isF?'#dbeafe':'#f3f3f0';el.querySelector('b').textContent=`Buffer ${'AB'[i]} — ${isF?'FRONT（顯示中）':'BACK（畫這裡）'}`;
+  el.querySelector('span').textContent=isF?dbc.front:dbc.back;});}
+document.getElementById('dbNext').onclick=()=>{dbi=(dbi+1)%DB.length;const [code,t,fn]=DB[dbi];document.getElementById('dbCode').textContent=code;
+ if(fn)fn(dbc); if(t==='swap'){dbFront^=1;[dbc.front,dbc.back]=[dbc.back,dbc.front];}
+ document.getElementById('dbTxt').textContent=t==='swap'?'交換：back 變 front，使用者看到新畫面':t==='none'?'處理輸入事件 → 下一圈 loop':'在 back buffer 作業，使用者看不到';dbRender();};
+dbRender();
+
+// 通用 chain 圖：[label, 進入此節點的 API, 型態 0一般 1binding point 2反向(由右往左連)]
+function chain(el,nodes){const n=nodes.length,W=960,bw=170,gap=(W-n*bw)/(n-1);let s='';
+ nodes.forEach(([lab,api,t],i)=>{const x=i*(bw+gap),l=lab.split('\n');
+  s+=`<rect x="${x}" y="50" width="${bw}" height="52" rx="8" fill="${t===1?'#fde7b6':i===n-1?'#c6f0d6':'#dbeafe'}" stroke="#999"/>`+
+  l.map((t2,j)=>`<text x="${x+bw/2}" y="${80+(j-(l.length-1)/2)*15}" text-anchor="middle">${t2}</text>`).join('');
+  if(i>0){const x0=x-gap+2,x1=x-2,rev=t===2,a=api.split('\n');
+   s+=`<path d="M${rev?x1:x0} 76 L${rev?x0:x1} 76" stroke="#555" stroke-width="2" marker-end="url(#ar2)"/>`+
+   a.map((t2,j)=>`<text x="${(x0+x1)/2}" y="${18+j*14}" text-anchor="middle" fill="#2563eb" font-family="monospace" font-size="11">${t2}</text>`).join('');}});
+ el.innerHTML=`<svg viewBox="0 0 960 110" style="width:100%"><defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>${s}</svg>`;}
+document.querySelectorAll('.chain').forEach(el=>chain(el,JSON.parse(el.dataset.c)));
+// shader flow
+chain(document.getElementById('shFlow'),
+ [['GLSL 原始碼字串','',0],['Shader object\n(VS / FS 各一)','glCreateShader\nglShaderSource\nglCompileShader',0],['Program object','glCreateProgram\nglAttachShader\nglLinkProgram',0],['目前 pipeline 狀態','glUseProgram',0]]);
+
+// Texture demo：8x8 checker + 色塊
+const TS=8, tex=document.createElement('canvas');tex.width=tex.height=TS;const tc=tex.getContext('2d'),tdata=[];
+for(let y=0;y<TS;y++)for(let x=0;x<TS;x++){const c=(x+y)%2?[240,240,240]:[[220,60,60],[60,140,220],[60,180,90],[230,170,40]][(x>>2)+2*(y>>2)];tdata.push(c);tc.fillStyle=`rgb(${c})`;tc.fillRect(x,y,1,1);}
+[['magA',false],['magB',true]].forEach(([id,sm])=>{const c=document.getElementById(id).getContext('2d');c.imageSmoothingEnabled=sm;c.drawImage(tex,0,0,160,160);});
+const wc=document.getElementById('wrapCv'),wx=wc.getContext('2d');
+function wrap(u,m){if(m===0)return u-Math.floor(u);if(m===1){const f=u-2*Math.floor(u/2);return f>1?2-f:f;}return Math.min(Math.max(u,0),0.9999);}
+function drawWrap(m){const W=wc.width,H=wc.height,img=wx.createImageData(W,H);
+ for(let py=0;py<H;py++)for(let px=0;px<W;px++){const u=wrap(px/W*3-1,m),v=wrap(py/H*3-1,m),c=tdata[Math.floor(v*TS)*TS+Math.floor(u*TS)],o=(py*W+px)*4;
+  img.data.set([...c,255],o);}
+ wx.putImageData(img,0,0);wx.strokeStyle='#000';wx.lineWidth=2;wx.strokeRect(W/3,H/3,W/3,H/3);
+ document.querySelectorAll('.wm').forEach(b=>b.classList.toggle('on',+b.dataset.m===m));}
+document.querySelectorAll('.wm').forEach(b=>b.onclick=()=>drawWrap(+b.dataset.m));drawWrap(0);
+</script></body></html>

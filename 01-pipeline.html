@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1. Rendering Pipeline</title><link rel="stylesheet" href="style.css">
+<style>
+#pipe g.st{cursor:pointer}
+#pipe g.st rect{stroke:#999;stroke-width:1.5}
+#pipe g.st.sel rect{stroke:#111;stroke-width:3}
+#pipe text{font-size:12px;text-anchor:middle;pointer-events:none}
+#info{min-height:150px}
+#info h3{margin-top:0}
+#demo,#cube{border:1px solid var(--line);border-radius:6px;background:#fff}
+#vt td{font:12px ui-monospace,monospace}
+</style></head>
+<body><main>
+<h1>1. Rendering Pipeline</h1>
+<div class="toc"><a href="#concept">核心觀念</a><a href="#pipeline">Pipeline 互動圖</a><a href="#walk">一個三角形的旅程</a><a href="#space">座標空間與 MVP</a><a href="#math">必要數學</a><a href="#raster">Rasterizer</a><a href="#persample">Per-Sample</a><a href="#compute">Compute</a></div>
+
+<h2 id="concept">核心觀念</h2>
+<ul>
+<li><b>OpenGL 是 API，不是語言</b>：由顯卡 driver（NVIDIA / AMD / Mesa）實作；不管視窗與輸入（交給 GLFW）。</li>
+<li><b>State machine</b>：先「設定狀態 / bind 物件」，再下 <b>Draw Command</b>（<code>glDrawArrays</code> / <code>glDrawElements</code>）。設定會一直保留到你改它。</li>
+<li>API 大致兩類：
+  <ul><li><b>指定物件</b>：Buffer（vertex / index）、Texture、Shader Program、Framebuffer Object</li>
+  <li><b>設定 pipeline</b>：fixed-function 的開關（depth test、culling…）、目前用哪個 program、render target</li></ul></li>
+<li><b>Object 以 <code>GLuint</code> 識別</b>：<code>glGen*</code> / <code>glCreate*</code> 拿到 ID → <code>glBind*</code> 掛上 pipeline → 操作 → <code>glDelete*</code>。</li>
+<li>典型一幀：<code>設定 Object#1 → draw → 設定 Object#2 → draw …</code>；共用設定的物件連續畫可省 API call（省 CPU）。</li>
+<li>本課用 <b>Programmable Pipeline</b>（OpenGL 3.0+ core profile；shader 用 <code>#version 410 core</code>）。舊式 fixed-function（<code>glBegin/glEnd</code>）已 deprecated，網路上舊教學別抄。</li>
+</ul>
+<div class="ex"><b>名詞小辭典</b>
+<table>
+<tr><th>名詞</th><th>白話解釋</th></tr>
+<tr><td>Vertex（頂點）</td><td>一個點加上它的屬性（位置、顏色、法向量、UV…）。一個三角形 = 3 個 vertex。</td></tr>
+<tr><td>Primitive</td><td>由頂點組成的基本圖形：點、線、三角形。GPU 只會畫這三種，所有 3D 模型都是一堆三角形。</td></tr>
+<tr><td>Fragment</td><td>「候選像素」：三角形蓋到的每個像素產生一個 fragment，帶有插值後的顏色 / 深度。通過 depth test 等檢查後才會真正寫成 <b>pixel</b>。</td></tr>
+<tr><td>Shader</td><td>跑在 GPU 上的小程式，用 GLSL 寫。Vertex shader 每頂點跑一次、Fragment shader 每 fragment 跑一次，成千上萬個同時平行執行。</td></tr>
+<tr><td>Buffer / Texture</td><td>放在 GPU 記憶體的資料。Buffer 像一維陣列（頂點資料），Texture 像圖片（可被 filter 取樣）。</td></tr>
+<tr><td>Context</td><td>OpenGL 的「執行環境」，記錄所有狀態與物件。GLFW 建視窗時順便建立。</td></tr>
+<tr><td>Draw call</td><td>一次 <code>glDraw*</code> 呼叫 = 叫 GPU 用目前的設定畫一批 primitive。</td></tr>
+</table></div>
+<div class="ex"><b>範例：State machine 是什麼意思？</b>
+<p>OpenGL 就像一台有很多開關的機器。<code>glDraw*</code> 不帶「用哪個 shader、哪份資料」的參數，而是用<b>當下開關的狀態</b>。</p>
+<pre><code>glUseProgram(redShader);      <span class="c">// 開關：目前 shader = 紅色</span>
+glBindVertexArray(cubeVAO);   <span class="c">// 開關：目前資料 = 立方體</span>
+glDrawArrays(GL_TRIANGLES, 0, 36);   <span class="c">// 畫出紅色立方體</span>
+
+glBindVertexArray(sphereVAO); <span class="c">// 只換資料，shader 沒改</span>
+glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 —— 因為 shader 狀態還留著</span></code></pre>
+<p>所以 bug 常來自「狀態殘留」：上一個物件開的設定（如 blending、某張 texture）影響了下一個物件。</p>
+<p><b>為什麼用 GLuint ID？</b> 物件實際存在 driver / GPU 裡，你手上只有一個編號（像檔案的 file descriptor）。例如 <code>glGenBuffers(1, &amp;vbo)</code> 後 <code>vbo</code> 可能是 <code>1</code>，之後所有操作都用這個 1 指名。</p></div>
+
+<h2 id="pipeline">Pipeline 互動圖</h2>
+<p class="mut">點任一 stage 看說明。<span class="tag t-prog">programmable</span><span class="tag t-opt">optional programmable</span><span class="tag t-fix">fixed function</span></p>
+<svg id="pipe" viewBox="0 0 960 110"></svg>
+<div id="info" class="card"></div>
+<div class="note"><b>Vertex Processing</b> = Vertex / Tessellation / Geometry shader；其中<b>最後一個啟用的 stage 必須輸出 <code>gl_Position</code>（clip space 座標）</b>給 Rasterizer。只有 VS + FS 時就是 VS 負責。</div>
+
+<h2 id="walk">一個三角形的旅程</h2>
+<p class="mut">按「下一步」：上方 pipeline 圖會同步高亮。最後一步可切換 fixed-function 狀態看效果（灰色方塊為先畫好的物件，depth = 0.5）。</p>
+<div class="ctrl">
+  <button class="b" id="prev">◀ 上一步</button><button class="b" id="next">下一步 ▶</button>
+  <label><input type="checkbox" id="oDepth" checked> GL_DEPTH_TEST</label>
+  <label><input type="checkbox" id="oCull"> GL_CULL_FACE</label>
+  <label><input type="checkbox" id="oCW"> 頂點順序改 CW（背面）</label>
+  <label><input type="checkbox" id="oBlend"> GL_BLEND (α=0.5)</label>
+</div>
+<canvas id="demo" width="480" height="300"></canvas>
+<div id="walkTxt" class="card"></div>
+
+<h2 id="space">座標空間與 MVP</h2>
+<svg viewBox="0 0 960 90" style="width:100%">
+<g font-size="13" text-anchor="middle">
+<g id="chain"></g></g></svg>
+<ul>
+<li><b>Model</b>：物件擺到世界（translate / rotate / scale）；<b>View</b>：把世界轉到相機座標（<code>lookAt</code>）；<b>Projection</b>：視錐 → clip space（<code>perspective</code> / <code>ortho</code>）。</li>
+<li>Vertex shader 通常只做 <code>gl_Position = P * V * M * pos;</code>，之後 <b>perspective division（÷w）與 viewport transform 由 Rasterizer 自動做</b>，你只能用 <code>glViewport</code> 設定後者。</li>
+<li>OpenGL 相機座標是 <b>right-handed</b>、相機看向 <code>-z</code>；Projection 之後 NDC 變成 left-handed（z 越大越遠，範圍 [-1, 1]）。</li>
+</ul>
+<div class="ex"><b>範例：用「拍照」理解五個步驟</b>
+<ol>
+<li><b>Model</b>：把道具擺到場景中（模型檔裡的茶壺座標以自己為中心，Model 把它移到桌上 (3,1,0) 並轉 90°）。</li>
+<li><b>View</b>：架好相機（相機在 (0,2,5) 看向原點）。數學上是「把整個世界搬動到以相機為原點」。</li>
+<li><b>Projection</b>：選鏡頭（廣角 / 望遠 = FOV），決定哪些東西在畫面內。</li>
+<li><b>÷w</b>：近大遠小在這一步發生。</li>
+<li><b>Viewport</b>：把照片印成指定大小（800×600 pixel）。</li></ol>
+<p><b>數字走一次</b>：某點在 clip space 是 <code>(2, 1, 3, 4)</code> → NDC = <code>(2/4, 1/4, 3/4) = (0.5, 0.25, 0.75)</code>，三個值都在 [-1,1] 內所以可見。視窗 800×600 時 screen x = (0.5+1)/2×800 = <b>600</b>、y = (0.25+1)/2×600 = <b>375</b>（從下往上算）。<br>
+同一個點若離相機更遠，w 會更大（perspective 的 w ≈ 到相機的距離）→ 除完 x、y 更接近 0 → 更靠近畫面中心、看起來更小。這就是「近大遠小」。</p></div>
+<div class="ctrl">
+  <label>Model tx <input type="range" id="tx" min="-3" max="3" step=".1" value="0"></label>
+  <label>rotate y <input type="range" id="ry" min="0" max="360" value="30"></label>
+  <label>scale <input type="range" id="sc" min=".3" max="2" step=".1" value="1"></label>
+  <label><input type="checkbox" id="ord"> 順序改 R·T（先平移再轉）</label>
+</div>
+<div class="ctrl">
+  <label>Camera 距離 <input type="range" id="cd" min="2" max="15" step=".1" value="6"></label>
+  <label>相機高度 <input type="range" id="cy" min="-5" max="5" step=".1" value="2"></label>
+  <label>FOV <input type="range" id="fov" min="20" max="120" value="45"></label>
+  <label><input type="checkbox" id="orth"> Orthographic</label>
+  <label>near <input type="range" id="near" min=".1" max="6" step=".1" value=".1"></label>
+</div>
+<div class="grid2">
+<canvas id="cube" width="460" height="320"></canvas>
+<div><b>紅點頂點 (1,1,1) 經過每個空間：</b>
+<table id="vt"></table>
+<p class="mut">試試：把 near 拉大 → 頂點的 NDC.z 超出 [-1,1] 就會被 clip；把 tx 拉大並勾「R·T」→ 物體繞原點公轉而不是自轉。</p></div>
+</div>
+
+<h2 id="math">必要數學（Transformation 講義重點）</h2>
+<div class="grid2">
+<div class="card"><b>Homogeneous coordinate</b>
+<ul><li>點 <code>(x,y,z,1)</code>；方向 <code>(x,y,z,0)</code></li>
+<li>w=0 → translate 對方向無效（正確行為）</li>
+<li>每個 vertex 是 column vector，矩陣<b>前乘</b>：<code>v' = M v</code></li>
+<li>OpenGL / GLM 矩陣是 <b>column-major</b> 儲存</li></ul></div>
+<div class="card"><b>組合順序</b>
+<ul><li><code>M = T * R * S</code>：先 scale、再 rotate、最後 translate（從右往左讀）</li>
+<li><code>MVP = P * V * M</code></li>
+<li>逆矩陣捷徑：<code>T⁻¹(t)=T(-t)</code>、<code>R⁻¹=Rᵀ</code>、<code>S⁻¹(s)=S(1/s)</code></li></ul></div>
+<div class="card"><b>向量運算</b>
+<ul><li><code>dot(A,B)=|A||B|cosθ</code>：夾角、投影、光照 <code>max(dot(N,L),0)</code></li>
+<li><code>cross(A,B)</code>：垂直兩者，右手定則；<code>cross(A,B) = -cross(B,A)</code></li>
+<li>單位向量：<code>normalize(v)</code></li></ul></div>
+<div class="card"><b>lookAt(E, C, U)</b>
+<ul><li><code>F = normalize(C − E)</code>（前）</li>
+<li><code>S = normalize(cross(F, U))</code>（右）</li>
+<li><code>U' = cross(S, F)</code>（上）</li>
+<li>View = Rotation * Translation(−E)：移相機 = 反方向移世界</li></ul></div>
+<div class="card"><b>Projection</b>
+<ul><li>Perspective：遠小近大，<code>perspective(fovy, aspect, near, far)</code></li>
+<li>Orthographic：無透視，<code>ortho(l,r,b,t,n,f)</code></li>
+<li>near/far 比例別太懸殊（near 太小 → depth 精度差、z-fighting）</li></ul></div>
+<div class="card"><b>Rotation</b>
+<ul><li>繞 x/y/z 軸或任意軸 + 角度（GLM 用<b>弧度</b>）</li>
+<li>Euler angles 有 <b>gimbal lock</b>；需要平滑插值或任意旋轉時用 <b>quaternion</b></li>
+<li>Non-uniform scale 會改變法向量方向 → normal 要用 <code>transpose(inverse(M))</code></li></ul></div>
+</div>
+<div class="ex"><b>範例 1：為什麼要 w？點 vs 方向</b>
+<p>平移 (+5, 0, 0) 的矩陣 T，最右邊一欄放位移量。乘上去時，位移會乘以 w：</p>
+<pre><code>T = | 1 0 0 5 |      點   p = (1, 2, 3, <b>1</b>)  →  T·p = (1+5·1, 2, 3, 1) = (6, 2, 3, 1)   ✔ 點被移動
+    | 0 1 0 0 |      方向 d = (1, 0, 0, <b>0</b>)  →  T·d = (1+5·0, 0, 0, 0) = (1, 0, 0, 0)   ✔ 方向不變
+    | 0 0 1 0 |
+    | 0 0 0 1 |</code></pre>
+<p>法向量、光線方向等「方向」本來就不該因物體平移而改變，w=0 剛好自動處理。</p></div>
+<div class="ex"><b>範例 2：順序很重要</b>
+<p>把點 p = (1, 0, 0) 先「繞 y 軸轉 90°」、再「往 +x 移 5」：</p>
+<ul><li><code>T * R * p</code>（先 R 後 T）：轉完變 (0, 0, -1) → 平移得 <b>(5, 0, -1)</b>：物體在原地自轉後搬過去</li>
+<li><code>R * T * p</code>（先 T 後 R）：平移得 (6, 0, 0) → 繞原點轉得 <b>(0, 0, -6)</b>：物體跑到很遠的地方（像繞太陽公轉）</li></ul>
+<p>規則：<b>離 p 最近（最右邊）的矩陣最先作用</b>。一般物件用 <code>T * R * S</code>。上方互動圖勾「順序改 R·T」可以看到差別。</p></div>
+<div class="ex"><b>範例 3：dot / cross 實際用途</b>
+<ul><li><code>dot((1,0,0), (0,1,0)) = 0</code> → 垂直；<code>dot((1,0,0), (1,0,0)) = 1</code> → 同方向；<code>dot((1,0,0), (-1,0,0)) = -1</code> → 反向。</li>
+<li>光照：法向量 N 與指向光源的 L 都是單位向量時，<code>dot(N, L)</code> 就是亮度比例。光正對表面 = 1（最亮），光斜 60° = 0.5，光從背後 = 負數（用 <code>max(…, 0)</code> 截成 0）。</li>
+<li><code>cross((1,0,0), (0,1,0)) = (0,0,1)</code>：x 叉 y 得 z（右手定則）。三角形兩邊做 cross 就得到它的法向量。</li></ul></div>
+
+<h2 id="raster">Rasterizer（fixed function）內部</h2>
+<ol>
+<li><b>Face culling</b>：依頂點順序（預設 CCW = front）丟掉背面。<code>glEnable(GL_CULL_FACE)</code>、<code>glCullFace</code>、<code>glFrontFace</code></li>
+<li><b>Primitive culling</b>：整個在 view volume 外 → 丟掉</li>
+<li><b>Clipping</b>：部分在外 → 切成新的 primitive（在 clip space 做最有效率）</li>
+<li><b>Perspective division</b>：clip → NDC（÷w），不可控制</li>
+<li><b>Viewport transform</b>：NDC → screen。<code>glViewport</code>、<code>glDepthRange</code>（視窗 resize 時要重設 viewport）</li>
+<li><b>Rasterization</b>：三角形 → fragments；VS 的 <code>out</code> 變數在此<b>被插值</b>後送進 FS 的 <code>in</code>。相關：<code>glPolygonMode</code>（線框）、<code>glPointSize</code>、<code>glLineWidth</code></li>
+<li><b>Multisampling</b>：硬體 anti-aliasing，<code>GL_MULTISAMPLE</code></li>
+</ol>
+<div class="ex"><b>範例：插值（interpolation）</b>
+<p>一條邊的兩端，頂點 A 顏色 <code>(1,0,0)</code> 紅、頂點 B 顏色 <code>(0,0,1)</code> 藍。VS 只在 A、B 兩點各跑一次，但中間有很多像素：</p>
+<ul><li>距 A 25% 處的 fragment 拿到 <code>0.75·紅 + 0.25·藍 = (0.75, 0, 0.25)</code></li>
+<li>正中間拿到 <code>(0.5, 0, 0.5)</code> 紫色</li></ul>
+<p>三角形內部則用三個頂點的 barycentric 權重（加總為 1）混合。<b>任何</b>從 VS <code>out</code> 出來的值（顏色、UV、法向量、世界座標）都會這樣被插值後送進 FS——這就是為什麼 FS 能拿到「每個像素自己的 UV」。上方「一個三角形的旅程」第 5 步就是這個效果。</p>
+<p>注意：插值後的法向量長度不再是 1 → FS 裡要再 <code>normalize</code> 一次。</p></div>
+
+<h2 id="persample">Per-Sample Processing</h2>
+<table>
+<tr><th>Test</th><th>做什麼</th><th>API</th></tr>
+<tr><td>Scissor</td><td>矩形外的 fragment 丟掉</td><td><code>GL_SCISSOR_TEST</code>, <code>glScissor</code></td></tr>
+<tr><td>Stencil</td><td>和 stencil buffer 比較，做遮罩（可動態更新）</td><td><code>GL_STENCIL_TEST</code>, <code>glStencilFunc/Op/Mask</code></td></tr>
+<tr><td>Depth</td><td>Z-buffer：比較深度決定能否覆蓋</td><td><code>GL_DEPTH_TEST</code>, <code>glDepthFunc</code>, <code>glDepthMask</code></td></tr>
+<tr><td>Blending</td><td>通過測試後與既有顏色混合（半透明）</td><td><code>GL_BLEND</code>, <code>glBlendFunc</code></td></tr>
+</table>
+<div class="ex"><b>範例：Depth test 與 Blending 的數字</b>
+<ul><li><b>Depth test</b>（GL_LESS）：某像素目前 depth buffer 存 0.6（之前畫的牆）。新 fragment 深度 0.4（比牆近）→ 0.4 &lt; 0.6 通過，寫入顏色並把 depth 更新成 0.4。之後又來一個 0.7 的 fragment（牆後面的東西）→ 0.7 &lt; 0.4 不成立 → 丟掉。<b>結果和繪製順序無關</b>，這就是 Z-buffer 的價值。</li>
+<li>沒開 depth test：後畫的永遠蓋掉先畫的 → 牆後面的東西如果比較晚畫，會「穿透」到前面。</li>
+<li><b>Blending</b>（<code>glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)</code>）：畫面上已有藍色 (0,0,1)，新畫一個 α=0.3 的紅色玻璃 (1,0,0)：<br>
+結果 = 0.3 × (1,0,0) + 0.7 × (0,0,1) = <b>(0.3, 0, 0.7)</b>。</li></ul></div>
+<div class="warn">開了 depth test，每幀必須 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>，否則上一幀的深度會擋住新畫面。半透明物體通常要<b>先畫不透明、再由遠到近畫透明</b>。</div>
+
+<h2 id="compute">Compute Pipeline</h2>
+<ul>
+<li>OpenGL 4.3+，只有一個 programmable stage，沒有固定輸入輸出，可任意讀寫 buffer / texture（概念近 CUDA）。</li>
+<li>用途：粒子 / 布料 / 水面模擬、程序化貼圖、影像處理（blur）、GPU-driven rendering。期末與後段作業會用到。</li>
+<li>注意：macOS 只支援到 OpenGL 4.1，沒有 compute shader。</li>
+</ul>
+</main>
+<script src="common.js"></script>
+<script>
+// ---------- Pipeline 圖 ----------
+const ST = [
+ {n:'Vertex\nSpecification',t:'fix',d:'從一或多個 Buffer Object 組出 vertex stream。設定來源是 <b>VAO</b>（描述 attribute layout）。',io:'Buffer + VAO → vertices',api:'glBindVertexArray, glDrawArrays, glDrawElements（Draw call 也是 pipeline 起點）',k:'沒有任何 vertex input 也必須 bind 一個 VAO 才能 draw。'},
+ {n:'Vertex\nShader',t:'prog',d:'第一個 programmable stage，<b>每個頂點執行一次</b>，彼此獨立、不知道 primitive 拓樸。',io:'vertex attributes (in) → gl_Position + 自訂 out',api:'GLSL: layout(location=N) in, uniform, gl_VertexID',k:'做 MVP 轉換、skinning、per-vertex 計算。'},
+ {n:'Tessellation\n(TCS/TE/TES)',t:'opt',d:'把 patch（高階曲面）細分成更多三角形。三個子 stage 必須一起用。',io:'GL_PATCHES → 細分後頂點',api:'glPatchParameteri, GL_PATCHES',k:'Tessellation ≠ triangulation。可關閉。'},
+ {n:'Geometry\nShader',t:'opt',d:'每個 primitive 執行一次，可新增 / 刪除幾何、改 primitive 類型、Transform Feedback 寫回 buffer。',io:'primitive → 0..N primitives',api:'GLSL: layout(triangles) in; layout(line_strip, max_vertices=N) out; EmitVertex()',k:'效能常較差，較少用。'},
+ {n:'Rasterizer',t:'fix',d:'Culling → Clipping → ÷w → Viewport → 光柵化成 fragments，並<b>插值</b> VS 輸出。',io:'clip-space primitive → fragments',api:'glCullFace, glFrontFace, glViewport, glPolygonMode, glPointSize',k:'詳見下方 Rasterizer 段落。'},
+ {n:'Fragment\nShader',t:'prog',d:'最後一個 programmable stage，<b>每個 fragment 一次</b>（1080p ≈ 2M 次），決定顏色。',io:'插值後的 in → out vec4 color',api:'GLSL: in, out vec4, uniform sampler2D, texture(), gl_FragCoord',k:'光照、貼圖等細節都在這裡。'},
+ {n:'Per-Sample\nProcessing',t:'fix',d:'Scissor / Stencil / Depth test，通過後（可選）Blending 再寫入。',io:'fragment → framebuffer 像素',api:'glEnable(GL_DEPTH_TEST), glDepthFunc, glBlendFunc, glStencilFunc, glScissor',k:'開 depth test 記得每幀 clear depth buffer。'},
+ {n:'Framebuffer',t:'io',d:'輸出目標：預設是視窗（back buffer），也可以是自訂 FBO（render to texture，後處理用）。',io:'color / depth / stencil buffers',api:'glClear, glfwSwapBuffers, glBindFramebuffer',k:'Double buffering：畫在 back，swap 後顯示。'}];
+const EXS = [
+ '// C++：一個三角形 3 個頂點，每個只有位置\nfloat v[] = { -0.5f,-0.5f,0,  0.5f,-0.5f,0,  0,0.5f,0 };\n// ...建立 VBO、用 VAO 描述「attrib 0 = 3 個 float」...\nglBindVertexArray(vao);\nglDrawArrays(GL_TRIANGLES, 0, 3);   // 3 個頂點送進 pipeline',
+ '#version 410 core\nlayout(location = 0) in vec3 aPos;   // 從 VAO attrib 0 來\nuniform mat4 mvp;\nvoid main() {\n    gl_Position = mvp * vec4(aPos, 1.0);   // 必須輸出\n}\n// 3 個頂點 → 這個 main 被呼叫 3 次（平行）',
+ '// 例：地形 patch 依與相機距離決定細分程度\n// 近處切成 64 份、遠處 4 份 → 近看平滑、遠處省效能\nglPatchParameteri(GL_PATCH_VERTICES, 4);\nglDrawArrays(GL_PATCHES, 0, 4);',
+ '// 例：把每個三角形畫出它的法向量線（debug 用）\nlayout(triangles) in;\nlayout(line_strip, max_vertices = 2) out;\n// 每個輸入三角形 → 輸出 1 條線（2 個頂點）',
+ '// 你通常只需設定：\nglViewport(0, 0, width, height);\nglEnable(GL_CULL_FACE);\nglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);   // 線框模式 debug\n// 1 個覆蓋 5000 像素的三角形 → 產生約 5000 個 fragment',
+ '#version 410 core\nin vec3 vColor;         // 已被 rasterizer 插值\nout vec4 fragColor;     // 輸出到 framebuffer\nvoid main() {\n    fragColor = vec4(vColor, 1.0);\n}\n// 5000 個 fragment → main 被呼叫 5000 次',
+ 'glEnable(GL_DEPTH_TEST);\nglDepthFunc(GL_LESS);          // 深度較小（較近）者勝\nglEnable(GL_BLEND);\nglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);',
+ '// 每幀：\nglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);\n// ...draw calls...\nglfwSwapBuffers(window);   // 顯示'];
+const COL = {prog:'#c6f0d6',opt:'#fde7b6',fix:'#e5e7eb',io:'#dbeafe'};
+const svg = document.getElementById('pipe'); let sel = 0;
+svg.innerHTML = ST.map((s,i)=>{const x=6+i*119, l=s.n.split('\n');
+ return `<g class="st" data-i="${i}"><rect x="${x}" y="22" width="100" height="62" rx="8" fill="${COL[s.t]}"${s.t==='opt'?' stroke-dasharray="5 3"':''}/>`+
+ l.map((t,j)=>`<text x="${x+50}" y="${53+(j-(l.length-1)/2)*15}">${t}</text>`).join('')+
+ (i<ST.length-1?`<path d="M${x+102} 53 h14" stroke="#555" stroke-width="2" marker-end="url(#ar)"/>`:'')+'</g>';}).join('')+
+ '<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>';
+function pick(i){sel=i;svg.querySelectorAll('g.st').forEach(g=>g.classList.toggle('sel',+g.dataset.i===i));const s=ST[i];
+ document.getElementById('info').innerHTML=`<h3>${s.n.replace('\n',' ')} <span class="tag t-${s.t==='io'?'fix':s.t}">${{prog:'programmable',opt:'optional',fix:'fixed function',io:'output'}[s.t]}</span></h3>
+ <p>${s.d}</p><p><b>I/O：</b>${s.io}</p><p><b>相關：</b><code>${s.api}</code></p><p class="mut">${s.k}</p><b>範例：</b><pre><code>${EXS[i].replace(/</g,'&lt;')}</code></pre>`;}
+svg.querySelectorAll('g.st').forEach(g=>g.onclick=()=>pick(+g.dataset.i)); pick(0);
+
+// ---------- 三角形旅程 ----------
+const cv=document.getElementById('demo'), cx=cv.getContext('2d'), CS=12, GW=40, GH=25;
+const V=[{p:[0,0,0],ndc:[-0.75,-0.7],z:0.2,c:[255,40,40]},{p:[1,0,0],ndc:[0.8,-0.5],z:0.8,c:[40,200,40]},{p:[0,1,0],ndc:[-0.1,0.85],z:0.5,c:[40,80,255]}];
+const toPx=n=>[(n[0]+1)/2*GW*CS,(1-n[1])/2*GH*CS];
+const STEPS=[
+ [0,'<b>Vertex Specification</b>：VBO 裡只是一串 float，VAO 告訴 OpenGL 每 3 個 float 是一個 position、每個 vertex 跨多少 byte（stride）。<br><code>glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES, 0, 3);</code>'],
+ [1,'<b>Vertex Shader</b>：每個頂點各跑一次，<code>gl_Position = mvp * vec4(pos,1)</code> 輸出 clip space；同時把 color 寫進 <code>out vec3 vColor</code>。圖上點已是 ÷w、viewport 後的位置。'],
+ [4,'<b>Primitive Assembly</b>：依 <code>GL_TRIANGLES</code> 每 3 個頂點組成一個三角形。此時判斷正反面（頂點在螢幕上 CCW = front）與 clipping。'],
+ [4,'<b>Rasterization</b>：找出三角形覆蓋的像素（格子中心在三角形內）→ 每格產生一個 <b>fragment</b>。'],
+ [5,'<b>插值 + Fragment Shader</b>：每個 fragment 拿到以 barycentric 權重插值的 <code>vColor</code> 與深度，FS 輸出顏色。'],
+ [6,'<b>Per-Sample</b>：和 framebuffer 既有內容（灰色方塊 depth=0.5）做 depth test（GL_LESS：小的贏）/ blending。勾選上方選項看差異。'],
+ [7,'<b>Framebuffer</b>：結果寫在 back buffer，<code>glfwSwapBuffers</code> 後顯示。']];
+let step=0;
+const opt=id=>document.getElementById(id).checked;
+function edge(a,b,p){return (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);}
+function drawWalk(){
+ const [si,txt]=STEPS[step]; pick(si);
+ document.getElementById('walkTxt').innerHTML=`<b>Step ${step+1}/${STEPS.length}</b>　${txt}`;
+ cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);
+ cx.strokeStyle='#eee';for(let i=0;i<=GW;i++){cx.beginPath();cx.moveTo(i*CS,0);cx.lineTo(i*CS,GH*CS);cx.stroke();}
+ for(let j=0;j<=GH;j++){cx.beginPath();cx.moveTo(0,j*CS);cx.lineTo(GW*CS,j*CS);cx.stroke();}
+ let P=V.map(v=>toPx(v.ndc)); if(opt('oCW')) P=[P[0],P[2],P[1]];
+ const vs=opt('oCW')?[V[0],V[2],V[1]]:V;
+ if(step===0){cx.fillStyle='#333';cx.font='13px monospace';
+  cx.fillText('VBO: [ x  y  z | r  g  b ] x 3',20,30);
+  V.forEach((v,i)=>cx.fillText(`v${i}: [${v.p.join(', ')} | ${v.c.map(c=>(c/255).toFixed(1)).join(', ')}]`,20,60+i*22));
+  cx.fillText('VAO: attrib 0 = pos (3 float), attrib 1 = color (3 float)',20,140);
+  cx.fillText('     stride = 6 * sizeof(float)',20,160);return;}
+ const area=edge(P[0],P[1],P[2]); // canvas y 向下，<0 代表螢幕上 CCW
+ const front=area<0, culled=opt('oCull')&&!front;
+ // 先畫好的灰色方塊（只在 per-sample 之後顯示）
+ const quad=[14,6,30,20], late=step>=5;
+ const fb={};
+ if(late){for(let x=quad[0];x<quad[2];x++)for(let y=quad[1];y<quad[3];y++)fb[x+','+y]={c:[160,160,160],z:0.5};}
+ if(step>=3&&!culled){
+  for(let x=0;x<GW;x++)for(let y=0;y<GH;y++){const p=[x*CS+CS/2,y*CS+CS/2];
+   const w0=edge(P[1],P[2],p)/area,w1=edge(P[2],P[0],p)/area,w2=edge(P[0],P[1],p)/area;
+   if(w0<0||w1<0||w2<0)continue;
+   const c=[0,1,2].map(k=>vs[0].c[k]*w0+vs[1].c[k]*w1+vs[2].c[k]*w2), z=vs[0].z*w0+vs[1].z*w1+vs[2].z*w2;
+   const key=x+','+y, old=fb[key];
+   if(step===3){fb[key]={c:[200,220,255],z};continue;}
+   if(late&&old&&opt('oDepth')&&!(z<old.z))continue;
+   fb[key]={c:late&&old&&opt('oBlend')?c.map((v,k)=>v*.5+old.c[k]*.5):c,z};}}
+ for(const k in fb){const [x,y]=k.split(',').map(Number),c=fb[k].c;cx.fillStyle=`rgb(${c.map(Math.round)})`;cx.fillRect(x*CS+1,y*CS+1,CS-1,CS-1);}
+ if(step>=2&&step<7){cx.strokeStyle=culled?'#c53030':'#111';cx.setLineDash(culled?[6,4]:[]);cx.lineWidth=2;cx.beginPath();P.forEach((p,i)=>cx[i?'lineTo':'moveTo'](...p));cx.closePath();cx.stroke();cx.setLineDash([]);cx.lineWidth=1;}
+ if(step<7)P.forEach((p,i)=>{cx.fillStyle=`rgb(${vs[i].c})`;cx.beginPath();cx.arc(...p,6,0,7);cx.fill();cx.fillStyle='#000';cx.font='12px sans-serif';cx.fillText(`v${V.indexOf(vs[i])} z=${vs[i].z}`,p[0]+8,p[1]-6);});
+ if(step>=2){cx.fillStyle=culled?'#c53030':'#333';cx.font='13px sans-serif';cx.fillText(culled?'背面 → 被 cull 掉，不會產生任何 fragment':(front?'front face (CCW)':'back face (CW)'),8,GH*CS-8);}
+}
+document.getElementById('next').onclick=()=>{step=Math.min(step+1,STEPS.length-1);drawWalk();};
+document.getElementById('prev').onclick=()=>{step=Math.max(step-1,0);drawWalk();};
+['oDepth','oCull','oCW','oBlend'].forEach(id=>document.getElementById(id).onchange=drawWalk);
+drawWalk(); pick(0);
+
+// ---------- 座標空間 ----------
+const CH=[['Object','local'],['World',''],['Eye / View',''],['Clip','(x,y,z,w)'],['NDC','[-1,1]³'],['Screen','pixels']],
+ OP=['Model','View','Projection','÷ w','Viewport'];
+document.getElementById('chain').innerHTML=CH.map((c,i)=>{const x=70+i*164;return `<rect x="${x-58}" y="20" width="116" height="46" rx="8" fill="${i===3?'#fde7b6':'#dbeafe'}" stroke="#999"/><text x="${x}" y="40">${c[0]}</text><text x="${x}" y="57" fill="#666" font-size="11">${c[1]}</text>`+
+ (i<5?`<path d="M${x+60} 43 h42" stroke="#555" stroke-width="2" marker-end="url(#ar)"/><text x="${x+82}" y="${i<3?14:86}" fill="${i<3?'#2f855a':'#6b7280'}">${OP[i]}</text>`:'');}).join('')+
+ '<text x="300" y="86" fill="#2f855a" font-size="12">↑ 你在 vertex shader 做（綠）</text><text x="700" y="14" fill="#6b7280" font-size="12">Rasterizer 自動做（灰）↓</text>';
+const mul=(a,b)=>a.map((r,i)=>b[0].map((_,j)=>r.reduce((s,_,k)=>s+a[i][k]*b[k][j],0)));
+const ap=(m,v)=>m.map(r=>r.reduce((s,x,k)=>s+x*v[k],0));
+const I=()=>[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+const T=(x,y,z)=>[[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]];
+const Sc=s=>[[s,0,0,0],[0,s,0,0],[0,0,s,0],[0,0,0,1]];
+const Ry=a=>{const c=Math.cos(a),s=Math.sin(a);return [[c,0,s,0],[0,1,0,0],[-s,0,c,0],[0,0,0,1]];};
+const sub=(a,b)=>a.map((v,i)=>v-b[i]), dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),
+ crs=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]], nrm=a=>{const l=Math.hypot(...a);return a.map(v=>v/l);};
+function lookAt(E,C,U){const F=nrm(sub(C,E)),S=nrm(crs(F,U)),U2=crs(S,F);
+ return [[...S,-dot(S,E)],[...U2,-dot(U2,E)],[...F.map(v=>-v),dot(F,E)],[0,0,0,1]];}
+function persp(fy,a,n,f){const t=1/Math.tan(fy/2);return [[t/a,0,0,0],[0,t,0,0],[0,0,(f+n)/(n-f),2*f*n/(n-f)],[0,0,-1,0]];}
+function ortho(l,r,b,t,n,f){return [[2/(r-l),0,0,-(r+l)/(r-l)],[0,2/(t-b),0,-(t+b)/(t-b)],[0,0,-2/(f-n),-(f+n)/(f-n)],[0,0,0,1]];}
+const cc=document.getElementById('cube').getContext('2d'), CW=460, CHh=320;
+const CV=[];for(let i=0;i<8;i++)CV.push([i&1?1:-1,i&2?1:-1,i&4?1:-1,1]);
+const CE=[];for(let i=0;i<8;i++)for(let b of[1,2,4])if(!(i&b))CE.push([i,i|b]);
+const g=id=>+document.getElementById(id).value, f2=v=>v.map(x=>x.toFixed(2)).join(', ');
+function drawCube(){
+ const R=Ry(g('ry')*Math.PI/180), Tm=T(g('tx'),0,0), S=Sc(g('sc'));
+ const M=opt('ord')?mul(R,mul(Tm,S)):mul(Tm,mul(R,S));
+ const Vw=lookAt([0,g('cy'),g('cd')],[0,0,0],[0,1,0]), a=CW/CHh, n=g('near'), f=30;
+ const P=opt('orth')?ortho(-3*a,3*a,-3,3,n,f):persp(g('fov')*Math.PI/180,a,n,f);
+ const MVP=mul(P,mul(Vw,M));
+ const clip=CV.map(v=>ap(MVP,v)), scr=clip.map(c=>c[3]>1e-4?[(c[0]/c[3]+1)/2*CW,(1-c[1]/c[3])/2*CHh,c[2]/c[3]]:null);
+ cc.fillStyle='#fff';cc.fillRect(0,0,CW,CHh);
+ // 地面格線 y=-1
+ cc.strokeStyle='#eee';const PV=mul(P,Vw);
+ for(let k=-5;k<=5;k++)for(const [a1,b1] of [[[k,-1,-5,1],[k,-1,5,1]],[[-5,-1,k,1],[5,-1,k,1]]]){
+  const A=ap(PV,a1),B=ap(PV,b1);if(A[3]<=0.05||B[3]<=0.05)continue;
+  cc.beginPath();cc.moveTo((A[0]/A[3]+1)/2*CW,(1-A[1]/A[3])/2*CHh);cc.lineTo((B[0]/B[3]+1)/2*CW,(1-B[1]/B[3])/2*CHh);cc.stroke();}
+ CE.forEach(([i,j])=>{const A=scr[i],B=scr[j];if(!A||!B)return;
+  const out=Math.abs(A[2])>1||Math.abs(B[2])>1;cc.strokeStyle=out?'#f3a0a0':'#2563eb';cc.lineWidth=2;
+  cc.beginPath();cc.moveTo(A[0],A[1]);cc.lineTo(B[0],B[1]);cc.stroke();});
+ cc.lineWidth=1;
+ if(scr[7]){cc.fillStyle='#c53030';cc.beginPath();cc.arc(scr[7][0],scr[7][1],5,0,7);cc.fill();}
+ const w=ap(M,CV[7]), e=ap(Vw,w), c=ap(P,e), nd=c.slice(0,3).map(v=>v/c[3]);
+ const out=nd.some(v=>Math.abs(v)>1);
+ document.getElementById('vt').innerHTML=[['Object',f2(CV[7])],['World = M·v',f2(w)],['Eye = V·world',f2(e)],['Clip = P·eye',f2(c)],
+  ['NDC = clip.xyz / w',f2(nd)+(out?' ← 超出 → clipped':'')],['Screen',scr[7]?`(${scr[7][0].toFixed(0)}, ${scr[7][1].toFixed(0)}) px`:'—']]
+  .map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('');
+}
+['tx','ry','sc','cd','cy','fov','near'].forEach(id=>document.getElementById(id).oninput=drawCube);
+['ord','orth'].forEach(id=>document.getElementById(id).onchange=drawCube);
+drawCube();
+</script></body></html>

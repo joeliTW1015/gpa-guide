@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3. 環境 / 繳交 / Git</title><link rel="stylesheet" href="style.css">
+<style>
+.chk label{display:block;padding:4px 0}
+.chk input{margin-right:8px}
+.chk label.done{color:#999;text-decoration:line-through}
+#gitSvg text{font-size:13px;text-anchor:middle}
+#gitSvg path{stroke:#ccc;stroke-width:2;fill:none}
+#gitSvg path.on{stroke:#2563eb;stroke-width:4}
+</style></head>
+<body><main>
+<h1>3. 環境架設 / 繳交 / 版本管理</h1>
+<div class="toc"><a href="#tools">需要的工具</a><a href="#setup">建置步驟</a><a href="#gitlab">GitLab 與 Git</a><a href="#submit">繳交流程</a><a href="#rules">規則與評分</a><a href="#check">繳交 Checklist</a></div>
+
+<div class="warn"><b>GitLab 網址已更新</b>（1005 公告）：<a href="https://cgvlab.igvi.cs.nthu.edu.tw/">https://cgvlab.igvi.cs.nthu.edu.tw/</a>，講義中的 <code>cgv.cs.nthu.edu.tw:8889</code> 已作廢。帳號密碼不變，請見講義 Appendix - Project Configuration。</div>
+
+<h2 id="tools">需要的工具</h2>
+<table>
+<tr><th></th><th>Windows（講義官方）</th><th>Linux（推估）</th><th>macOS</th></tr>
+<tr><td>Build 產生器</td><td>CMake GUI</td><td>cmake（CLI）或 cmake-gui</td><td>CMake GUI</td></tr>
+<tr><td>編譯器 / IDE</td><td>Visual Studio 2022（勾「使用 C++ 的桌面開發」）</td><td>g++ + VS Code（CMake Tools 擴充）</td><td>Xcode</td></tr>
+<tr><td>版本控制</td><td>Git for Windows</td><td>git</td><td>git（Xcode CLT 內建）</td></tr>
+<tr><td>OpenGL</td><td>顯卡 driver</td><td>Mesa / NVIDIA driver</td><td>系統內建，最高 4.1</td></tr>
+</table>
+<p class="mut">顯卡需支援 OpenGL 4.x（後段 compute shader 需 4.3+；macOS 只到 4.1，期末可能受限）。</p>
+
+<h2 id="setup">建置步驟</h2>
+<div class="tabs"><button class="b" data-pane="win">Windows（講義）</button><button class="b" data-pane="lnx">Linux（推估）</button><button class="b" data-pane="mac">macOS</button></div>
+
+<div class="pane" id="win">
+<ol class="steps">
+<li>安裝 <a href="https://cmake.org/download/">CMake</a>（GUI 版）、Visual Studio 2022、<a href="https://git-scm.com/downloads">Git</a>。</li>
+<li>在 GitLab 專案頁複製 <b>HTTP(S)</b> URL（<b>不要用 SSH</b>）。</li>
+<li>終端機：<pre><code>git clone &lt;url&gt; --recursive
+cd &lt;folder&gt;
+git switch &lt;branch&gt;     # 若作業不在 main 分支</code></pre>
+<span class="mut"><code>--recursive</code> 必要：GLFW / Assimp 是 submodule。</span></li>
+<li>開 CMake GUI：
+<ul><li><b>Where is the source code</b>：<code>&lt;project&gt;/builder</code>（不是專案根！）</li>
+<li><b>Where to build the binaries</b>：<code>&lt;project&gt;/build</code>（資料夾自己建）</li></ul></li>
+<li><b>Configure</b> → 選 <b>Visual Studio 17 2022</b> → Finish（紅色列再按一次 Configure 直到消失）。<br>
+<span class="mut">紅色列只是「新出現的設定項」，不是錯誤；真正的錯誤看下方輸出框的 <code>CMake Error</code>。常見：submodule 是空的（clone 沒加 --recursive）、沒安裝 VS 的 C++ 工作負載。</span></li>
+<li><b>Generate</b> → <b>Open Project</b>（開啟 .sln）。</li>
+<li>VS 上方設定改 <b>Release</b> → 確認啟動專案是你的程式（右鍵 → 設定為啟始專案）→ ▶ 執行。</li>
+</ol>
+<p class="mut">影片：<a href="https://youtu.be/2BzYKibIsX4">Windows 教學</a></p>
+</div>
+
+<div class="pane" id="lnx">
+<div class="note">講義沒有 Linux 流程，以下為依 template 結構推估（未用實際 template 驗證）。助教 Demo 若在 Windows 上跑，繳交前務必避免平台相依寫法。</div>
+<ol class="steps">
+<li>安裝套件（Ubuntu / Pop!_OS）：
+<pre><code>sudo apt update
+sudo apt install build-essential cmake cmake-qt-gui git ninja-build \
+  libgl1-mesa-dev mesa-utils \
+  xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+  zlib1g-dev
+# xorg-dev / wayland：從 submodule 編 GLFW 需要；zlib：Assimp 可能需要</code></pre></li>
+<li>確認 OpenGL 版本（需 core profile ≥ 4.1）：
+<pre><code>glxinfo -B | grep -E "renderer|core profile version"</code></pre>
+<span class="mut">NVIDIA 混合顯卡（Pop!_OS 可用 system76-power 切換）：<code>__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./app</code> 用獨顯執行。</span></li>
+<li>Clone（同 Windows）：<pre><code>git clone --recursive &lt;url&gt; hw1 &amp;&amp; cd hw1
+git switch &lt;branch&gt;   # 如需要</code></pre></li>
+<li>Configure + Build（source 一樣是 <code>builder</code>）：
+<pre><code>cmake -S builder -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+# GLFW 抱怨 Wayland 相關錯誤時可加：-DGLFW_BUILD_WAYLAND=OFF（走 X11 / XWayland）</code></pre></li>
+<li>執行：找出執行檔（<code>find build -maxdepth 3 -type f -executable</code>），<b>在專案預期的工作目錄下執行</b>，否則 assets / shaders 讀不到。template 若用 <code>VS_DEBUGGER_WORKING_DIRECTORY</code> 指定路徑，那只對 VS 有效 → Linux 需自己 <code>cd</code> 到對應目錄再跑。</li>
+<li>VS Code（選配）：裝 <i>C/C++</i>、<i>CMake Tools</i>；<code>.vscode/settings.json</code> 加：
+<pre><code>{ "cmake.sourceDirectory": "${workspaceFolder}/builder",
+  "cmake.buildDirectory": "${workspaceFolder}/build" }</code></pre>
+並在 launch 設定 <code>"cwd"</code> 為資源所在目錄。</li>
+</ol>
+<details><summary>Linux 可能遇到的坑</summary>
+<ul>
+<li><b>大小寫敏感</b>：<code>#include "Shader.h"</code> vs 檔名 <code>shader.h</code>、<code>Assets/</code> vs <code>assets/</code> 在 Windows 沒事、Linux 會錯。</li>
+<li><b>路徑分隔</b>：用 <code>/</code>，不要用 <code>\\</code>。</li>
+<li><b>MSVC 專屬</b>：<code>#pragma comment(lib, ...)</code>、<code>fopen_s</code>、<code>&lt;windows.h&gt;</code>、<code>M_PI</code> 需 <code>_USE_MATH_DEFINES</code> 等 → 用標準寫法或 <code>#ifdef _WIN32</code> 包起來。</li>
+<li>CMakeLists 若寫死 <code>.lib</code> 或 Windows 路徑，需加 <code>if(WIN32)</code> 分支（改動前確認不影響 Windows build）。</li>
+<li>GCC 比 MSVC 嚴格：缺 <code>#include &lt;cstring&gt;</code> / <code>&lt;algorithm&gt;</code> 等會報錯，補上即可（MSVC 也能編）。</li>
+<li>Release 下的未初始化變數：Windows / Linux 行為可能不同，變數都要初始化。</li>
+</ul></details>
+</div>
+
+<div class="pane" id="mac">
+<ol class="steps"><li>安裝 CMake GUI、Xcode（App Store）、Git。</li>
+<li>Clone 與 Windows 相同。</li>
+<li>CMake GUI：source = <code>builder</code>、build = <code>build</code> → Configure 選 <b>Xcode</b> → Generate → Open Project → Run。</li>
+<li>OpenGL 在 macOS 已 deprecated、最高 4.1，需 <code>GLFW_OPENGL_FORWARD_COMPAT</code>。</li></ol>
+<p class="mut">影片：<a href="https://youtu.be/1yFMUpkLWGs">Mac 教學</a></p>
+</div>
+
+<h2 id="gitlab">GitLab 與 Git</h2>
+<div class="ex"><b>Git 名詞白話版</b>
+<table>
+<tr><th>名詞</th><th>意思</th><th>類比</th></tr>
+<tr><td>Repository（repo）</td><td>一個被 Git 管理的專案資料夾（含 <code>.git/</code> 歷史紀錄）</td><td>有版本紀錄的資料夾</td></tr>
+<tr><td>Commit</td><td>某一刻所有檔案的快照 + 說明訊息</td><td>遊戲存檔點</td></tr>
+<tr><td>Branch</td><td>一條獨立的 commit 線；template 可能把每次作業放不同 branch（如 <code>hw1</code>）</td><td>平行世界的存檔線</td></tr>
+<tr><td>Remote</td><td>遠端伺服器上的 repo（GitLab / GitHub）；<code>origin</code>、<code>upstream</code> 只是它的暱稱</td><td>雲端備份</td></tr>
+<tr><td>Clone</td><td>第一次把整個 remote repo 複製到本機</td><td>下載專案</td></tr>
+<tr><td>Submodule</td><td>repo 裡面引用另一個 repo（GLFW、Assimp），只記錄「用哪個版本」</td><td>捷徑，需另外下載內容</td></tr>
+<tr><td>HTTP vs SSH URL</td><td>兩種連線方式；HTTP 用帳密登入（講義要求），SSH 需設定金鑰</td><td>—</td></tr>
+</table>
+<p><b>一個實際情境</b>：週一 clone 了 HW1 → 週二寫完相機控制，<code>git add</code> + <code>git commit -m "camera"</code> + <code>git push</code> → 週三改光照把程式改壞了 → <code>git restore src/main.cpp</code> 回到週二的版本；或 <code>git log</code> 找到想要的 commit，<code>git diff &lt;commit&gt;</code> 看改了什麼。</p></div>
+<h3>Git 資料流（點指令）</h3>
+<div class="ctrl" id="gitBtns"></div>
+<svg id="gitSvg" viewBox="0 0 960 230" style="width:100%"></svg>
+<div class="card" id="gitTxt">點上方指令看資料怎麼移動。</div>
+
+<h3>建議工作流：課程 template + 自己的 private 備份</h3>
+<pre><code>git clone --recursive https://cgvlab.igvi.cs.nthu.edu.tw/&lt;path&gt;.git hw1
+cd hw1
+git switch &lt;branch&gt;                       # 若需要
+git remote rename origin upstream         # 課程 repo 改名 upstream（只拉不推）
+# 在 GitHub / GitLab 建立「Private」空 repo 後：
+git remote add origin &lt;your-private-url&gt;
+git push -u origin HEAD
+
+# 日常
+git status
+git add src/ shaders/
+git commit -m "HW1: add camera control"
+git push
+
+# 助教更新 template 時
+git pull upstream &lt;branch&gt;
+git submodule update --init --recursive</code></pre>
+<div class="warn"><b>Repo 一定設 Private</b>。Syllabus 真實案例：作業 push 到 public repo 被別人抄 → Moss 判定抄襲，<b>抄與被抄雙方都 0 分</b>。</div>
+
+<details><summary>.gitignore 建議</summary>
+<pre><code>build/
+out/
+.vs/
+.vscode/
+*.user
+*.zip
+.DS_Store</code></pre></details>
+
+<details><summary>常見狀況</summary>
+<ul>
+<li>submodule 資料夾是空的（clone 時忘了 <code>--recursive</code>）：<code>git submodule update --init --recursive</code></li>
+<li>找不到作業分支：<code>git branch -a</code> 看遠端分支，再 <code>git switch &lt;name&gt;</code></li>
+<li>HTTPS 要求帳密：用講義提供的課程帳號；可 <code>git config --global credential.helper store</code>（Linux）記住</li>
+<li>改壞想回到上次 commit：<code>git restore &lt;file&gt;</code>（單檔）／<code>git stash</code>（暫存全部）</li>
+<li>Windows/Linux 換行混用：<code>git config --global core.autocrlf input</code>（Linux）／<code>true</code>（Windows）</li>
+</ul></details>
+
+<h2 id="submit">繳交流程</h2>
+<svg viewBox="0 0 960 80" style="width:100%" id="subFlow"></svg>
+<ul>
+<li>上傳平台、檔名格式、要附的檔案：<b>依每次作業公告</b>（eeclass）。</li>
+<li>除了檔案本身，要算 <b>MD5 checksum</b> 填入 Google 表單：
+<ul><li>若因故無法在期限前上傳成功，以 checksum 比對 → 一致就不算遲交。</li>
+<li>多次登記取<b>時間最晚</b>的那筆 → 最後上傳的檔案要和最後登記的 MD5 一致。</li>
+<li>算完 MD5 後<b>不能再動壓縮檔</b>（重壓縮 MD5 就變了）。</li></ul></li>
+</ul>
+<div class="ex"><b>MD5 是什麼？為什麼要填？</b>
+<p>MD5 是一個檔案的「指紋」：把整個檔案內容算成 32 個 16 進位字元，例如 <code>9e107d9d372bb6826bd81d3542a419d6</code>。檔案<b>改了任何一個 byte，指紋就完全不同</b>。</p>
+<p>你在期限前把指紋填進 Google 表單（表單有時間戳記）→ 就算上傳網站當機、晚了幾分鐘才傳成功，助教比對上傳檔的 MD5 與表單一致，就能證明「這個檔案在期限前就已完成」。</p>
+<pre><code>$ md5sum HW1_112000000.zip
+9e107d9d372bb6826bd81d3542a419d6  HW1_112000000.zip     <span class="c"># 複製前面那串填表單</span></code></pre></div>
+<div class="grid2">
+<div><b>Linux</b><pre><code>md5sum HW1_學號.zip</code></pre></div>
+<div><b>Windows（PowerShell / cmd）</b><pre><code>Get-FileHash HW1_學號.zip -Algorithm MD5
+certutil -hashfile HW1_學號.zip MD5</code></pre></div>
+</div>
+<p class="mut">macOS：<code>md5 file.zip</code>。打包前刪掉 <code>build/</code>（很大且不需要）。Linux 打包：<code>git archive -o HW1.zip HEAD</code>（只含已 commit 的檔案，submodule 不含）或 <code>zip -r HW1.zip . -x "build/*" ".git/*"</code>。</p>
+
+<h2 id="rules">規則與評分</h2>
+<div class="grid2">
+<div class="card"><b>配分</b>
+<ul><li>Final Project 45%（競賽 / benchmark）</li><li>Assignments 30%（3 次）</li><li>Quiz 25%（4 次上機考）</li></ul></div>
+<div class="card"><b>作業規則</b>
+<ul><li><b>不收遲交</b>，遲交 0 分、不得補交、沒有「屍體分」</li>
+<li>Moss 相似度 <b>≥ 20%</b> 視為抄襲，雙方 0 分</li>
+<li>參考網路 code 不修改直接用也算抄襲</li></ul></div>
+<div class="card"><b>Demo 問答</b>
+<ul><li>助教依<b>你的程式碼</b>產生專屬題庫抽題</li>
+<li>問答時<b>禁用 AI 工具、禁止上網</b></li>
+<li>每一行都要能解釋</li></ul></div>
+<div class="card"><b>AI 使用</b>
+<ul><li>允許且鼓勵，但 AI 產生的程式碼需<b>註明</b></li>
+<li>不可繳交自己無法解釋的程式</li></ul></div>
+<div class="card"><b>上機考（Quiz）</b>
+<ul><li>18:20 前請助教評分</li><li>考試中禁止與他人交談</li>
+<li>補考：需事先請假並附證明、當週完成、分數 ×0.8</li></ul></div>
+<div class="card"><b>溝通</b>
+<ul><li>問題發在 <b>eeclass 討論區</b>（先爬文），私信重複問題不回</li>
+<li>eeclass 信箱設聯絡人，避免公告進垃圾信</li>
+<li>上課：週一 15:30–18:20，Lecture 炯朗 125、Quiz 炯朗 326</li></ul></div>
+</div>
+
+<h2 id="check">繳交 Checklist</h2>
+<p class="mut">勾選狀態會存在瀏覽器（localStorage）。<button class="b" id="ckReset">全部清除</button></p>
+<div class="card chk" id="ck"></div>
+</main>
+<script src="common.js"></script>
+<script>
+// Git 資料流
+const BX=[['Working Dir','你改的檔案'],['Staging','準備 commit'],['Local Repo','.git 歷史'],['Remote','GitLab / 你的 private repo']];
+const G={ 'git add':[0,1,'把修改放進 staging（選擇哪些要 commit）'],
+ 'git commit -m':[1,2,'把 staging 的內容存成一個 commit（本機快照）'],
+ 'git push':[2,3,'把本機 commits 上傳到 remote（備份 / 分享）'],
+ 'git pull':[3,0,'從 remote 下載並合併到目前分支（= fetch + merge）'],
+ 'git clone --recursive':[3,0,'第一次下載整個 repo（含 submodule）'],
+ 'git restore <file>':[2,0,'丟掉工作目錄中尚未 commit 的修改，回到上次 commit']};
+const gs=document.getElementById('gitSvg'),bx=i=>40+i*240;
+let s=BX.map(([a,b],i)=>`<rect x="${bx(i)}" y="60" width="160" height="56" rx="8" fill="${i===3?'#c6f0d6':'#dbeafe'}" stroke="#999"/><text x="${bx(i)+80}" y="84">${a}</text><text x="${bx(i)+80}" y="102" fill="#666" font-size="11">${b}</text>`).join('');
+Object.entries(G).forEach(([k,[a,b]],n)=>{const fwd=b>a,y=fwd?60:116,x0=bx(a)+80,x1=bx(b)+80,h=fwd?-(18+(b-a)*10):(18+(a-b)*10+(k.includes('clone')?14:k.includes('restore')?28:0));
+ s+=`<path data-k="${k}" d="M${x0} ${y} C${x0} ${y+h*2},${x1} ${y+h*2},${x1} ${y}" marker-end="url(#ga)"/>`;});
+gs.innerHTML=`<defs><marker id="ga" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker></defs>`+s;
+const gb=document.getElementById('gitBtns');
+Object.keys(G).forEach(k=>{const b=document.createElement('button');b.className='b';b.textContent=k;b.onclick=()=>{
+ gb.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+ gs.querySelectorAll('path[data-k]').forEach(p=>p.classList.toggle('on',p.dataset.k===k));
+ document.getElementById('gitTxt').innerHTML=`<code>${k.replace('<','&lt;').replace('>','&gt;')}</code>：${BX[G[k][0]][0]} → ${BX[G[k][1]][0]}。${G[k][2]}`;};gb.appendChild(b);});
+
+// 繳交流程
+const SF=['寫 code + 常 push','Release build 測試','刪 build/ 打包 zip','算 MD5','上傳（期限前）','MD5 填 Google 表單','Demo 問答'];
+document.getElementById('subFlow').innerHTML=SF.map((t,i)=>{const x=4+i*137;return `<rect x="${x}" y="18" width="124" height="44" rx="8" fill="${i===3||i===5?'#fde7b6':'#dbeafe'}" stroke="#999"/><text x="${x+62}" y="45" font-size="12" text-anchor="middle">${t}</text>`+(i<SF.length-1?`<path d="M${x+125} 40 h10" stroke="#555" stroke-width="2"/>`:'');}).join('');
+
+// Checklist
+const CK=['用 Release 模式完整跑過一次，功能符合 spec','程式碼在乾淨 clone 下也能 build（沒依賴本機路徑）','Linux 開發者：檢查大小寫、路徑、MSVC 相依問題','AI 產生的程式碼已註明','每一行都能解釋（Demo 問答不能用 AI / 上網）','刪除 build/、.vs/ 等產物後打包，檔名符合公告','算 MD5（之後不再修改 zip）','在期限前上傳','MD5 填入 Google 表單並到「登記查看」確認','private repo 已 push 最新版本'];
+const ckEl=document.getElementById('ck'),st=JSON.parse(localStorage.getItem('gpa-ck')||'{}');
+function ckRender(){ckEl.innerHTML=CK.map((t,i)=>`<label class="${st[i]?'done':''}"><input type="checkbox" data-i="${i}" ${st[i]?'checked':''}>${t}</label>`).join('');
+ ckEl.querySelectorAll('input').forEach(c=>c.onchange=()=>{st[c.dataset.i]=c.checked;localStorage.setItem('gpa-ck',JSON.stringify(st));ckRender();});}
+document.getElementById('ckReset').onclick=()=>{for(const k in st)delete st[k];localStorage.removeItem('gpa-ck');ckRender();};
+ckRender();
+</script></body></html>
