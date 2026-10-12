@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作業 1：Animated Robot</title><link rel="stylesheet" href="style.css">
+<style>
+.due{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.due .big{font-size:28px;font-weight:700;color:var(--warn)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:14px}
+.kv b{color:var(--mut);font-weight:600}
+#hierSvg text{font-size:13px;text-anchor:middle;pointer-events:none}
+#hierSvg rect,#hierSvg ellipse{cursor:pointer;stroke:#456;stroke-width:1.2}
+#hierSvg path{stroke:#678;stroke-width:1.5;fill:none}
+#robotCv{border:1px solid var(--line);border-radius:8px;background:#e8eef7;cursor:pointer}
+#chain{font:14px/1.7 ui-monospace,monospace}
+#chain .hl{color:var(--warn);font-weight:700}
+#mat td{font:13px ui-monospace,monospace;text-align:right;padding:2px 8px}
+.score label{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px dashed #eee}
+.score label span:last-child{color:var(--mut);white-space:nowrap}
+.sum{font-size:20px;font-weight:700}
+.bar{height:10px;background:#eee;border-radius:5px;overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--prog);transition:width .3s}
+.step>summary{display:flex;gap:8px;align-items:center}
+.step>summary input{margin:0}
+.step.done>summary span{color:#999;text-decoration:line-through}
+.ok{color:var(--prog);font-weight:600}.bad{color:var(--warn);font-weight:600}
+.tree{font:13px/1.8 ui-monospace,monospace;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.tree s{color:var(--warn)}
+input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid var(--line);border-radius:6px}
+</style></head>
+<body><main>
+<h1>作業 1：Animated Robot</h1>
+<p class="mut">依 <code>2026(FALL)_GPA - Assignment 1.pdf</code>、<code>assignments_1_robot.zip</code>（template）、<code>Assignment - 01 Appendix.zip</code>（OBJ）整理。程式片段已在 template 上實測編譯執行（Linux、OpenGL 4.1 core）。</p>
+<div class="toc"><a href="#intro">1. 作業介紹</a><a href="#grade">2. 評分與規則</a><a href="#pre">3. 先備知識</a><a href="#files">4. 提供的檔案</a><a href="#hier">5. 階層模型互動</a><a href="#notes">6. 實作須知</a><a href="#steps">7. 實作步驟</a><a href="#submit">8. 繳交</a></div>
+
+<!-- ================================================================ -->
+<h2 id="intro">1. 作業介紹</h2>
+<div class="card due">
+<div><div class="mut">距離截止</div><div class="big" id="cd">—</div></div>
+<div class="kv">
+<b>題目</b><span>用 OpenGL（shader pipeline）設計並繪製一個<b>會動的機器人</b></span>
+<b>公告</b><span>2026/10/05</span>
+<b>截止</b><span><b>2026/10/19（日）23:59</b> <span class="mut">（投影片寫 2025/10/19，應為筆誤；以公告為準）</span></span>
+<b>佔比</b><span>學期成績 10%</span>
+<b>繳交</b><span>FTP 上傳一個 zip：整個專案（不含 <code>builder/</code>、<code>build/</code>）+ PDF 報告</span>
+<b>不收遲交</b><span>但有 MD5 機制：期限前登記的 checksum 與上傳檔一致即不算遲交</span>
+</div></div>
+
+<h3>要做出什麼</h3>
+<ul>
+<li>機器人至少有 <b>head、torso、兩隻手臂、兩條腿</b>，以<b>階層式 transformation</b> 連接（torso 是 root）。</li>
+<li>手臂、腿各分兩節（L1/L2、R1/R2），子節點跟著父節點動。</li>
+<li>至少一種<b>動畫</b>，且要<b>牽動所有身體部位</b>（例：走路時手腳擺動、頭跟著晃）。</li>
+<li><b>ImGui 選單</b>：開始 / 暫停動畫，或切換動畫種類。</li>
+<li><b>鍵盤 / 滑鼠事件</b>：移動、旋轉機器人。</li>
+<li>至少一個部位<b>貼圖</b>（texture）。</li>
+</ul>
+<div class="note">講義的階層圖：Torso（Root）→ Head、L1/R1 Arm、L1/R1 Leg；L1 Arm → L2 Arm，依此類推。<br>
+畫 L2 Arm 用的矩陣 = <code>P * V * M<sub>torso</sub> * M<sub>arm1</sub> * M<sub>arm2</sub></code>。見 <a href="#hier">5. 階層模型互動</a>。</div>
+
+<!-- ================================================================ -->
+<h2 id="grade">2. 評分與規則</h2>
+<div class="grid2">
+<div class="card score" id="score"><b>Program &amp; Report（70%）自評</b><p class="mut" style="margin:2px 0 6px">勾選已完成的項目（存在瀏覽器）。</p></div>
+<div>
+<div class="card"><b>總分估算</b>
+<div class="ctrl">Q&amp;A Demo 預估 <input type="range" id="qa" min="0" max="100" value="80"> <span id="qaV"></span></div>
+<div class="sum" id="total">—</div>
+<div class="bar"><i id="totalBar"></i></div>
+<p class="mut" id="totalNote">總分 = Program&amp;Report × 0.7 + Q&amp;A × 0.3</p>
+<div class="ctrl"><label><input type="checkbox" id="dedConsole"> 用了 console 輸入（scanf / cin）−10</label></div>
+<div class="ctrl"><label><input type="checkbox" id="dedName"> 檔名 / 副檔名錯誤 −10</label></div>
+</div>
+<div class="warn"><b>直接 0 分</b>
+<ul style="margin:4px 0"><li>沒用 OpenGL shader pipeline（用了 <code>glBegin</code> / <code>glVertex*</code> / <code>glTranslatef</code> 等 fixed function）</li>
+<li>沒用 OpenGL</li><li>繳交的程式無法執行（可用自己筆電重新 Demo）</li>
+<li>抄襲：Moss 相似度 ≥ 20%，抄與被抄雙方都 0 分；網路 / 學長姐 code 不修改直接交也算</li></ul></div>
+</div></div>
+
+<div class="grid2">
+<div class="card"><b>Q&amp;A Demo（30%）</b>
+<ul><li>助教依<b>你的程式碼</b>產生專屬題庫，Demo 時抽題</li>
+<li>問答中<b>禁用任何 AI 工具、禁止上網</b></li>
+<li>每一行都要能解釋 → 練習題見 <a href="#pre">3. 先備知識</a></li></ul></div>
+<div class="card"><b>硬性規定</b>
+<ul><li>所有 C++ 程式碼放在<b>單一 <code>main.cpp</code></b>（shader 可放 <code>shaders/</code>）</li>
+<li>必須從提供的 template 開始，不能用自己的 framework</li>
+<li>AI 可用，但 AI 產生的程式碼要<b>註明</b>；不可交自己解釋不了的程式</li></ul></div>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="pre">3. 先備知識</h2>
+<p class="mut">每項對應到這份指南的章節。表格下方是 Demo 可能被問的問題，先自己答再展開。</p>
+<table>
+<tr><th style="width:24%">主題</th><th style="width:30%">作業裡用在哪</th><th>去哪複習</th></tr>
+<tr><td>Shader pipeline</td><td>VS 算 <code>gl_Position</code>、FS 算顏色 / 貼圖</td><td><a href="01-pipeline.html#pipeline">Pipeline 互動圖</a>、<a href="02-project-syntax.html#shader">Shader Program 建立流程</a>、<a href="02-project-syntax.html#glsl">GLSL 速查</a></td></tr>
+<tr><td>VAO / VBO / attribute</td><td>把 OBJ 的 position / normal / uv 送進 VS</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a>、<a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a></td></tr>
+<tr><td>Draw call</td><td><code>glDrawArrays(GL_TRIANGLES, …)</code> 畫每個部位</td><td><a href="05-vertex-draw.html#modes">Primitive 模式</a>、<a href="05-vertex-draw.html#elements">DrawArrays vs DrawElements</a></td></tr>
+<tr><td>Transformation、MVP</td><td>P、V、每個部位的 M</td><td><a href="01-pipeline.html#space">座標空間與 MVP</a>、<a href="01-pipeline.html#math">必要數學</a></td></tr>
+<tr><td>GLM</td><td><code>translate / rotate / scale / perspective / lookAt</code></td><td><a href="02-project-syntax.html#glm">GLM 速查</a></td></tr>
+<tr><td><b>階層式模型</b></td><td>子部位矩陣 = 父矩陣 × 自己的 local 矩陣</td><td><a href="#hier">本頁 5.</a></td></tr>
+<tr><td>Uniform</td><td>每畫一個部位前更新 <code>uM</code>、顏色、是否用貼圖</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a></td></tr>
+<tr><td>Depth test</td><td>前後遮擋正確</td><td><a href="01-pipeline.html#persample">Per-Sample Processing</a></td></tr>
+<tr><td>Texture + stb_image</td><td>貼圖部位</td><td><a href="02-project-syntax.html#tex">Texture 要點</a>、<a href="02-project-syntax.html#stb">stb_image</a></td></tr>
+<tr><td>OBJ 載入（tinyobjloader）</td><td>讀 <code>assets/*.obj</code></td><td><a href="#s3">本頁步驟 3</a></td></tr>
+<tr><td>GLFW callbacks</td><td>鍵盤 / 滑鼠控制</td><td><a href="02-project-syntax.html#cb">Callbacks</a></td></tr>
+<tr><td>Dear ImGui</td><td>播放 / 暫停 / 切換動畫</td><td><a href="#s7">本頁步驟 7</a></td></tr>
+</table>
+
+<h3>Demo 練習題</h3>
+<details><summary>為什麼 L2 Arm 的矩陣要乘上 M<sub>torso</sub> 和 M<sub>arm1</sub>？</summary>
+<p>L2 Arm 的 local 矩陣只描述「相對於 L1 Arm 的手肘」的位置與旋轉。往左乘 M<sub>arm1</sub> 轉到 torso 空間，再乘 M<sub>torso</sub> 轉到 world。所以 torso 移動 / 旋轉時整條手臂跟著動。</p></details>
+<details><summary>畫部位時的 scale 為什麼不能傳給子節點？</summary>
+<p>scale 只是把單位大小的 Cube / Capsule 拉成部位的形狀。若傳下去，子節點的平移量和形狀都會被父的 scale 拉伸（例如手臂被拉長兩倍，手肘的位置也被拉遠兩倍、前臂也變形）。做法：<code>M<sub>joint</sub></code> 往下傳，畫自己時另外乘 <code>scale</code>。在 <a href="#hier">5.</a> 勾「錯誤：scale 傳給子節點」可以看到效果。</p></details>
+<details><summary><code>T * R</code> 和 <code>R * T</code> 差在哪？手臂要繞肩膀轉該用哪個？</summary>
+<p>套在頂點上是<b>由右往左</b>：<code>T * R * v</code> = 先在原點旋轉，再平移到關節 → 繞關節轉。<code>R * T * v</code> = 先平移出去再繞「父的原點」轉 → 手臂繞 torso 中心公轉。繞肩膀轉：<code>M = T(肩膀位置) * R(角度)</code>，畫的時候再 <code>* T(0,-半長,0) * S(...)</code> 讓 mesh 往下長。</p></details>
+<details><summary><code>glm::rotate</code> 的角度單位？</summary>
+<p>弧度（radian）。用角度要 <code>glm::radians(30.0f)</code>。</p></details>
+<details><summary>VAO 存了什麼？為什麼每個 mesh 一個 VAO？</summary>
+<p>VAO 記錄 attribute 設定（哪個 location 從哪個 VBO、什麼格式、stride、offset 讀）以及 element buffer 綁定。每個 mesh 一個 VAO，畫的時候 <code>glBindVertexArray</code> 一行就切換全部設定。</p></details>
+<details><summary>uniform 和 vertex attribute 差在哪？</summary>
+<p>attribute 每個頂點不同（position、normal、uv），從 VBO 讀；uniform 在一次 draw call 內所有頂點相同（M、V、P、顏色、sampler），用 <code>glUniform*</code> 設定，要先 <code>glUseProgram</code>。</p></details>
+<details><summary>沒開 depth test 會怎樣？為什麼每幀要 clear depth？</summary>
+<p>沒開：後畫的永遠蓋掉先畫的，背後的腿可能畫在身體前面。不 clear depth：上一幀的深度殘留，新畫面大部分 fragment 被判定「比較遠」而丟掉 → 畫面殘缺或全空。</p></details>
+<details><summary><code>stbi_set_flip_vertically_on_load(true)</code> 為什麼需要？</summary>
+<p>圖檔第一列是影像<b>最上面</b>，OpenGL texture 的 v=0 是<b>最下面</b>。不翻轉的話貼圖上下顛倒。</p></details>
+<details><summary>VS 輸出的 <code>gl_Position</code> 在哪個空間？之後誰做 perspective divide？</summary>
+<p>Clip space。之後 fixed function 的 primitive assembly / clipping 做除以 w 得到 NDC，再經 viewport transform 到 screen。</p></details>
+<details><summary>法向量為什麼要乘 <code>transpose(inverse(M))</code>？</summary>
+<p>M 有非等比 scale 時，直接乘 M 的法向量不再垂直表面。用 normal matrix（M 左上 3×3 的反轉置）才正確。只有旋轉 + 等比縮放時可以直接用 M。</p></details>
+<details><summary>動畫為什麼用 <code>glfwGetTime()</code> 的時間差，而不是每幀 +1？</summary>
+<p>每幀 +1 的速度跟 FPS 綁在一起，換台電腦（或關掉 vsync）動畫速度就不同。用經過時間 × 速度，任何 FPS 下速度都一樣；暫停 = 不累加時間。</p></details>
+
+<!-- ================================================================ -->
+<h2 id="files">4. 提供的檔案</h2>
+<div class="grid2">
+<div><b>本機已解壓位置</b>
+<div class="tree">Assignment1/<br>
+├─ 2026(FALL)_GPA - Assignment 1.pdf<br>
+├─ zips/ <span class="mut">← 兩個原始 zip</span><br>
+└─ template/ <span class="mut">← assignments_1_robot.zip 內容</span><br>
+&nbsp;&nbsp;&nbsp;├─ assets/ <span class="mut">← 已放入 5 個 OBJ</span><br>
+&nbsp;&nbsp;&nbsp;├─ shaders/ <span class="mut">（空）</span><br>
+&nbsp;&nbsp;&nbsp;├─ src/main.cpp <span class="mut">← ImGui 範例</span><br>
+&nbsp;&nbsp;&nbsp;└─ builder/<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ CMakeLists.txt<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ external/ <span class="mut">← glfw、glad、glm、imgui、stb、tinyobj、assimp</span>
+</div>
+<p class="mut">開始寫之前，把 <code>template/</code> 複製成 <code>學號_AS1/</code>。</p></div>
+<div><b>Template 的重點</b>
+<ul>
+<li><code>CMakeLists.txt</code> 用 <code>GLOB_RECURSE ../src/*.cpp</code> 收集原始碼，執行檔名稱 <b><code>CG2025</code></b>（README 寫 <code>CG2025Template</code>，實際不是）。</li>
+<li>已連結 glfw、glad、imgui、assimp、OpenGL；header-only：glm、stb、tiny_obj_loader。</li>
+<li>VS / Xcode 的工作目錄設為<b>專案根目錄</b> → 程式裡用 <code>"assets/Cube.obj"</code>、<code>"shaders/xxx.glsl"</code> 這種相對路徑。</li>
+<li>external 已整包附上，<b>不用</b> <code>git submodule update</code>。</li>
+<li>範例 <code>main.cpp</code> <b>沒有 include glad、沒開 depth test</b>，只會清背景 + 畫 ImGui demo → 步驟 1 要補。</li>
+</ul></div>
+</div>
+
+<h3>OBJ 檔（Assignment - 01 Appendix）</h3>
+<p class="mut">全部都有 position / uv（vt）/ normal（vn）、都是三角形面。都以原點為中心 → 用 scale 調整大小、用 translate 移動。</p>
+<table>
+<tr><th>檔案</th><th>Bounding box</th><th>頂點（v / vt / vn）</th><th>三角形</th><th>適合拿來做</th></tr>
+<tr><td><code>Cube.obj</code></td><td>x,y,z ∈ [−0.5, 0.5]（邊長 1）</td><td>24 / 24 / 24</td><td>12</td><td>torso、方形手腳、底座</td></tr>
+<tr><td><code>Sphere.obj</code></td><td>x,y,z ∈ [−0.5, 0.5]（直徑 1）</td><td>515 / 515 / 515</td><td>768</td><td>頭、關節球、眼睛</td></tr>
+<tr><td><code>Cylinder.obj</code></td><td>x,z ∈ [−0.5, 0.5]、<b>y ∈ [−1, 1]（高 2）</b></td><td>88 / 88 / 88</td><td>80</td><td>手臂、腿、脖子</td></tr>
+<tr><td><code>Capsule.obj</code></td><td>x,z ∈ [−0.5, 0.5]、<b>y ∈ [−1, 1]（高 2）</b></td><td>550 / 550 / 550</td><td>832</td><td>圓潤的手臂、腿</td></tr>
+<tr><td><code>Plane.obj</code></td><td>x,z ∈ [−5, 5]、y = 0</td><td>121 / 121 / 121</td><td>200</td><td>地板</td></tr>
+</table>
+<div class="note">Cylinder / Capsule 高度是 2（不是 1）。想要長度 L 的手臂：<code>scale(…, glm::vec3(粗, L/2, 粗))</code>，再往下平移 <code>L/2</code> 讓頂端對齊關節。</div>
+
+<!-- ================================================================ -->
+<h2 id="hier">5. 階層模型互動</h2>
+<p class="mut">點左邊的節點或右邊的部位選取，拖曳滑桿轉動該關節。2D 示意，概念與 3D 相同（3D 只是 rotate 多一個軸）。</p>
+<div class="grid2">
+<svg id="hierSvg" viewBox="0 0 400 330" style="width:100%"></svg>
+<canvas id="robotCv" width="440" height="400"></canvas>
+</div>
+<div class="ctrl">
+<b id="selName">Torso</b> 角度 <input type="range" id="ang" min="-180" max="180" value="0"> <span id="angV">0°</span>
+｜ Torso X <input type="range" id="tx" min="-150" max="150" value="0">
+<button class="b" id="animBtn">▶ 走路動畫</button><button class="b" id="resetBtn">歸零</button>
+</div>
+<div class="ctrl">示範錯誤：
+<label><input type="radio" name="bug" value="none" checked> 正確</label>
+<label><input type="radio" name="bug" value="scale"> scale 傳給子節點</label>
+<label><input type="radio" name="bug" value="order"> R·T 順序錯（繞父原點轉）</label>
+<label><input type="radio" name="bug" value="flat"> 沒乘父矩陣</label>
+</div>
+<div class="grid2">
+<div class="card"><div id="chain"></div><p class="mut" id="bugTxt"></p></div>
+<div class="card"><b>選取部位的 world matrix（2D 齊次 3×3）</b><table id="mat"></table>
+<p class="mut">最後一欄是關節在 world 的位置。轉父節點時，子節點的這一欄跟著變。</p></div>
+</div>
+
+<h3>對應到 3D 程式</h3>
+<pre><code><span class="c">// 往下傳的是「關節矩陣」，畫自己時另外乘 offset + scale</span>
+glm::mat4 torso = glm::translate(glm::mat4(1.0f), robotPos);
+torso = glm::rotate(torso, robotYaw, glm::vec3(0, 1, 0));
+drawPart(cube, glm::scale(torso, glm::vec3(1.0f, 1.4f, 0.6f)), color);      <span class="c">// scale 只給自己</span>
+
+glm::mat4 arm1 = glm::translate(torso, glm::vec3(-0.65f, 0.6f, 0));       <span class="c">// 移到肩膀</span>
+arm1 = glm::rotate(arm1, angleArm1, glm::vec3(1, 0, 0));                   <span class="c">// 繞肩膀轉</span>
+drawPart(capsule, glm::scale(glm::translate(arm1, glm::vec3(0, -0.4f, 0)),  <span class="c">// 往下長半截</span>
+                             glm::vec3(0.25f, 0.4f, 0.25f)), color);       <span class="c">// Capsule 高 2 → 0.4 倍 = 0.8</span>
+
+glm::mat4 arm2 = glm::translate(arm1, glm::vec3(0, -0.8f, 0));            <span class="c">// 手肘：用 arm1，不是畫 arm1 的那個矩陣</span>
+arm2 = glm::rotate(arm2, angleArm2, glm::vec3(1, 0, 0));
+drawPart(capsule, glm::scale(glm::translate(arm2, glm::vec3(0, -0.4f, 0)),
+                             glm::vec3(0.22f, 0.4f, 0.22f)), color);</code></pre>
+<p class="mut"><code>glm::translate(m, v)</code> = <code>m * T(v)</code>（右乘），所以一路寫下來就是 <code>M<sub>torso</sub> * M<sub>arm1</sub> * M<sub>arm2</sub></code>。也可以用 <code>std::stack&lt;glm::mat4&gt;</code> 做 push / pop，概念一樣。</p>
+
+<!-- ================================================================ -->
+<h2 id="notes">6. 實作須知</h2>
+<table>
+<tr><th style="width:28%">項目</th><th>重點</th></tr>
+<tr><td>禁用 fixed function</td><td><code>glBegin/glEnd</code>、<code>glVertex*</code>、<code>glTexCoord*</code>、<code>glTranslatef/glRotatef</code>、<code>glPushMatrix</code>、<code>glMatrixMode</code>、<code>gluPerspective</code> 都不能用。矩陣用 GLM 算、傳 uniform。<b>用了 = 0 分。</b></td></tr>
+<tr><td>單一 main.cpp</td><td>所有 C++ 都寫在 <code>src/main.cpp</code>；shader 可另存 <code>shaders/*.glsl</code>（或寫成字串）。</td></tr>
+<tr><td>不能 console 輸入</td><td><code>scanf</code>、<code>std::cin</code>、<code>getchar</code> 都算，−10。所有操作走 ImGui / GLFW 事件。</td></tr>
+<tr><td>GLAD include 順序</td><td><code>#include &lt;glad/glad.h&gt;</code> 放在檔案<b>最上面</b>、在 GLFW 之前；<code>glfwMakeContextCurrent</code> 之後才 <code>gladLoadGLLoader</code>，之後才能呼叫 <code>gl*</code>。</td></tr>
+<tr><td>Callback 與 ImGui</td><td>自己的 <code>glfwSet*Callback</code> 要在 <code>ImGui_ImplGlfw_InitForOpenGL(window, true)</code> <b>之前</b>設定（ImGui 會串接你的 callback）；之後設定會蓋掉 ImGui 的，選單就點不動。callback 裡先檢查 <code>io.WantCaptureMouse / WantCaptureKeyboard</code>，避免在選單上拖曳也轉到機器人。</td></tr>
+<tr><td>工作目錄</td><td>相對路徑以專案根目錄為準。VS / Xcode 已設定好；Linux 要在專案根目錄執行 <code>./build/CG2025</code>。讀檔失敗要印錯誤訊息，不然只會黑畫面。</td></tr>
+<tr><td>Depth</td><td><code>glEnable(GL_DEPTH_TEST)</code> + 每幀 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>（template 只清 color）。</td></tr>
+<tr><td>Viewport</td><td>template 在 <code>on_display()</code> <b>之後</b>才 <code>glViewport</code>；建議把 <code>glfwGetFramebufferSize</code> + <code>glViewport</code> 移到畫機器人之前，並用同一組寬高算 projection 的 aspect。</td></tr>
+<tr><td>GLSL 版本</td><td>template 用 OpenGL 4.1 core → shader 開頭 <code>#version 410 core</code>（macOS 最高 4.1）。</td></tr>
+<tr><td>旋轉單位</td><td>GLM 全部用弧度：<code>glm::radians(deg)</code>。</td></tr>
+<tr><td>貼圖</td><td>OBJ 都有 uv；記得 <code>stbi_set_flip_vertically_on_load(true)</code>、<code>stbi_load(..., 4)</code> 配 <code>GL_RGBA</code>、<code>glActiveTexture</code> + <code>glUniform1i(sampler, unit)</code>。圖檔放 <code>assets/</code>。</td></tr>
+<tr><td>動畫</td><td>用時間差累加 <code>animTime</code>；暫停 = 不累加。角度用 <code>sin(animTime * 頻率)</code> 做週期擺動，左右手腳相位相反。</td></tr>
+<tr><td>Uniform location</td><td><code>glGetUniformLocation</code> 回傳 −1 代表名字打錯或該 uniform 被 compiler 優化掉（shader 裡沒用到）。</td></tr>
+<tr><td>Shader 錯誤</td><td>一定要檢查 <code>GL_COMPILE_STATUS</code> / <code>GL_LINK_STATUS</code> 並印 info log，見 <a href="02-project-syntax.html#shader">Shader Program</a>。</td></tr>
+<tr><td>AI 註明</td><td>AI 產生的片段在程式碼加註解標明；交之前每一行都要能解釋（Demo 30%）。</td></tr>
+</table>
+
+<details><summary>Linux 建置實測紀錄（2026-10-12，Pop!_OS 24.04、NVIDIA）</summary>
+<ul>
+<li>直接 configure 失敗：<code>Package 'xkbcommon' ... not found</code>（GLFW 3.4 預設同時編 X11 + Wayland）。關掉 Wayland 後改缺 <code>RandR headers</code>（X11）。</li>
+<li>需要的開發套件：
+<pre><code>sudo apt install build-essential cmake git \
+  libgl-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+  xorg-dev        <span class="c"># X11：xrandr / xinerama / xcursor / xi</span></code></pre>
+只想編 Wayland 版可加 <code>-DGLFW_BUILD_X11=OFF</code>（就不用 xorg-dev）。</li>
+<li>建置（在專案根目錄）：
+<pre><code>cmake -S builder -B build -DCMAKE_BUILD_TYPE=Release -DASSIMP_BUILD_TESTS=OFF
+cmake --build build -j
+./build/CG2025          <span class="c"># 一定要在專案根目錄執行</span></code></pre>
+<code>-DASSIMP_BUILD_TESTS=OFF</code> 跳過 assimp 的 unit test（否則會多編一大包 googletest）。</li>
+<li><code>builder/build.sh</code> 是 CRLF 換行，在 Linux 直接 <code>bash build.sh</code> 可能把 <code>\r</code> 當成路徑的一部分 → 直接打上面的指令。</li>
+<li><code>builder/.git</code> 是指向不存在路徑的 gitfile（原本是 submodule）；若在專案根目錄 <code>git init</code>，<code>git add .</code> 會跳過 <code>builder/</code>。builder 本來就不用交，不影響。</li>
+</ul></details>
+
+<!-- ================================================================ -->
+<h2 id="steps">7. 實作步驟</h2>
+<p class="mut">每步完成就打勾（存在瀏覽器）。每步都有「驗收」：看到描述的畫面再往下。<button class="b" id="stReset">全部清除</button></p>
+<div class="bar"><i id="stBar"></i></div>
+<div id="steps">
+
+<details class="step" id="s0"><summary><input type="checkbox"><span>0. 建立專案、建置出 template 範例</span></summary>
+<ol>
+<li>複製 <code>Assignment1/template/</code> → <code>學號_AS1/</code>（例：<code>112062000_AS1/</code>）。</li>
+<li>建置：Windows 用 CMake GUI（source = <code>學號_AS1/builder</code>、build = <code>學號_AS1/build</code>）→ Configure（VS 2022）→ Generate → Open Project → Release → ▶。細節見 <a href="03-env-git.html#setup">環境建置步驟</a>、<a href="https://youtu.be/2BzYKibIsX4?t=68">助教影片</a>（助教會照影片步驟 build 你的作業）。</li>
+<li>建議 <code>git init</code> + 推到<b>私人</b> repo 備份（見 <a href="03-env-git.html#gitlab">Git</a>）。</li>
+</ol>
+<p><b>驗收</b>：跳出視窗，有 ImGui 的 Demo 視窗和 "Hello, world!" 視窗。</p></details>
+
+<details class="step" id="s1"><summary><input type="checkbox"><span>1. 補上 GLAD、depth test，拿掉 demo 視窗</span></summary>
+<pre><code><span class="c">// main.cpp 最上面（在任何 GLFW / imgui include 之前）</span>
+#include &lt;glad/glad.h&gt;
+#include &lt;GLFW/glfw3.h&gt;
+#include &lt;glm/glm.hpp&gt;
+#include &lt;glm/gtc/matrix_transform.hpp&gt;
+#include &lt;glm/gtc/type_ptr.hpp&gt;
+
+<span class="c">// main()：glfwMakeContextCurrent(window); 之後</span>
+if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+	return 1;
+
+<span class="c">// on_display()</span>
+glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+glEnable(GL_DEPTH_TEST);</code></pre>
+<p>把 <code>on_gui()</code> 裡的 <code>ShowDemoWindow</code> 和範例視窗刪掉，換成自己的空視窗。</p>
+<p><b>驗收</b>：編譯通過、視窗只剩背景色和自己的 ImGui 視窗。</p></details>
+
+<details class="step" id="s2"><summary><input type="checkbox"><span>2. Shader：寫 VS / FS、編譯連結</span></summary>
+<div class="grid2">
+<div><b>shaders/robot.vs.glsl</b><pre><code>#version 410 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+uniform mat4 uP, uV, uM;
+out vec3 vNormal;
+out vec2 vUV;
+void main() {
+    vNormal = mat3(transpose(inverse(uM))) * aNormal;
+    vUV = aUV;
+    gl_Position = uP * uV * uM * vec4(aPos, 1.0);
+}</code></pre></div>
+<div><b>shaders/robot.fs.glsl</b><pre><code>#version 410 core
+in vec3 vNormal;
+in vec2 vUV;
+uniform vec3 uColor;
+uniform bool uUseTex;
+uniform sampler2D uTex;
+out vec4 fragColor;
+void main() {
+    vec3 base = uUseTex ? texture(uTex, vUV).rgb : uColor;
+    float d = max(dot(normalize(vNormal),
+                      normalize(vec3(0.4, 1.0, 0.6))), 0.0);
+    fragColor = vec4(base * (0.25 + 0.75 * d), 1.0);
+}</code></pre></div></div>
+<p>讀檔 → <code>glCreateShader</code> → <code>glShaderSource</code> → <code>glCompileShader</code>（檢查 log）→ <code>glCreateProgram</code> → attach → <code>glLinkProgram</code>（檢查 log）。完整流程見 <a href="02-project-syntax.html#shader">Shader Program 建立流程</a>。光照是加分用的簡單 diffuse，可以只輸出 <code>uColor</code>。</p>
+<pre><code>std::string readFile(const char* path) {
+	std::ifstream f(path);
+	if (!f) fprintf(stderr, "cannot open %s (working dir?)\n", path);
+	std::stringstream ss; ss &lt;&lt; f.rdbuf();
+	return ss.str();
+}</code></pre>
+<p><b>驗收</b>：沒有 compile / link error 印出。</p></details>
+
+<details class="step" id="s3"><summary><input type="checkbox"><span>3. 載入 OBJ → VAO / VBO</span></summary>
+<p>template 附 <code>tiny_obj_loader.h</code>（header-only）。<code>TINYOBJLOADER_IMPLEMENTATION</code> 只能在<b>一個</b> .cpp define 一次（本作業就是 main.cpp）。</p>
+<pre><code>#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
+
+struct Mesh { GLuint vao = 0, vbo = 0; GLsizei count = 0; };
+
+Mesh loadObj(const char* path)
+{
+	tinyobj::attrib_t attrib;
+	std::vector&lt;tinyobj::shape_t&gt; shapes;
+	std::vector&lt;tinyobj::material_t&gt; materials;
+	std::string warn, err;
+	if (!tinyobj::LoadObj(&amp;attrib, &amp;shapes, &amp;materials, &amp;warn, &amp;err, path)) {
+		fprintf(stderr, "LoadObj failed: %s %s\n", path, err.c_str());
+		return {};
+	}
+	std::vector&lt;float&gt; data;                       <span class="c">// interleaved: pos(3) normal(3) uv(2)</span>
+	for (const auto&amp; s : shapes)
+		for (const auto&amp; idx : s.mesh.indices) {      <span class="c">// 每個 index = 三角形的一個角</span>
+			for (int k = 0; k &lt; 3; ++k) data.push_back(attrib.vertices[3 * idx.vertex_index + k]);
+			for (int k = 0; k &lt; 3; ++k) data.push_back(attrib.normals[3 * idx.normal_index + k]);
+			for (int k = 0; k &lt; 2; ++k) data.push_back(attrib.texcoords[2 * idx.texcoord_index + k]);
+		}
+	Mesh m;
+	m.count = (GLsizei)(data.size() / 8);
+	glGenVertexArrays(1, &amp;m.vao);
+	glBindVertexArray(m.vao);
+	glGenBuffers(1, &amp;m.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
+	glBufferData(GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
+	GLsizei stride = 8 * sizeof(float);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	glEnableVertexAttribArray(2);
+	glBindVertexArray(0);
+	return m;
+}</code></pre>
+<ul>
+<li>OBJ 的 v / vt / vn 各自有獨立 index，所以這裡把每個角展開成一筆完整頂點、用 <code>glDrawArrays</code>。這 5 個檔都有 vn、vt；換成別的 OBJ 要先檢查 <code>normal_index / texcoord_index</code> 是否 ≥ 0。</li>
+<li>stride / offset 怎麼算見 <a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a>。</li>
+<li>實測頂點數：Cube 36、Sphere 2304、Capsule 2496、Plane 600。</li>
+</ul>
+<pre><code>Mesh cube, sphere, capsule, plane;
+<span class="c">// main()，GLAD 初始化之後</span>
+cube    = loadObj("assets/Cube.obj");
+sphere  = loadObj("assets/Sphere.obj");
+capsule = loadObj("assets/Capsule.obj");
+plane   = loadObj("assets/Plane.obj");</code></pre>
+<p><b>驗收</b>：印出 <code>cube.count</code> = 36。</p></details>
+
+<details class="step" id="s4"><summary><input type="checkbox"><span>4. 相機（P、V）+ 畫第一個部位</span></summary>
+<pre><code>void drawPart(const Mesh&amp; m, const glm::mat4&amp; M, glm::vec3 color, bool useTex = false)
+{
+	glUniformMatrix4fv(glGetUniformLocation(program, "uM"), 1, GL_FALSE, glm::value_ptr(M));
+	glUniform3fv(glGetUniformLocation(program, "uColor"), 1, glm::value_ptr(color));
+	glUniform1i(glGetUniformLocation(program, "uUseTex"), useTex);
+	glBindVertexArray(m.vao);
+	glDrawArrays(GL_TRIANGLES, 0, m.count);
+}
+
+<span class="c">// on_display(w, h)</span>
+glUseProgram(program);
+glm::mat4 P = glm::perspective(glm::radians(45.0f), (float)w / (float)h, 0.1f, 100.0f);
+glm::mat4 V = glm::lookAt(glm::vec3(0, 1.5f, 7), glm::vec3(0, 0.5f, 0), glm::vec3(0, 1, 0));
+glUniformMatrix4fv(glGetUniformLocation(program, "uP"), 1, GL_FALSE, glm::value_ptr(P));
+glUniformMatrix4fv(glGetUniformLocation(program, "uV"), 1, GL_FALSE, glm::value_ptr(V));
+drawPart(cube, glm::mat4(1.0f), glm::vec3(0.2f, 0.3f, 0.8f));</code></pre>
+<p><b>驗收</b>：畫面中央一個藍色方塊。黑畫面 / 看不到 → 對照 <a href="02-project-syntax.html#pit">黑畫面檢查表</a>。</p></details>
+
+<details class="step" id="s5"><summary><input type="checkbox"><span>5. 組出整隻機器人（階層）</span></summary>
+<ol>
+<li>先在紙上畫出部位與關節位置（報告也要用這張圖）。</li>
+<li>Torso 當 root；Head、L1/R1 Arm、L1/R1 Leg 的父是 Torso；L2 的父是 L1。</li>
+<li>每個部位：<code>M<sub>joint</sub> = M<sub>parent</sub> * T(關節位置) * R(角度)</code>；畫的時候 <code>M<sub>joint</sub> * T(offset) * S(大小)</code>。</li>
+<li>寫一個 <code>drawLimb(parent, joint, angle1, angle2)</code> 一次畫兩節，四肢共用。</li>
+</ol>
+<p>程式見 <a href="#hier">5. 對應到 3D 程式</a>。用 <a href="#hier">互動圖</a> 的三種錯誤模式對照自己的 bug。</p>
+<p><b>驗收</b>：手動改某個關節角度（先寫死），只有該部位和它的子部位動。</p></details>
+
+<details class="step" id="s6"><summary><input type="checkbox"><span>6. 動畫（牽動所有部位）</span></summary>
+<pre><code>bool playing = true;
+int animMode = 0;            <span class="c">// 0 = walk, 1 = wave ...</span>
+float speed = 1.0f, animTime = 0.0f;
+
+<span class="c">// main loop，每幀</span>
+double now = glfwGetTime();
+if (playing) animTime += (float)(now - last) * speed;
+last = now;
+
+<span class="c">// on_display：用 animTime 算各關節角度</span>
+float s = std::sin(animTime * 4.0f);
+float swing = 0.6f * s;                        <span class="c">// 左手 / 右腳同相，右手 / 左腳反相</span>
+<span class="c">// torso 上下彈、head 左右轉、四肢擺動 → 所有部位都要動</span></code></pre>
+<p><b>驗收</b>：機器人持續走動，head、torso、四肢 8 節都有動作。</p></details>
+
+<details class="step" id="s7"><summary><input type="checkbox"><span>7. ImGui 選單：播放 / 暫停 / 切換動畫</span></summary>
+<pre><code>void on_gui()
+{
+	ImGui::Begin("Robot");
+	ImGui::Checkbox("Play", &amp;playing);
+	const char* modes[] = { "Walk", "Wave" };
+	ImGui::Combo("Animation", &amp;animMode, modes, IM_ARRAYSIZE(modes));
+	ImGui::SliderFloat("Speed", &amp;speed, 0.0f, 3.0f);
+	if (ImGui::Button("Reset")) { robotPos = glm::vec3(0); robotYaw = 0; }
+	ImGui::End();
+}</code></pre>
+<p>template 已經在 main loop 中呼叫 <code>on_gui()</code>，只要改這個函式。更多元件看 <code>ImGui::ShowDemoWindow()</code> 和 <code>imgui_demo.cpp</code>。</p>
+<p><b>驗收</b>：取消勾選 Play 動畫停住；切換 Combo 換動作。</p></details>
+
+<details class="step" id="s8"><summary><input type="checkbox"><span>8. 鍵盤 / 滑鼠控制位置與旋轉</span></summary>
+<pre><code>glm::vec3 robotPos(0.0f);
+float robotYaw = 0.0f;
+bool dragging = false;
+double lastX = 0;
+
+void key_callback(GLFWwindow*, int key, int, int action, int)
+{
+	if (ImGui::GetIO().WantCaptureKeyboard || action == GLFW_RELEASE) return;
+	if (key == GLFW_KEY_W) robotPos.z -= 0.1f;
+	if (key == GLFW_KEY_S) robotPos.z += 0.1f;
+	if (key == GLFW_KEY_A) robotPos.x -= 0.1f;
+	if (key == GLFW_KEY_D) robotPos.x += 0.1f;
+	if (key == GLFW_KEY_Q) robotYaw += 0.1f;
+	if (key == GLFW_KEY_E) robotYaw -= 0.1f;
+	if (key == GLFW_KEY_SPACE &amp;&amp; action == GLFW_PRESS) playing = !playing;
+}
+
+void mouse_button_callback(GLFWwindow* w, int button, int action, int)
+{
+	if (ImGui::GetIO().WantCaptureMouse) return;
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		dragging = action == GLFW_PRESS;
+		double y; glfwGetCursorPos(w, &amp;lastX, &amp;y);
+	}
+}
+
+void cursor_pos_callback(GLFWwindow*, double x, double)
+{
+	if (!dragging) return;
+	robotYaw += (float)(x - lastX) * 0.01f;      <span class="c">// 左右拖曳 = 轉身</span>
+	lastX = x;
+}
+
+<span class="c">// main()：在 ImGui_ImplGlfw_InitForOpenGL(window, true) 之前</span>
+glfwSetKeyCallback(window, key_callback);
+glfwSetMouseButtonCallback(window, mouse_button_callback);
+glfwSetCursorPosCallback(window, cursor_pos_callback);</code></pre>
+<p>Torso 的矩陣從 <code>translate(robotPos)</code> + <code>rotate(robotYaw)</code> 開始，整隻機器人就跟著動。</p>
+<p><b>驗收</b>：WASD 移動、QE / 拖曳轉身；在 ImGui 視窗上拖曳<b>不會</b>轉到機器人；ImGui 滑桿仍可操作。</p></details>
+
+<details class="step" id="s9"><summary><input type="checkbox"><span>9. 貼圖（至少一個部位）</span></summary>
+<pre><code>#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+GLuint loadTexture(const char* path)
+{
+	int w, h, n;
+	stbi_set_flip_vertically_on_load(true);
+	unsigned char* data = stbi_load(path, &amp;w, &amp;h, &amp;n, 4);     <span class="c">// 強制 RGBA</span>
+	if (!data) { fprintf(stderr, "stbi_load failed: %s\n", path); return 0; }
+	GLuint tex;
+	glGenTextures(1, &amp;tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	stbi_image_free(data);
+	return tex;
+}
+
+<span class="c">// on_display，畫之前</span>
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, bodyTex);
+glUniform1i(glGetUniformLocation(program, "uTex"), 0);
+drawPart(cube, glm::scale(torso, glm::vec3(1.0f, 1.4f, 0.6f)), color, true);   <span class="c">// useTex = true</span></code></pre>
+<p>圖片放 <code>assets/</code>（png / jpg 皆可）。講義版本用 <code>memcpy</code> 複製到自己的 struct，概念相同，見 <a href="02-project-syntax.html#stb">stb_image</a>。</p>
+<p><b>驗收</b>：torso 上看得到圖片且方向正確（不上下顛倒）。</p></details>
+
+<details class="step" id="s10"><summary><input type="checkbox"><span>10. 報告 PDF（5%）</span></summary>
+<ul>
+<li>檔名 <code>學號_AS1_Report.pdf</code>，放在 <code>學號_AS1/</code> 根目錄。</li>
+<li>必要內容（寫多不加分）：
+<ol><li>一張含機器人的視窗截圖</li>
+<li>機器人身體部位的階層關係 / transformation stack（像講義的 Hierarchy Diagram）</li>
+<li>程式功能與操作方式（按鍵、滑鼠、ImGui 選項）</li>
+<li>使用的 IDE 與版本（例：Visual Studio 2022 17.x）</li></ol></li>
+<li>建議另註明 AI 使用情形。</li>
+</ul></details>
+
+<details class="step" id="s11"><summary><input type="checkbox"><span>11. 最終檢查 → 打包 → MD5 → 上傳</span></summary>
+<p>照 <a href="#submit">8. 繳交</a> 做。打包前用 Release 從乾淨的 build 重建一次，確認能跑。</p></details>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="submit">8. 繳交</h2>
+<div class="grid2">
+<div><b>必須的檔案結構（其他結構不收）</b>
+<div class="tree">112062000_AS1/<br>
+├─ assets/ <span class="mut">← obj、圖片</span><br>
+├─ shaders/<br>
+├─ src/ <span class="mut">← main.cpp</span><br>
+├─ <s>builder/</s> <span class="mut">← 不要上傳</span><br>
+├─ <s>build/</s> <span class="mut">← 不要上傳</span><br>
+└─ 112062000_AS1_Report.pdf
+</div>
+<p class="mut">zip 內最上層是 <code>學號_AS1/</code> 資料夾。助教會用自己的 builder 照影片步驟建置。</p></div>
+<div class="card"><b>檔名檢查（錯 −10）</b>
+<div class="ctrl">學號 <input type="text" id="sid" placeholder="112062000" size="12"></div>
+<div id="names" class="mut">輸入學號產生正確檔名。</div>
+<div class="ctrl">檢查你的 zip 檔名 <input type="text" id="fname" placeholder="112062000_AS1.zip" size="22"></div>
+<div id="fcheck"></div></div>
+</div>
+
+<h3>流程</h3>
+<ol class="steps">
+<li><b>打包</b>（排除 builder、build、.git、.vs）：
+<div class="tabs"><button class="b" data-pane="zipLnx">Linux / macOS</button><button class="b" data-pane="zipWin">Windows</button></div>
+<div class="pane" id="zipLnx"><pre><code>cd &lt;學號_AS1 的上一層&gt;
+ID=112062000
+zip -r ${ID}_AS1.zip ${ID}_AS1 -x "${ID}_AS1/builder/*" "${ID}_AS1/build/*" "*/.git/*" "*.DS_Store"
+unzip -l ${ID}_AS1.zip          <span class="c"># 確認：最上層是 ${ID}_AS1/，沒有 builder/ build/</span></code></pre></div>
+<div class="pane" id="zipWin"><p>最簡單：複製一份 <code>學號_AS1</code> 到別處 → 刪掉 <code>builder</code>、<code>build</code>、<code>.git</code>、<code>.vs</code> → 對<b>資料夾</b>右鍵「壓縮為 ZIP 檔」。</p>
+<pre><code><span class="c"># PowerShell（未在 Windows 實測）</span>
+$id = "112062000"
+robocopy "${id}_AS1" "$env:TEMP\${id}_AS1" /E /XD builder build .git .vs
+Compress-Archive -Path "$env:TEMP\${id}_AS1" -DestinationPath "${id}_AS1.zip"</code></pre></div></li>
+<li><b>算 MD5</b>（之後不能再動 zip）：<code>md5sum 學號_AS1.zip</code>（Linux）／<code>certutil -hashfile 學號_AS1.zip MD5</code>（Windows）／<code>md5 學號_AS1.zip</code>（macOS）／<a href="https://emn178.github.io/online-tools/md5_checksum.html">MD5 online generator</a>。</li>
+<li><b>期限前</b>把 MD5 填入 <a href="https://forms.gle/UUSoweG5YgUfV2VaA">MD5 checksum 登記表單</a>，到 <a href="https://docs.google.com/spreadsheets/d/1AFlJleIm2oGq2cHx0rPh-zMtCzic43JY_CJqxisaf8A/edit?usp=sharing">登記查看</a> 確認。<a href="https://drive.google.com/file/d/1nBTy6rKcB7a_KtfqedX88GZHfTxXFDu_/view?usp=sharing">MD5 使用方法</a>。多筆以<b>時間最晚</b>的為準。</li>
+<li><b>FTP 上傳</b>：
+<div class="card kv" style="max-width:420px"><b>Host</b><span><code>cgv.cs.nthu.edu.tw</code></span><b>Account</b><span><code>GPA2026</code></span><b>Password</b><span><code>2026GPA</code></span><b>Directory</b><span><code>Assignment_01/</code></span></div>
+<div class="tabs"><button class="b" data-pane="ftpGui">FileZilla（建議）</button><button class="b" data-pane="ftpCli">指令列</button></div>
+<div class="pane" id="ftpGui"><ol><li>上方「主機」填 <code>cgv.cs.nthu.edu.tw</code>、使用者 <code>GPA2026</code>、密碼 <code>2026GPA</code>、連接埠留空（21）→ 快速連線。</li>
+<li>右側遠端切到 <code>Assignment_01/</code>。</li><li>把 zip 從左側拖到右側，等傳輸佇列顯示成功。</li></ol></div>
+<div class="pane" id="ftpCli"><pre><code><span class="c"># Linux / macOS / Windows 10+ 都有 curl（未實測上傳，伺服器不可刪除）</span>
+curl -T 112062000_AS1.zip ftp://cgv.cs.nthu.edu.tw/Assignment_01/ --user GPA2026:2026GPA</code></pre></div>
+<div class="warn">伺服器<b>不能下載、不能刪除</b>（也不能覆蓋）。要交新版本就另取名 <code>學號_AS1_v2.zip</code>（再來 <code>_v3</code>），並<b>重新登記新版的 MD5</b>。</div></li>
+<li><b>Demo</b>：準備好解釋每一行程式（禁用 AI、禁止上網）。</li>
+</ol>
+</main>
+<script src="common.js"></script>
+<script>
+// ---------- 倒數 ----------
+const DUE = new Date('2026-10-19T23:59:00+08:00');
+function tick() {
+  const ms = DUE - Date.now(), el = document.getElementById('cd');
+  if (ms <= 0) { el.textContent = '已截止'; return; }
+  const d = Math.floor(ms / 864e5), h = Math.floor(ms % 864e5 / 36e5), m = Math.floor(ms % 36e5 / 6e4);
+  el.textContent = `${d} 天 ${h} 時 ${m} 分`;
+}
+tick(); setInterval(tick, 30000);
+
+// ---------- 評分自評 ----------
+const SC = [['機器人至少有 head、torso、兩手、兩腳', 15], ['部位以 transformation 正確連接（附階層圖）', 15],
+  ['至少一種動畫，且牽動所有部位', 15], ['Rendering 正常', 15], ['ImGui 選單開始 / 暫停 / 切換動畫', 10],
+  ['鍵盤 / 滑鼠控制機器人旋轉與位置', 10], ['使用貼圖（任一部位）', 10], ['報告', 5], ['老師與助教主觀分數', 5]];
+const scEl = document.getElementById('score'), scSt = JSON.parse(localStorage.getItem('gpa-as1-score') || '{}');
+SC.forEach(([t, w], i) => {
+  const l = document.createElement('label');
+  l.innerHTML = `<span><input type="checkbox" data-i="${i}" ${scSt[i] ? 'checked' : ''}> ${t}</span><span>${w}%</span>`;
+  scEl.appendChild(l);
+});
+function calc() {
+  scEl.querySelectorAll('input').forEach(c => scSt[c.dataset.i] = c.checked);
+  localStorage.setItem('gpa-as1-score', JSON.stringify(scSt));
+  let prog = SC.reduce((a, [, w], i) => a + (scSt[i] ? w : 0), 0);
+  const qa = +document.getElementById('qa').value;
+  document.getElementById('qaV').textContent = qa + ' / 100';
+  let total = prog * 0.7 + qa * 0.3, ded = 0;
+  if (document.getElementById('dedConsole').checked) ded += 10;
+  if (document.getElementById('dedName').checked) ded += 10;
+  total = Math.max(0, total - ded);
+  document.getElementById('total').textContent = `${total.toFixed(1)} / 100`;
+  document.getElementById('totalBar').style.width = total + '%';
+  document.getElementById('totalNote').textContent = `Program&Report ${prog} × 0.7 + Q&A ${qa} × 0.3` + (ded ? ` − ${ded}` : '') + '（扣分套用方式以助教為準）';
+}
+document.querySelectorAll('#score input, #qa, #dedConsole, #dedName').forEach(e => e.oninput = calc);
+calc();
+
+// ---------- 階層互動 ----------
+const N = {
+  torso: { p: null, j: [0, 0], off: [0, 0], sz: [1.0, 1.4], name: 'Torso', m: 'M<sub>torso</sub>' },
+  head: { p: 'torso', j: [0, 0.72], off: [0, 0.3], sz: [0.56, 0.56], c: 1, name: 'Head', m: 'M<sub>head</sub>' },
+  L1arm: { p: 'torso', j: [-0.64, 0.6], off: [0, -0.32], sz: [0.24, 0.64], name: 'L1 Arm', m: 'M<sub>L1arm</sub>' },
+  L2arm: { p: 'L1arm', j: [0, -0.64], off: [0, -0.3], sz: [0.21, 0.6], name: 'L2 Arm', m: 'M<sub>L2arm</sub>' },
+  R1arm: { p: 'torso', j: [0.64, 0.6], off: [0, -0.32], sz: [0.24, 0.64], name: 'R1 Arm', m: 'M<sub>R1arm</sub>' },
+  R2arm: { p: 'R1arm', j: [0, -0.64], off: [0, -0.3], sz: [0.21, 0.6], name: 'R2 Arm', m: 'M<sub>R2arm</sub>' },
+  L1leg: { p: 'torso', j: [-0.27, -0.7], off: [0, -0.37], sz: [0.3, 0.74], name: 'L1 Leg', m: 'M<sub>L1leg</sub>' },
+  L2leg: { p: 'L1leg', j: [0, -0.74], off: [0, -0.37], sz: [0.27, 0.74], name: 'L2 Leg', m: 'M<sub>L2leg</sub>' },
+  R1leg: { p: 'torso', j: [0.27, -0.7], off: [0, -0.37], sz: [0.3, 0.74], name: 'R1 Leg', m: 'M<sub>R1leg</sub>' },
+  R2leg: { p: 'R1leg', j: [0, -0.74], off: [0, -0.37], sz: [0.27, 0.74], name: 'R2 Leg', m: 'M<sub>R2leg</sub>' },
+};
+const COL = { torso: '#7c8fd6', head: '#c9ccd3', L1arm: '#e39b4a', R1arm: '#e39b4a', L2arm: '#c97f30', R2arm: '#c97f30', L1leg: '#5aa86a', R1leg: '#5aa86a', L2leg: '#3f8a50', R2leg: '#3f8a50' };
+const ang = {}; Object.keys(N).forEach(k => ang[k] = 0);
+let sel = 'L2arm', tx = 0, bug = 'none', anim = false, t0 = 0;
+// 2D affine [a,b,c,d,e,f]: x' = a x + c y + e, y' = b x + d y + f
+const mul = (m, n) => [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+const T = (x, y) => [1, 0, 0, 1, x, y], R = a => [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0], S = (x, y) => [x, 0, 0, y, 0, 0];
+const ap = (m, [x, y]) => [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
+const inv = m => { const det = m[0]*m[3] - m[1]*m[2]; return [m[3]/det, -m[1]/det, -m[2]/det, m[0]/det, (m[2]*m[5] - m[3]*m[4])/det, (m[1]*m[4] - m[0]*m[5])/det]; };
+const rad = d => d * Math.PI / 180;
+function local(k) {
+  const n = N[k], j = k === 'torso' ? [tx, 0.15] : n.j;
+  return bug === 'order' && n.p ? mul(R(rad(ang[k])), T(...j)) : mul(T(...j), R(rad(ang[k])));
+}
+function world() {
+  const W = {}, D = {};
+  for (const k of Object.keys(N)) {   // 物件順序保證父先於子
+    const n = N[k], L = local(k);
+    let parent = [1, 0, 0, 1, 0, 0];
+    if (n.p && bug !== 'flat') parent = bug === 'scale' ? D[n.p] : W[n.p];
+    W[k] = mul(parent, L);
+    D[k] = mul(W[k], mul(T(...n.off), S(...n.sz)));
+  }
+  return { W, D };
+}
+const cv = document.getElementById('robotCv'), ctx = cv.getContext('2d');
+const VIEW = [95, 0, 0, -95, cv.width / 2, cv.height / 2 - 10];
+function draw() {
+  const { W, D } = world();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#bcc8da'; ctx.beginPath(); ctx.moveTo(0, ap(VIEW, [0, -1.95])[1]); ctx.lineTo(cv.width, ap(VIEW, [0, -1.95])[1]); ctx.stroke();
+  const order = ['L2arm', 'L1arm', 'L2leg', 'R2leg', 'L1leg', 'R1leg', 'torso', 'head', 'R1arm', 'R2arm'];
+  for (const k of order) {
+    const M = mul(VIEW, D[k]);
+    const pts = N[k].c ? [...Array(28)].map((_, i) => [0.5 * Math.cos(i / 28 * 2 * Math.PI), 0.5 * Math.sin(i / 28 * 2 * Math.PI)]) : [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]];
+    ctx.beginPath(); pts.map(p => ap(M, p)).forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath();
+    ctx.fillStyle = COL[k]; ctx.globalAlpha = sel === k ? 1 : 0.85; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.lineWidth = sel === k ? 3 : 1; ctx.strokeStyle = sel === k ? '#c53030' : '#445'; ctx.stroke();
+  }
+  for (const k of Object.keys(N)) {   // 關節點
+    const [x, y] = ap(mul(VIEW, W[k]), [0, 0]);
+    ctx.beginPath(); ctx.arc(x, y, k === sel ? 6 : 4, 0, 7); ctx.fillStyle = '#b91c1c'; ctx.fill();
+  }
+  // 鏈與矩陣
+  const chain = []; for (let k = sel; k; k = N[k].p) chain.unshift(k);
+  const used = bug === 'flat' ? [sel] : chain;
+  document.getElementById('chain').innerHTML = `<b>畫 ${N[sel].name} 用的矩陣</b><br>P · V · ` +
+    used.map(k => k === sel ? `<span class="hl">${N[k].m}</span>` : N[k].m).join(' · ') +
+    (bug === 'scale' && chain.length > 1 ? ' <span class="hl">（父的 scale 也被乘進來了）</span>' : '') +
+    `<br><span class="mut">${N[sel].m} = ${bug === 'order' && N[sel].p ? 'R(θ) · T(關節)' : 'T(關節) · R(θ)'}，θ = ${ang[sel].toFixed(0)}°；畫的時候再 · T(offset) · S(大小)</span>`;
+  const m = W[sel];
+  document.getElementById('mat').innerHTML = [[m[0], m[2], m[4]], [m[1], m[3], m[5]], [0, 0, 1]].map(r => '<tr>' + r.map(v => `<td>${v.toFixed(2)}</td>`).join('') + '</tr>').join('');
+  document.getElementById('bugTxt').textContent = {
+    none: '正確：子部位跟著父部位一起移動、旋轉，關節不會分離。',
+    scale: '父部位的 scale 被帶到子部位：子部位的關節位置與形狀被拉伸、壓扁（試著選 Torso 或 L1 Arm 看子部位）。',
+    order: '用 R·T：子部位先平移到關節再繞「父的原點」轉 → 手臂繞著身體中心公轉，關節脫落（轉 L1 Arm 看看）。',
+    flat: '沒乘父矩陣：每個部位只用自己的 local 矩陣，轉 Torso 或移動 Torso X 時四肢留在原地。'
+  }[bug];
+}
+// 階層圖
+const HP = { head: [200, 30], torso: [200, 110], L1arm: [70, 90], L2arm: [70, 170], R1arm: [330, 90], R2arm: [330, 170], L1leg: [160, 220], L2leg: [160, 295], R1leg: [240, 220], R2leg: [240, 295] };
+const hs = document.getElementById('hierSvg');
+function drawTree() {
+  let s = '';
+  for (const k of Object.keys(N)) if (N[k].p) { const [x0, y0] = HP[N[k].p], [x1, y1] = HP[k]; s += `<path d="M${x0} ${y0} L${x1} ${y1}" marker-end="url(#ha)"/>`; }
+  const chain = []; for (let k = sel; k; k = N[k].p) chain.push(k);
+  for (const k of Object.keys(N)) {
+    const [x, y] = HP[k], fill = k === sel ? '#c53030' : chain.includes(k) ? '#f6ad55' : '#4a74b4';
+    s += k === 'head' ? `<ellipse data-k="${k}" cx="${x}" cy="${y}" rx="42" ry="22" fill="${fill}"/>` : `<rect data-k="${k}" x="${x - 34}" y="${y - (k === 'torso' ? 40 : 20)}" width="68" height="${k === 'torso' ? 80 : 40}" rx="4" fill="${fill}"/>`;
+    s += k === 'torso' ? `<text x="${x}" y="${y - 3}" fill="#fff">Torso</text><text x="${x}" y="${y + 14}" fill="#fff">(Root)</text>` : `<text x="${x}" y="${y + 5}" fill="#fff">${N[k].name}</text>`;
+  }
+  hs.innerHTML = `<defs><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#678" stroke="none"/></marker></defs>` + s;
+  hs.querySelectorAll('[data-k]').forEach(e => e.onclick = () => select(e.dataset.k));
+}
+function select(k) {
+  sel = k; document.getElementById('selName').textContent = N[k].name;
+  document.getElementById('ang').value = ang[k]; document.getElementById('angV').textContent = ang[k].toFixed(0) + '°';
+  drawTree(); draw();
+}
+cv.onclick = e => {
+  const r = cv.getBoundingClientRect(), p = [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height];
+  const { D } = world();
+  for (const k of ['head', 'R2arm', 'R1arm', 'torso', 'R1leg', 'L1leg', 'R2leg', 'L2leg', 'L1arm', 'L2arm']) {
+    const [x, y] = ap(inv(mul(VIEW, D[k])), p);
+    if (N[k].c ? x * x + y * y <= 0.25 : Math.abs(x) <= 0.5 && Math.abs(y) <= 0.5) return select(k);
+  }
+};
+document.getElementById('ang').oninput = e => { ang[sel] = +e.target.value; document.getElementById('angV').textContent = ang[sel] + '°'; draw(); };
+document.getElementById('tx').oninput = e => { tx = e.target.value / 100; draw(); };
+document.querySelectorAll('input[name=bug]').forEach(r => r.onchange = () => { bug = r.value; draw(); });
+document.getElementById('resetBtn').onclick = () => { Object.keys(ang).forEach(k => ang[k] = 0); tx = 0; document.getElementById('tx').value = 0; select(sel); };
+const animBtn = document.getElementById('animBtn');
+animBtn.onclick = () => { anim = !anim; animBtn.textContent = anim ? '⏸ 暫停' : '▶ 走路動畫'; animBtn.classList.toggle('on', anim); if (anim) requestAnimationFrame(step); };
+function step(ts) {
+  if (!anim) return;
+  const t = ts / 1000, s = Math.sin(t * 3);
+  Object.assign(ang, { torso: 4 * Math.sin(t * 6), head: -8 * s, L1arm: 30 * s, R1arm: -30 * s, L2arm: 20 + 15 * s, R2arm: 20 - 15 * s,
+    L1leg: -25 * s, R1leg: 25 * s, L2leg: -Math.max(0, 35 * s), R2leg: -Math.max(0, -35 * s) });
+  document.getElementById('ang').value = ang[sel]; document.getElementById('angV').textContent = ang[sel].toFixed(0) + '°';
+  draw(); requestAnimationFrame(step);
+}
+select(sel);
+
+// ---------- 步驟進度 ----------
+const stSt = JSON.parse(localStorage.getItem('gpa-as1-steps') || '{}'), steps = [...document.querySelectorAll('.step')];
+function stRender() {
+  steps.forEach(d => { const c = d.querySelector('summary input'); c.checked = !!stSt[d.id]; d.classList.toggle('done', c.checked); });
+  document.getElementById('stBar').style.width = (steps.filter(d => stSt[d.id]).length / steps.length * 100) + '%';
+}
+steps.forEach(d => {
+  const c = d.querySelector('summary input');
+  c.onclick = e => e.stopPropagation();
+  c.onchange = () => { stSt[d.id] = c.checked; localStorage.setItem('gpa-as1-steps', JSON.stringify(stSt)); stRender(); };
+});
+document.getElementById('stReset').onclick = () => { for (const k in stSt) delete stSt[k]; localStorage.removeItem('gpa-as1-steps'); stRender(); };
+stRender();
+
+// ---------- 檔名檢查 ----------
+const sidEl = document.getElementById('sid'), fnEl = document.getElementById('fname');
+function names() {
+  const id = sidEl.value.trim();
+  document.getElementById('names').innerHTML = /^\w+$/.test(id)
+    ? `資料夾 <code>${id}_AS1/</code><br>zip <code>${id}_AS1.zip</code>（新版本 <code>${id}_AS1_v2.zip</code>）<br>報告 <code>${id}_AS1/${id}_AS1_Report.pdf</code>`
+    : '輸入學號產生正確檔名。';
+  const f = fnEl.value.trim(), out = document.getElementById('fcheck');
+  if (!f) { out.innerHTML = ''; return; }
+  const m = f.match(/^(\w+)_AS1(_v(\d+))?\.zip$/);
+  if (!m) out.innerHTML = '<span class="bad">✗ 格式應為 學號_AS1.zip 或 學號_AS1_v2.zip（大小寫、底線、副檔名都要對）</span>';
+  else if (id && m[1] !== id) out.innerHTML = `<span class="bad">✗ 學號不符（${m[1]} ≠ ${id}）</span>`;
+  else if (m[3] === '1') out.innerHTML = '<span class="bad">✗ 第一版不加 _v1；新版本從 _v2 開始</span>';
+  else out.innerHTML = `<span class="ok">✓ 格式正確${m[2] ? '（第 ' + m[3] + ' 版，記得重新登記 MD5）' : ''}</span>`;
+}
+sidEl.oninput = fnEl.oninput = names;
+</script></body></html>

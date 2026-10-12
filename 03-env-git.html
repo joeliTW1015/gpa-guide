@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>3. 環境 / 繳交 / Git</title><link rel="stylesheet" href="style.css">
+<title>環境架設 / Git / 繳交規則</title><link rel="stylesheet" href="style.css">
 <style>
 .chk label{display:block;padding:4px 0}
 .chk input{margin-right:8px}
@@ -10,14 +10,14 @@
 #gitSvg path.on{stroke:#2563eb;stroke-width:4}
 </style></head>
 <body><main>
-<h1>3. 環境架設 / 繳交 / 版本管理</h1>
+<h1>環境架設 / Git / 繳交規則</h1>
 <div class="toc"><a href="#tools">需要的工具</a><a href="#setup">建置步驟</a><a href="#gitlab">GitLab 與 Git</a><a href="#submit">繳交流程</a><a href="#rules">規則與評分</a><a href="#check">繳交 Checklist</a></div>
 
 <div class="warn"><b>GitLab 網址已更新</b>（1005 公告）：<a href="https://cgvlab.igvi.cs.nthu.edu.tw/">https://cgvlab.igvi.cs.nthu.edu.tw/</a>，講義中的 <code>cgv.cs.nthu.edu.tw:8889</code> 已作廢。帳號密碼不變，請見講義 Appendix - Project Configuration。</div>
 
 <h2 id="tools">需要的工具</h2>
 <table>
-<tr><th></th><th>Windows（講義官方）</th><th>Linux（推估）</th><th>macOS</th></tr>
+<tr><th></th><th>Windows（講義官方）</th><th>Linux（已實測）</th><th>macOS</th></tr>
 <tr><td>Build 產生器</td><td>CMake GUI</td><td>cmake（CLI）或 cmake-gui</td><td>CMake GUI</td></tr>
 <tr><td>編譯器 / IDE</td><td>Visual Studio 2022（勾「使用 C++ 的桌面開發」）</td><td>g++ + VS Code（CMake Tools 擴充）</td><td>Xcode</td></tr>
 <tr><td>版本控制</td><td>Git for Windows</td><td>git</td><td>git（Xcode CLT 內建）</td></tr>
@@ -26,7 +26,7 @@
 <p class="mut">顯卡需支援 OpenGL 4.x（後段 compute shader 需 4.3+；macOS 只到 4.1，期末可能受限）。</p>
 
 <h2 id="setup">建置步驟</h2>
-<div class="tabs"><button class="b" data-pane="win">Windows（講義）</button><button class="b" data-pane="lnx">Linux（推估）</button><button class="b" data-pane="mac">macOS</button></div>
+<div class="tabs"><button class="b" data-pane="win">Windows（講義）</button><button class="b" data-pane="lnx">Linux（已實測）</button><button class="b" data-pane="mac">macOS</button></div>
 
 <div class="pane" id="win">
 <ol class="steps">
@@ -48,25 +48,28 @@ git switch &lt;branch&gt;     # 若作業不在 main 分支</code></pre>
 </div>
 
 <div class="pane" id="lnx">
-<div class="note">講義沒有 Linux 流程，以下為依 template 結構推估（未用實際 template 驗證）。助教 Demo 若在 Windows 上跑，繳交前務必避免平台相依寫法。</div>
+<div class="note">講義沒有 Linux 流程。以下已用 AS1 template（<code>assignments_1_robot.zip</code>）在 Pop!_OS 24.04 實測建置與執行（2026-10-12）。助教 Demo 若在 Windows 上跑，繳交前務必避免平台相依寫法。</div>
 <ol class="steps">
 <li>安裝套件（Ubuntu / Pop!_OS）：
 <pre><code>sudo apt update
 sudo apt install build-essential cmake cmake-qt-gui git ninja-build \
-  libgl1-mesa-dev mesa-utils \
+  libgl-dev mesa-utils \
   xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
   zlib1g-dev
-# xorg-dev / wayland：從 submodule 編 GLFW 需要；zlib：Assimp 可能需要</code></pre></li>
+# 實測：缺 libxkbcommon-dev → GLFW configure 失敗（Package 'xkbcommon' not found）
+#       缺 xorg-dev → RandR headers not found；缺 libgl-dev → 找不到 GL/gl.h</code></pre></li>
 <li>確認 OpenGL 版本（需 core profile ≥ 4.1）：
 <pre><code>glxinfo -B | grep -E "renderer|core profile version"</code></pre>
 <span class="mut">NVIDIA 混合顯卡（Pop!_OS 可用 system76-power 切換）：<code>__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./app</code> 用獨顯執行。</span></li>
 <li>Clone（同 Windows）：<pre><code>git clone --recursive &lt;url&gt; hw1 &amp;&amp; cd hw1
 git switch &lt;branch&gt;   # 如需要</code></pre></li>
 <li>Configure + Build（source 一樣是 <code>builder</code>）：
-<pre><code>cmake -S builder -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+<pre><code>cmake -S builder -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DASSIMP_BUILD_TESTS=OFF
 cmake --build build -j
-# GLFW 抱怨 Wayland 相關錯誤時可加：-DGLFW_BUILD_WAYLAND=OFF（走 X11 / XWayland）</code></pre></li>
-<li>執行：找出執行檔（<code>find build -maxdepth 3 -type f -executable</code>），<b>在專案預期的工作目錄下執行</b>，否則 assets / shaders 讀不到。template 若用 <code>VS_DEBUGGER_WORKING_DIRECTORY</code> 指定路徑，那只對 VS 有效 → Linux 需自己 <code>cd</code> 到對應目錄再跑。</li>
+# -DASSIMP_BUILD_TESTS=OFF：跳過 assimp unit test，省很多編譯時間
+# 只要 X11：-DGLFW_BUILD_WAYLAND=OFF；只要 Wayland：-DGLFW_BUILD_X11=OFF（可少裝 xorg-dev）</code></pre></li>
+<li>執行：AS1 template 的執行檔是 <code>build/CG2025</code>（README 寫的 <code>CG2025Template</code> 不對）。<b>在專案根目錄執行</b> <code>./build/CG2025</code>，否則 <code>assets/</code>、<code>shaders/</code> 讀不到。template 用 <code>VS_DEBUGGER_WORKING_DIRECTORY</code> 指定工作目錄，只對 VS 有效。</li>
+<li><code>builder/build.sh</code> 是 CRLF 換行，Linux 直接跑可能出錯 → 直接打上面的 cmake 指令。</li>
 <li>VS Code（選配）：裝 <i>C/C++</i>、<i>CMake Tools</i>；<code>.vscode/settings.json</code> 加：
 <pre><code>{ "cmake.sourceDirectory": "${workspaceFolder}/builder",
   "cmake.buildDirectory": "${workspaceFolder}/build" }</code></pre>
@@ -150,7 +153,7 @@ out/
 <h2 id="submit">繳交流程</h2>
 <svg viewBox="0 0 960 80" style="width:100%" id="subFlow"></svg>
 <ul>
-<li>上傳平台、檔名格式、要附的檔案：<b>依每次作業公告</b>（eeclass）。</li>
+<li>上傳平台、檔名格式、要附的檔案：<b>依每次作業公告</b>。AS1 是 FTP 上傳 <code>學號_AS1.zip</code>，細節見 <a href="as1-robot.html#submit">作業 1 繳交</a>。</li>
 <li>除了檔案本身，要算 <b>MD5 checksum</b> 填入 Google 表單：
 <ul><li>若因故無法在期限前上傳成功，以 checksum 比對 → 一致就不算遲交。</li>
 <li>多次登記取<b>時間最晚</b>的那筆 → 最後上傳的檔案要和最後登記的 MD5 一致。</li>
@@ -159,14 +162,14 @@ out/
 <div class="ex"><b>MD5 是什麼？為什麼要填？</b>
 <p>MD5 是一個檔案的「指紋」：把整個檔案內容算成 32 個 16 進位字元，例如 <code>9e107d9d372bb6826bd81d3542a419d6</code>。檔案<b>改了任何一個 byte，指紋就完全不同</b>。</p>
 <p>你在期限前把指紋填進 Google 表單（表單有時間戳記）→ 就算上傳網站當機、晚了幾分鐘才傳成功，助教比對上傳檔的 MD5 與表單一致，就能證明「這個檔案在期限前就已完成」。</p>
-<pre><code>$ md5sum HW1_112000000.zip
-9e107d9d372bb6826bd81d3542a419d6  HW1_112000000.zip     <span class="c"># 複製前面那串填表單</span></code></pre></div>
+<pre><code>$ md5sum 112000000_AS1.zip
+9e107d9d372bb6826bd81d3542a419d6  112000000_AS1.zip     <span class="c"># 複製前面那串填表單</span></code></pre></div>
 <div class="grid2">
-<div><b>Linux</b><pre><code>md5sum HW1_學號.zip</code></pre></div>
-<div><b>Windows（PowerShell / cmd）</b><pre><code>Get-FileHash HW1_學號.zip -Algorithm MD5
-certutil -hashfile HW1_學號.zip MD5</code></pre></div>
+<div><b>Linux</b><pre><code>md5sum 學號_AS1.zip</code></pre></div>
+<div><b>Windows（PowerShell / cmd）</b><pre><code>Get-FileHash 學號_AS1.zip -Algorithm MD5
+certutil -hashfile 學號_AS1.zip MD5</code></pre></div>
 </div>
-<p class="mut">macOS：<code>md5 file.zip</code>。打包前刪掉 <code>build/</code>（很大且不需要）。Linux 打包：<code>git archive -o HW1.zip HEAD</code>（只含已 commit 的檔案，submodule 不含）或 <code>zip -r HW1.zip . -x "build/*" ".git/*"</code>。</p>
+<p class="mut">macOS：<code>md5 file.zip</code>。打包規則（要排除哪些資料夾、zip 內結構）依各次作業，AS1 見 <a href="as1-robot.html#submit">作業 1 繳交</a>（不含 <code>builder/</code>、<code>build/</code>）。</p>
 
 <h2 id="rules">規則與評分</h2>
 <div class="grid2">

@@ -1,12 +1,27 @@
-// 共用：頂部導覽、code 複製按鈕、tabs
+// 共用：頂部導覽（分組）、上一頁 / 下一頁、code 複製按鈕、tabs
 (function () {
-  const pages = [['index.html', '首頁'], ['01-pipeline.html', '1. Rendering Pipeline'],
-    ['02-project-syntax.html', '2. 專案結構與語法'], ['03-env-git.html', '3. 環境 / 繳交 / Git'], ['04-api.html', '4. API 參考'], ['05-vertex-draw.html', '5. Vertex & Draw']];
+  // 閱讀順序：觀念 → 實作 → 作業 → 參考
+  const groups = [['', [['index.html', '首頁']]],
+    ['觀念', [['01-pipeline.html', 'Rendering Pipeline'], ['05-vertex-draw.html', 'Vertex & Draw']]],
+    ['實作', [['03-env-git.html', '環境 / Git / 繳交'], ['02-project-syntax.html', '專案結構與語法']]],
+    ['作業', [['as1-robot.html', 'AS1 機器人']]],
+    ['參考', [['04-api.html', 'API 參考']]]];
+  const pages = groups.flatMap(([, ps]) => ps);
   const cur = location.pathname.split('/').pop() || 'index.html';
   const nav = document.createElement('nav');
   nav.className = 'top';
-  nav.innerHTML = pages.map(([h, t]) => `<a href="${h}" class="${h === cur ? 'on' : ''}">${t}</a>`).join('');
+  nav.innerHTML = groups.map(([g, ps]) => `<span class="grp">${g ? `<i>${g}</i>` : ''}` +
+    ps.map(([h, t]) => `<a href="${h}" class="${h === cur ? 'on' : ''}">${t}</a>`).join('') + '</span>').join('');
   document.body.prepend(nav);
+
+  const i = pages.findIndex(([h]) => h === cur), main = document.querySelector('main');
+  if (i >= 0 && main) {
+    const pn = document.createElement('div');
+    pn.className = 'pn';
+    pn.innerHTML = (i > 0 ? `<a href="${pages[i - 1][0]}">← ${pages[i - 1][1]}</a>` : '<span></span>') +
+      (i < pages.length - 1 ? `<a href="${pages[i + 1][0]}">${pages[i + 1][1]} →</a>` : '<span></span>');
+    main.appendChild(pn);
+  }
 
   document.querySelectorAll('pre').forEach(pre => {
     const b = document.createElement('button');

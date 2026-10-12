@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>4. 常用 API 參考</title><link rel="stylesheet" href="style.css">
+<title>常用 API 參考</title><link rel="stylesheet" href="style.css">
 <style>
 #q{font:inherit;padding:6px 10px;width:260px;border:1px solid var(--line);border-radius:6px}
 .api h3{margin:0 0 4px;font-family:ui-monospace,monospace;font-size:16px}
@@ -14,7 +14,7 @@
 #idx a{margin-right:8px;font-family:ui-monospace,monospace}
 </style></head>
 <body><main>
-<h1>4. 常用 API 參考</h1>
+<h1>常用 API 參考</h1>
 <p class="mut">整理本課（講義 03、04 與 Appendix）會用到的函式。每項有：簽名、回傳型別、參數說明、範例、官方文件連結。OpenGL 文件連到 <a href="https://registry.khronos.org/OpenGL-Refpages/gl4/">Khronos OpenGL 4 Reference Pages</a>（也可用 <a href="https://docs.gl/">docs.gl</a>，可切換版本）。</p>
 <div class="note"><b>怎麼讀簽名</b>：<code>GLuint glCreateShader(GLenum shaderType)</code> → 最前面 <code>GLuint</code> 是<b>回傳型別</b>，括號內是<b>參數型別 + 名稱</b>。<code>void</code> = 不回傳。參數型別是 <code>T*</code>（指標）通常代表「你給一塊記憶體，函式把結果寫進去」，例如 <code>glGenBuffers(1, &amp;vbo)</code>。<br>
 OpenGL 型別其實就是 C 型別的別名：<code>GLuint</code>=unsigned int、<code>GLint</code>=int、<code>GLsizei</code>=int（數量/大小）、<code>GLfloat</code>=float、<code>GLboolean</code>=unsigned char（<code>GL_TRUE/GL_FALSE</code>）、<code>GLenum</code>=一個常數如 <code>GL_TRIANGLES</code>、<code>GLsizeiptr/GLintptr</code>=byte 數 / byte offset（指標大小的整數）、<code>GLbitfield</code>=可用 <code>|</code> 組合的旗標。</div>

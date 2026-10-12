@@ -4,6 +4,10 @@ body{margin:0;font:15px/1.65 system-ui,"Noto Sans TC","PingFang TC",sans-serif;c
 nav.top{position:sticky;top:0;z-index:9;background:#fff;border-bottom:1px solid var(--line);display:flex;gap:4px;padding:6px 16px;flex-wrap:wrap}
 nav.top a{padding:4px 10px;border-radius:6px;color:var(--fg);text-decoration:none;font-size:14px}
 nav.top a.on{background:var(--acc);color:#fff}
+nav.top .grp{display:flex;align-items:center;gap:2px;padding-right:8px;margin-right:4px;border-right:1px solid var(--line)}
+nav.top .grp:last-child{border-right:0}
+nav.top .grp i{font-style:normal;font-size:11px;color:var(--mut);margin-right:2px}
+.pn{display:flex;justify-content:space-between;gap:12px;margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:14px}
 main{max-width:980px;margin:0 auto;padding:16px 20px 80px}
 h1{font-size:26px;margin:.6em 0 .2em}
 h2{font-size:20px;margin:1.8em 0 .5em;padding-bottom:4px;border-bottom:2px solid var(--line)}

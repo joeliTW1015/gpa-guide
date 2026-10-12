@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>1. Rendering Pipeline</title><link rel="stylesheet" href="style.css">
+<title>Rendering Pipeline</title><link rel="stylesheet" href="style.css">
 <style>
 #pipe g.st{cursor:pointer}
 #pipe g.st rect{stroke:#999;stroke-width:1.5}
@@ -12,7 +12,7 @@
 #vt td{font:12px ui-monospace,monospace}
 </style></head>
 <body><main>
-<h1>1. Rendering Pipeline</h1>
+<h1>Rendering Pipeline</h1>
 <div class="toc"><a href="#concept">核心觀念</a><a href="#pipeline">Pipeline 互動圖</a><a href="#walk">一個三角形的旅程</a><a href="#space">座標空間與 MVP</a><a href="#math">必要數學</a><a href="#raster">Rasterizer</a><a href="#persample">Per-Sample</a><a href="#compute">Compute</a></div>
 
 <h2 id="concept">核心觀念</h2>
@@ -54,7 +54,7 @@ glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 �
 <div id="info" class="card"></div>
 <div class="note"><b>Vertex Processing</b> = Vertex / Tessellation / Geometry shader；其中<b>最後一個啟用的 stage 必須輸出 <code>gl_Position</code>（clip space 座標）</b>給 Rasterizer。只有 VS + FS 時就是 VS 負責。</div>
 
-<p class="mut">Vertex Specification 與 Vertex Shader 的細節（attribute 設定方式、draw command 種類、instancing）見 <a href="05-vertex-draw.html">第 5 頁</a>。</p>
+<p class="mut">Vertex Specification 與 Vertex Shader 的細節（attribute 設定方式、draw command 種類、instancing）見 <a href="05-vertex-draw.html">Vertex &amp; Draw</a>。</p>
 
 <h2 id="walk">一個三角形的旅程</h2>
 <p class="mut">按「下一步」：上方 pipeline 圖會同步高亮。最後一步可切換 fixed-function 狀態看效果（灰色方塊為先畫好的物件，depth = 0.5）。</p>
