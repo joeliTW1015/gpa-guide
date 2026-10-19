@@ -216,25 +216,197 @@ int main() {
 <div class="note">持續按住移動相機：用 <code>glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS</code> 在 update 中每幀查詢，比 key callback 的 PRESS/REPEAT 平順。</div>
 
 <h2 id="shader">Shader Program 建立流程</h2>
+
+<h3>先搞懂名詞</h3>
+<table>
+<tr><th style="width:20%">名詞</th><th>是什麼</th><th style="width:28%">類比</th></tr>
+<tr><td><b>Shader</b></td><td>跑在 <b>GPU</b> 上的小程式，用 <b>GLSL</b>（OpenGL Shading Language，語法像 C）寫。pipeline 裡「可程式化」的那幾格就是由 shader 決定怎麼做。</td><td>GPU 上的函式</td></tr>
+<tr><td><b>VS</b>（Vertex Shader）</td><td><b>每個頂點執行一次</b>。輸入：這個頂點的 attribute（位置、uv…，來自 VBO）＋ uniform（矩陣等）。<b>必須輸出 <code>gl_Position</code></b>（clip space 座標），也可以輸出其他值（如 uv）交給後面。</td><td>決定「每個點畫在螢幕哪裡」</td></tr>
+<tr><td><b>FS</b>（Fragment Shader）</td><td>rasterizer 把三角形切成一格一格的 fragment（≈ 像素）後，<b>每個 fragment 執行一次</b>。輸入：VS 輸出值被<b>內插</b>後的結果＋ uniform / texture。輸出：這個像素的<b>顏色</b>。</td><td>決定「每個像素塗什麼顏色」</td></tr>
+<tr><td><b>Shader object</b></td><td>一個編譯好的 shader（VS 或 FS 各一個），由 <code>glCreateShader</code> 建立、<code>glCompileShader</code> 編譯。單獨不能用。</td><td>C 的 <code>.o</code> 檔</td></tr>
+<tr><td><b>Program object</b></td><td>把 VS + FS <b>連結（link）</b>在一起的完整程式，檢查 VS 的 out 和 FS 的 in 對得上。畫圖前用 <code>glUseProgram</code> 指定要用哪一個。</td><td>連結好的執行檔</td></tr>
+<tr><td><b>Uniform</b></td><td>C++ 傳給 shader 的參數，<b>一次 draw call 內所有頂點 / 像素都一樣</b>（例：MVP 矩陣、顏色）。</td><td>函式的全域參數</td></tr>
+<tr><td><b>Attribute</b>（<code>in</code> 變數，VS）</td><td><b>每個頂點不同</b>的輸入，從 VBO 讀（例：位置、uv）。</td><td>陣列裡每個元素的資料</td></tr>
+</table>
+<p class="mut">在 pipeline 中的位置：Vertex Specification → <b>VS</b> →（Tessellation / Geometry，可省）→ Rasterizer → <b>FS</b> → Per-Sample（depth test…）→ Framebuffer。互動圖見 <a href="01-pipeline.html#pipeline">Rendering Pipeline</a>。</p>
+
+<h3>三個檔案、各自的角色</h3>
+<table>
+<tr><th style="width:26%">檔案</th><th style="width:14%">在哪裡執行</th><th>做什麼</th></tr>
+<tr><td><code>shaders/robot.vs.glsl</code></td><td>GPU</td><td><b>Vertex shader</b> 原始碼：用 P·V·M 把頂點從物體座標轉到 clip space；把 uv 傳給 FS。</td></tr>
+<tr><td><code>shaders/robot.fs.glsl</code></td><td>GPU</td><td><b>Fragment shader</b> 原始碼：決定像素顏色（取貼圖或用 uniform 顏色）。</td></tr>
+<tr><td><code>src/main.cpp</code></td><td>CPU</td><td><b>管理 shader</b>：程式啟動時讀兩個 .glsl 檔 → 交給 driver 編譯 → link 成 program → 取 uniform 位置；每一幀 <code>glUseProgram</code>、設定 uniform、發 draw call。</td></tr>
+</table>
+<p>.glsl 檔<b>不會被 C++ 編譯器處理</b>（CMake 只編 <code>src/</code>），而是程式<b>執行時</b>才被讀進來，由顯卡 driver 編譯。所以 shader 寫錯，C++ 照樣編譯成功，要靠程式執行時印出的 log 才看得到錯誤。</p>
+
 <div id="shFlow"></div>
-<pre><code>GLuint compile(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);           <span class="c">// GL_VERTEX_SHADER / GL_FRAGMENT_SHADER</span>
-    glShaderSource(s, 1, &amp;src, NULL);
-    glCompileShader(s);
-    GLint ok; glGetShaderiv(s, GL_COMPILE_STATUS, &amp;ok);
-    if (!ok) { char log[1024]; glGetShaderInfoLog(s, 1024, NULL, log); printf("%s\n", log); }  <span class="c">// 一定要印！</span>
-    return s;
+
+<h3>1. Vertex shader：<code>shaders/robot.vs.glsl</code></h3>
+<pre><code><span class="c">// 檔案：shaders/robot.vs.glsl（GLSL，在 GPU 上「每個頂點」執行一次）</span>
+#version 410 core                       <span class="c">// 第一行必須是版本：OpenGL 4.1 core profile</span>
+
+layout(location = 0) in vec3 aPos;      <span class="c">// attribute 0：頂點位置（對應 C++ glVertexAttribPointer(0, ...)）</span>
+layout(location = 1) in vec2 aUV;       <span class="c">// attribute 1：貼圖座標（對應 glVertexAttribPointer(1, ...)）</span>
+
+uniform mat4 uP;                        <span class="c">// Projection 矩陣：C++ 用 glUniformMatrix4fv 傳入</span>
+uniform mat4 uV;                        <span class="c">// View 矩陣（相機）</span>
+uniform mat4 uM;                        <span class="c">// Model 矩陣（每個部位不同，每次 draw 前更新）</span>
+
+out vec2 vUV;                           <span class="c">// 輸出給 FS 的值；rasterizer 會在三角形內內插</span>
+
+void main()                             <span class="c">// 進入點，每個頂點呼叫一次</span>
+{
+    vUV = aUV;                          <span class="c">// uv 原封不動往下傳</span>
+    gl_Position = uP * uV * uM * vec4(aPos, 1.0);   <span class="c">// 必填：clip space 位置（矩陣從右往左套）</span>
+}</code></pre>
+
+<h3>2. Fragment shader：<code>shaders/robot.fs.glsl</code></h3>
+<pre><code><span class="c">// 檔案：shaders/robot.fs.glsl（GLSL，在 GPU 上「每個 fragment / 像素」執行一次）</span>
+#version 410 core
+
+in vec2 vUV;                            <span class="c">// 來自 VS 的 out vec2 vUV：名字、型別必須一模一樣</span>
+
+uniform vec3 uColor;                    <span class="c">// 部位顏色（C++ glUniform3fv）</span>
+uniform bool uUseTex;                   <span class="c">// 要不要用貼圖（C++ glUniform1i，0 / 1）</span>
+uniform sampler2D uTex;                 <span class="c">// 貼圖：值是 texture unit 編號（C++ glUniform1i(locTex, 0) → unit 0）</span>
+
+out vec4 fragColor;                     <span class="c">// 輸出：這個像素的 RGBA，寫進 framebuffer</span>
+
+void main()
+{
+    if (uUseTex)
+        fragColor = texture(uTex, vUV); <span class="c">// 用內插後的 uv 到貼圖取顏色</span>
+    else
+        fragColor = vec4(uColor, 1.0);  <span class="c">// 純色，alpha = 1（不透明）</span>
+}</code></pre>
+
+<h3>VS、FS、C++ 怎麼對起來</h3>
+<table>
+<tr><th>連接點</th><th>這一端</th><th>另一端</th><th>對不上會怎樣</th></tr>
+<tr><td>Attribute location</td><td>VS：<code>layout(location = 0) in vec3 aPos;</code></td><td>C++：<code>glVertexAttribPointer(0, 3, ...)</code> + <code>glEnableVertexAttribArray(0)</code></td><td>讀到錯的資料或全 0 → 形狀亂掉 / 看不到</td></tr>
+<tr><td>VS out → FS in</td><td>VS：<code>out vec2 vUV;</code></td><td>FS：<code>in vec2 vUV;</code></td><td><b>link 失敗</b>（名字或型別不同）</td></tr>
+<tr><td>Uniform</td><td>shader：<code>uniform mat4 uM;</code></td><td>C++：<code>glGetUniformLocation(program, "uM")</code> → <code>glUniformMatrix4fv(loc, ...)</code></td><td>名字打錯 → location = −1 → 設定被忽略，沒有任何錯誤訊息</td></tr>
+<tr><td>Sampler</td><td>FS：<code>uniform sampler2D uTex;</code></td><td>C++：<code>glActiveTexture(GL_TEXTURE0)</code> + <code>glBindTexture</code> + <code>glUniform1i(locTex, 0)</code></td><td>取到別張貼圖或全黑</td></tr>
+<tr><td>輸出顏色</td><td>FS：<code>out vec4 fragColor;</code></td><td>framebuffer 的 color buffer</td><td>沒寫 → 顏色未定義</td></tr>
+</table>
+
+<h3>3. C++ 端：<code>src/main.cpp</code></h3>
+<p class="mut">分兩個時間點：<b>程式啟動時做一次</b>（讀檔、編譯、link、取 uniform 位置），以及<b>每一幀做</b>（use program、設 uniform、draw）。</p>
+<pre><code><span class="c">// 檔案：src/main.cpp（C++，在 CPU 上執行）</span>
+#include &lt;fstream&gt;
+#include &lt;sstream&gt;
+#include &lt;string&gt;
+
+<span class="c">// (a) 把整個 .glsl 檔讀成一個字串。路徑相對於「執行時的工作目錄」（專案根目錄）</span>
+std::string readFile(const char* path)
+{
+    std::ifstream file(path);
+    if (!file)
+        fprintf(stderr, "Cannot open %s\n", path);   <span class="c">// 讀不到檔多半是工作目錄錯了</span>
+    std::stringstream ss;
+    ss &lt;&lt; file.rdbuf();                               <span class="c">// 整個檔案內容倒進 stringstream</span>
+    return ss.str();
 }
-GLuint program = glCreateProgram();
-GLuint vs = compile(GL_VERTEX_SHADER, vsSrc), fs = compile(GL_FRAGMENT_SHADER, fsSrc);
-glAttachShader(program, vs); glAttachShader(program, fs);
-glLinkProgram(program);                        <span class="c">// 檢查 GL_LINK_STATUS / glGetProgramInfoLog</span>
-glDeleteShader(vs); glDeleteShader(fs);        <span class="c">// link 完 shader object 可刪</span>
-<span class="c">// render 時：</span> glUseProgram(program);</code></pre>
+
+<span class="c">// (b) 編譯一個 shader → 回傳 shader object 的 ID</span>
+GLuint compileShader(GLenum type, const char* path)   <span class="c">// type = GL_VERTEX_SHADER 或 GL_FRAGMENT_SHADER</span>
+{
+    std::string source = readFile(path);
+    const char* src = source.c_str();                 <span class="c">// glShaderSource 要的是 C 字串的指標</span>
+
+    GLuint shader = glCreateShader(type);             <span class="c">// 1. 建立空的 shader object</span>
+    glShaderSource(shader, 1, &amp;src, nullptr);         <span class="c">// 2. 放原始碼（1 段字串；nullptr = 以 '\0' 結尾）</span>
+    glCompileShader(shader);                          <span class="c">// 3. 交給 driver 編譯</span>
+
+    GLint ok = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &amp;ok);    <span class="c">// 4. 查編譯有沒有成功</span>
+    if (!ok)
+    {
+        char log[1024];
+        glGetShaderInfoLog(shader, sizeof(log), nullptr, log);   <span class="c">// 取錯誤訊息（含行號）</span>
+        fprintf(stderr, "Shader compile error (%s):\n%s\n", path, log);   <span class="c">// 一定要印，不然只會黑畫面</span>
+    }
+    return shader;
+}
+
+<span class="c">// (c) VS + FS 連結成 program → 回傳 program object 的 ID</span>
+GLuint createProgram(const char* vsPath, const char* fsPath)
+{
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vsPath);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsPath);
+
+    GLuint prog = glCreateProgram();                  <span class="c">// 1. 建立空的 program object</span>
+    glAttachShader(prog, vs);                         <span class="c">// 2. 掛上 VS</span>
+    glAttachShader(prog, fs);                         <span class="c">//    掛上 FS</span>
+    glLinkProgram(prog);                              <span class="c">// 3. 連結：檢查 VS out / FS in 是否相符，產生可執行的 GPU 程式</span>
+
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &amp;ok);        <span class="c">// 4. 查 link 有沒有成功</span>
+    if (!ok)
+    {
+        char log[1024];
+        glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+        fprintf(stderr, "Program link error:\n%s\n", log);
+    }
+
+    glDeleteShader(vs);                               <span class="c">// 5. link 完 shader object 已複製進 program，可以刪</span>
+    glDeleteShader(fs);
+    return prog;
+}
+
+GLuint program;                                       <span class="c">// 全域：之後每一幀都要用</span>
+GLint locP, locV, locM, locColor, locUseTex, locTex;  <span class="c">// 全域：uniform 的位置</span>
+
+<span class="c">// ===== 程式啟動時（main() 裡，gladLoadGLLoader 之後）做一次 =====</span>
+program = createProgram("shaders/robot.vs.glsl", "shaders/robot.fs.glsl");
+locP = glGetUniformLocation(program, "uP");           <span class="c">// 名字要和 shader 裡的 uniform 完全一樣</span>
+locV = glGetUniformLocation(program, "uV");
+locM = glGetUniformLocation(program, "uM");
+locColor  = glGetUniformLocation(program, "uColor");
+locUseTex = glGetUniformLocation(program, "uUseTex");
+locTex    = glGetUniformLocation(program, "uTex");
+
+<span class="c">// ===== 每一幀（on_display）=====</span>
+glUseProgram(program);                                <span class="c">// 之後的 glUniform* 和 draw call 都作用在這個 program</span>
+glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(P));   <span class="c">// 1 個矩陣、不轉置、傳指標</span>
+glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(V));
+<span class="c">// 每畫一個部位：</span>
+glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(model));
+glUniform3fv(locColor, 1, glm::value_ptr(color));
+glUniform1i(locUseTex, 0);
+glBindVertexArray(mesh.vao);
+glDrawArrays(GL_TRIANGLES, 0, mesh.count);            <span class="c">// GPU 開始跑：每個頂點跑 VS → 每個 fragment 跑 FS</span></code></pre>
+
+<h3>每個 API 在做什麼</h3>
+<table>
+<tr><th>步驟</th><th>函式</th><th>做什麼</th><th>何時</th></tr>
+<tr><td>1</td><td><a href="04-api.html#glCreateShader"><code>glCreateShader(type)</code></a></td><td>建立空的 shader object，回傳 ID</td><td rowspan="9">啟動時一次</td></tr>
+<tr><td>2</td><td><a href="04-api.html#glShaderSource"><code>glShaderSource(s, count, strings, lengths)</code></a></td><td>把 GLSL 原始碼字串放進 shader object</td></tr>
+<tr><td>3</td><td><a href="04-api.html#glCompileShader"><code>glCompileShader(s)</code></a></td><td>driver 編譯成 GPU 指令</td></tr>
+<tr><td>4</td><td><a href="04-api.html#glGetShaderiv"><code>glGetShaderiv</code></a> / <a href="04-api.html#glGetShaderInfoLog"><code>glGetShaderInfoLog</code></a></td><td>查是否成功、取錯誤訊息</td></tr>
+<tr><td>5</td><td><a href="04-api.html#glCreateProgram"><code>glCreateProgram()</code></a></td><td>建立空的 program object</td></tr>
+<tr><td>6</td><td><a href="04-api.html#glAttachShader"><code>glAttachShader(p, s)</code></a></td><td>把 VS、FS 掛到 program</td></tr>
+<tr><td>7</td><td><a href="04-api.html#glLinkProgram"><code>glLinkProgram(p)</code></a> + <a href="04-api.html#glGetProgramiv"><code>glGetProgramiv</code></a></td><td>連結並檢查 VS / FS 介面</td></tr>
+<tr><td>8</td><td><a href="04-api.html#glDeleteShader"><code>glDeleteShader(s)</code></a></td><td>link 後刪掉 shader object（program 不受影響）</td></tr>
+<tr><td>9</td><td><a href="04-api.html#glGetUniformLocation"><code>glGetUniformLocation(p, "name")</code></a></td><td>查 uniform 的位置（整數），存起來重複用</td></tr>
+<tr><td>10</td><td><a href="04-api.html#glUseProgram"><code>glUseProgram(p)</code></a></td><td>指定之後 draw 用哪個 program</td><td rowspan="2">每一幀</td></tr>
+<tr><td>11</td><td><a href="04-api.html#glUniformMatrix4fv"><code>glUniform*</code></a></td><td>設定 uniform 的值（要先 glUseProgram）</td></tr>
+</table>
+
+<h3>常見錯誤</h3>
+<table>
+<tr><th>症狀</th><th>原因</th><th>怎麼查 / 修</th></tr>
+<tr><td>黑畫面、沒有任何錯誤</td><td>沒印 compile / link log；或 shader 檔讀不到（工作目錄錯）</td><td>照上面印 log；確認在專案根目錄執行、<code>readFile</code> 有印 Cannot open</td></tr>
+<tr><td><code>ERROR: 0:12: 'xxx' : undeclared identifier</code></td><td>GLSL 語法 / 拼字錯，<code>0:12</code> = 第 12 行</td><td>對照行號修正；VS Code 裝 GLSL Lint 可即時看到</td></tr>
+<tr><td>link error：<code>vUV</code> not written / type mismatch</td><td>VS 的 out 和 FS 的 in 名字或型別不同</td><td>兩個檔的變數宣告改成一致</td></tr>
+<tr><td>設了 uniform 但沒效果</td><td>名字打錯（location = −1）；或 shader 沒用到被編譯器刪掉；或設定前沒 <code>glUseProgram</code></td><td>印出 location 檢查；先 use 再 set</td></tr>
+<tr><td>GLSL 版本錯誤</td><td>少了 <code>#version 410 core</code> 或不是第一行</td><td>放在檔案第一行</td></tr>
+</table>
 <ul>
 <li>Compile 很吃 CPU → 所有 shader 在<b>啟動時</b>載入，不要每幀 compile。</li>
 <li>Shader 寫在 <code>shaders/*.glsl</code>，C++ 讀檔成字串再丟 <code>glShaderSource</code>；<b>執行時的工作目錄</b>錯了會讀不到檔（黑畫面）。</li>
 <li>一個 shader object 可被多個 program 共用（in/out 介面要相符）。</li>
+<li>GLSL 語法速查見 <a href="#glsl">GLSL 速查</a>；作業 1 的實際使用見 <a href="as1-robot.html#s2">作業 1 步驟 2</a>。</li>
 </ul>
 
 <h2 id="obj">OpenGL Objects：資料怎麼進 Shader</h2>
