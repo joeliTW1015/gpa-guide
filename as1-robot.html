@@ -95,7 +95,7 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 <table>
 <tr><th style="width:24%">主題</th><th style="width:30%">作業裡用在哪</th><th>去哪複習</th></tr>
 <tr><td>Shader pipeline</td><td>VS 算 <code>gl_Position</code>、FS 算顏色 / 貼圖</td><td><a href="01-pipeline.html#pipeline">Pipeline 互動圖</a>、<a href="02-project-syntax.html#shader">Shader Program 建立流程</a>、<a href="02-project-syntax.html#glsl">GLSL 速查</a></td></tr>
-<tr><td>VAO / VBO / attribute</td><td>把 OBJ 的 position / normal / uv 送進 VS</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a>、<a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a></td></tr>
+<tr><td>VAO / VBO / attribute</td><td>把 OBJ 的 position / uv 送進 VS</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a>、<a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a></td></tr>
 <tr><td>Draw call</td><td><code>glDrawArrays(GL_TRIANGLES, …)</code> 畫每個部位</td><td><a href="05-vertex-draw.html#modes">Primitive 模式</a>、<a href="05-vertex-draw.html#elements">DrawArrays vs DrawElements</a></td></tr>
 <tr><td>Transformation、MVP</td><td>P、V、每個部位的 M</td><td><a href="01-pipeline.html#space">座標空間與 MVP</a>、<a href="01-pipeline.html#math">必要數學</a></td></tr>
 <tr><td>GLM</td><td><code>translate / rotate / scale / perspective / lookAt</code></td><td><a href="02-project-syntax.html#glm">GLM 速查</a></td></tr>
@@ -120,17 +120,15 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 <details><summary>VAO 存了什麼？為什麼每個 mesh 一個 VAO？</summary>
 <p>VAO 記錄 attribute 設定（哪個 location 從哪個 VBO、什麼格式、stride、offset 讀）以及 element buffer 綁定。每個 mesh 一個 VAO，畫的時候 <code>glBindVertexArray</code> 一行就切換全部設定。</p></details>
 <details><summary>uniform 和 vertex attribute 差在哪？</summary>
-<p>attribute 每個頂點不同（position、normal、uv），從 VBO 讀；uniform 在一次 draw call 內所有頂點相同（M、V、P、顏色、sampler），用 <code>glUniform*</code> 設定，要先 <code>glUseProgram</code>。</p></details>
+<p>attribute 每個頂點不同（position、uv），從 VBO 讀；uniform 在一次 draw call 內所有頂點相同（M、V、P、顏色、sampler），用 <code>glUniform*</code> 設定，要先 <code>glUseProgram</code>。</p></details>
 <details><summary>沒開 depth test 會怎樣？為什麼每幀要 clear depth？</summary>
 <p>沒開：後畫的永遠蓋掉先畫的，背後的腿可能畫在身體前面。不 clear depth：上一幀的深度殘留，新畫面大部分 fragment 被判定「比較遠」而丟掉 → 畫面殘缺或全空。</p></details>
 <details><summary><code>stbi_set_flip_vertically_on_load(true)</code> 為什麼需要？</summary>
 <p>圖檔第一列是影像<b>最上面</b>，OpenGL texture 的 v=0 是<b>最下面</b>。不翻轉的話貼圖上下顛倒。</p></details>
 <details><summary>VS 輸出的 <code>gl_Position</code> 在哪個空間？之後誰做 perspective divide？</summary>
 <p>Clip space。之後 fixed function 的 primitive assembly / clipping 做除以 w 得到 NDC，再經 viewport transform 到 screen。</p></details>
-<details><summary>法向量為什麼要乘 <code>transpose(inverse(M))</code>？</summary>
-<p>M 有非等比 scale 時，直接乘 M 的法向量不再垂直表面。用 normal matrix（M 左上 3×3 的反轉置）才正確。只有旋轉 + 等比縮放時可以直接用 M。</p></details>
 <details><summary>動畫為什麼用 <code>glfwGetTime()</code> 的時間差，而不是每幀 +1？</summary>
-<p>每幀 +1 的速度跟 FPS 綁在一起，換台電腦（或關掉 vsync）動畫速度就不同。用經過時間 × 速度，任何 FPS 下速度都一樣；暫停 = 不累加時間。</p></details>
+<p>每幀 +1 的速度跟 FPS 綁在一起，換台電腦（或關掉 vsync）動畫速度就不同。用經過的時間累加，任何 FPS 下速度都一樣；暫停 = 不累加時間。</p></details>
 
 <!-- ================================================================ -->
 <h2 id="files">4. 提供的檔案</h2>
@@ -159,14 +157,14 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 </div>
 
 <h3>OBJ 檔（Assignment - 01 Appendix）</h3>
-<p class="mut">全部都有 position / uv（vt）/ normal（vn）、都是三角形面。都以原點為中心 → 用 scale 調整大小、用 translate 移動。</p>
+<p class="mut">全部都有 position / uv（vt）/ normal（vn）、都是三角形面（本作業只用 position 和 uv）。都以原點為中心 → 用 scale 調整大小、用 translate 移動。</p>
 <table>
 <tr><th>檔案</th><th>Bounding box</th><th>頂點（v / vt / vn）</th><th>三角形</th><th>適合拿來做</th></tr>
 <tr><td><code>Cube.obj</code></td><td>x,y,z ∈ [−0.5, 0.5]（邊長 1）</td><td>24 / 24 / 24</td><td>12</td><td>torso、方形手腳、底座</td></tr>
 <tr><td><code>Sphere.obj</code></td><td>x,y,z ∈ [−0.5, 0.5]（直徑 1）</td><td>515 / 515 / 515</td><td>768</td><td>頭、關節球、眼睛</td></tr>
 <tr><td><code>Cylinder.obj</code></td><td>x,z ∈ [−0.5, 0.5]、<b>y ∈ [−1, 1]（高 2）</b></td><td>88 / 88 / 88</td><td>80</td><td>手臂、腿、脖子</td></tr>
 <tr><td><code>Capsule.obj</code></td><td>x,z ∈ [−0.5, 0.5]、<b>y ∈ [−1, 1]（高 2）</b></td><td>550 / 550 / 550</td><td>832</td><td>圓潤的手臂、腿</td></tr>
-<tr><td><code>Plane.obj</code></td><td>x,z ∈ [−5, 5]、y = 0</td><td>121 / 121 / 121</td><td>200</td><td>地板</td></tr>
+<tr><td><code>Plane.obj</code></td><td>x,z ∈ [−5, 5]、y = 0</td><td>121 / 121 / 121</td><td>200</td><td>地板（本作業未使用）</td></tr>
 </table>
 <div class="note">Cylinder / Capsule 高度是 2（不是 1）。想要長度 L 的手臂：<code>scale(…, glm::vec3(粗, L/2, 粗))</code>，再往下平移 <code>L/2</code> 讓頂端對齊關節。</div>
 
@@ -223,11 +221,12 @@ drawPart(capsule, glm::scale(glm::translate(arm2, glm::vec3(0, -0.4f, 0)),
 <tr><td>工作目錄</td><td>相對路徑以專案根目錄為準。VS / Xcode 已設定好；Linux 要在專案根目錄執行 <code>./build/CG2025</code>。讀檔失敗要印錯誤訊息，不然只會黑畫面。</td></tr>
 <tr><td>Depth</td><td><code>glEnable(GL_DEPTH_TEST)</code> + 每幀 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>（template 只清 color）。</td></tr>
 <tr><td>Viewport</td><td>template 在 <code>on_display()</code> <b>之後</b>才 <code>glViewport</code>；建議把 <code>glfwGetFramebufferSize</code> + <code>glViewport</code> 移到畫機器人之前，並用同一組寬高算 projection 的 aspect。</td></tr>
+<tr><td>ImGui 鍵盤導覽</td><td>template 開了 <code>ImGuiConfigFlags_NavEnableKeyboard</code>：點過選單後 ImGui 會佔住鍵盤（<code>WantCaptureKeyboard</code> 為真），WASD 失效到點一下畫面為止。用不到就拿掉這行。</td></tr>
 <tr><td>GLSL 版本</td><td>template 用 OpenGL 4.1 core → shader 開頭 <code>#version 410 core</code>（macOS 最高 4.1）。</td></tr>
 <tr><td>旋轉單位</td><td>GLM 全部用弧度：<code>glm::radians(deg)</code>。</td></tr>
 <tr><td>貼圖</td><td>OBJ 都有 uv；記得 <code>stbi_set_flip_vertically_on_load(true)</code>、<code>stbi_load(..., 4)</code> 配 <code>GL_RGBA</code>、<code>glActiveTexture</code> + <code>glUniform1i(sampler, unit)</code>。圖檔放 <code>assets/</code>。</td></tr>
 <tr><td>動畫</td><td>用時間差累加 <code>animTime</code>；暫停 = 不累加。角度用 <code>sin(animTime * 頻率)</code> 做週期擺動，左右手腳相位相反。</td></tr>
-<tr><td>Uniform location</td><td><code>glGetUniformLocation</code> 回傳 −1 代表名字打錯或該 uniform 被 compiler 優化掉（shader 裡沒用到）。</td></tr>
+<tr><td>Uniform location</td><td>同講義 Spinning Cube：link 完呼叫一次 <code>glGetUniformLocation</code>，存成全域變數（如 <code>locM</code>）重複使用。回傳 −1 代表名字打錯或該 uniform 被 compiler 優化掉（shader 裡沒用到）。</td></tr>
 <tr><td>Shader 錯誤</td><td>一定要檢查 <code>GL_COMPILE_STATUS</code> / <code>GL_LINK_STATUS</code> 並印 info log，見 <a href="02-project-syntax.html#shader">Shader Program</a>。</td></tr>
 <tr><td>AI 註明</td><td>AI 產生的片段在程式碼加註解標明；交之前每一行都要能解釋（Demo 30%）。</td></tr>
 </table>
@@ -285,30 +284,35 @@ glEnable(GL_DEPTH_TEST);</code></pre>
 <div class="grid2">
 <div><b>shaders/robot.vs.glsl</b><pre><code>#version 410 core
 layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aUV;
+layout(location = 1) in vec2 aUV;
 uniform mat4 uP, uV, uM;
-out vec3 vNormal;
 out vec2 vUV;
 void main() {
-    vNormal = mat3(transpose(inverse(uM))) * aNormal;
     vUV = aUV;
     gl_Position = uP * uV * uM * vec4(aPos, 1.0);
 }</code></pre></div>
 <div><b>shaders/robot.fs.glsl</b><pre><code>#version 410 core
-in vec3 vNormal;
 in vec2 vUV;
 uniform vec3 uColor;
 uniform bool uUseTex;
 uniform sampler2D uTex;
 out vec4 fragColor;
 void main() {
-    vec3 base = uUseTex ? texture(uTex, vUV).rgb : uColor;
-    float d = max(dot(normalize(vNormal),
-                      normalize(vec3(0.4, 1.0, 0.6))), 0.0);
-    fragColor = vec4(base * (0.25 + 0.75 * d), 1.0);
+    if (uUseTex)
+        fragColor = texture(uTex, vUV);
+    else
+        fragColor = vec4(uColor, 1.0);
 }</code></pre></div></div>
-<p>讀檔 → <code>glCreateShader</code> → <code>glShaderSource</code> → <code>glCompileShader</code>（檢查 log）→ <code>glCreateProgram</code> → attach → <code>glLinkProgram</code>（檢查 log）。完整流程見 <a href="02-project-syntax.html#shader">Shader Program 建立流程</a>。光照是加分用的簡單 diffuse，可以只輸出 <code>uColor</code>。</p>
+<p>讀檔 → <code>glCreateShader</code> → <code>glShaderSource</code> → <code>glCompileShader</code>（檢查 log）→ <code>glCreateProgram</code> → attach → <code>glLinkProgram</code>（檢查 log）。完整流程見 <a href="02-project-syntax.html#shader">Shader Program 建立流程</a>。link 完接著取 uniform location（同講義，只取一次）：</p>
+<pre><code>GLint locP, locV, locM, locColor, locUseTex, locTex;   <span class="c">// 全域</span>
+
+<span class="c">// main()：createProgram 之後</span>
+locP = glGetUniformLocation(program, "uP");
+locV = glGetUniformLocation(program, "uV");
+locM = glGetUniformLocation(program, "uM");
+locColor  = glGetUniformLocation(program, "uColor");
+locUseTex = glGetUniformLocation(program, "uUseTex");
+locTex    = glGetUniformLocation(program, "uTex");</code></pre>
 <pre><code>std::string readFile(const char* path) {
 	std::ifstream f(path);
 	if (!f) fprintf(stderr, "cannot open %s (working dir?)\n", path);
@@ -334,49 +338,46 @@ Mesh loadObj(const char* path)
 		fprintf(stderr, "LoadObj failed: %s %s\n", path, err.c_str());
 		return {};
 	}
-	std::vector&lt;float&gt; data;                       <span class="c">// interleaved: pos(3) normal(3) uv(2)</span>
+	std::vector&lt;float&gt; data;                       <span class="c">// interleaved: pos(3) uv(2)</span>
 	for (const auto&amp; s : shapes)
 		for (const auto&amp; idx : s.mesh.indices) {      <span class="c">// 每個 index = 三角形的一個角</span>
 			for (int k = 0; k &lt; 3; ++k) data.push_back(attrib.vertices[3 * idx.vertex_index + k]);
-			for (int k = 0; k &lt; 3; ++k) data.push_back(attrib.normals[3 * idx.normal_index + k]);
 			for (int k = 0; k &lt; 2; ++k) data.push_back(attrib.texcoords[2 * idx.texcoord_index + k]);
 		}
 	Mesh m;
-	m.count = (GLsizei)(data.size() / 8);
+	m.count = (GLsizei)(data.size() / 5);
 	glGenVertexArrays(1, &amp;m.vao);
 	glBindVertexArray(m.vao);
 	glGenBuffers(1, &amp;m.vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
 	glBufferData(GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
-	GLsizei stride = 8 * sizeof(float);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+	GLsizei stride = 5 * sizeof(float);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);                     <span class="c">// position</span>
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));   <span class="c">// uv</span>
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
-	glEnableVertexAttribArray(2);
 	glBindVertexArray(0);
 	return m;
 }</code></pre>
 <ul>
-<li>OBJ 的 v / vt / vn 各自有獨立 index，所以這裡把每個角展開成一筆完整頂點、用 <code>glDrawArrays</code>。這 5 個檔都有 vn、vt；換成別的 OBJ 要先檢查 <code>normal_index / texcoord_index</code> 是否 ≥ 0。</li>
+<li>OBJ 的 v / vt 各自有獨立 index，所以這裡把每個角展開成一筆完整頂點、用 <code>glDrawArrays</code>。沒做光照就不需要 normal（vn）。換成別的 OBJ 要先檢查 <code>texcoord_index</code> 是否 ≥ 0。</li>
 <li>stride / offset 怎麼算見 <a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a>。</li>
-<li>實測頂點數：Cube 36、Sphere 2304、Capsule 2496、Plane 600。</li>
+<li>實測頂點數：Cube 36、Sphere 2304、Capsule 2496。</li>
 </ul>
-<pre><code>Mesh cube, sphere, capsule, plane;
+<pre><code>Mesh cube, sphere, capsule, cylinder;
 <span class="c">// main()，GLAD 初始化之後</span>
-cube    = loadObj("assets/Cube.obj");
-sphere  = loadObj("assets/Sphere.obj");
-capsule = loadObj("assets/Capsule.obj");
-plane   = loadObj("assets/Plane.obj");</code></pre>
+cube     = loadObj("assets/Cube.obj");
+sphere   = loadObj("assets/Sphere.obj");
+capsule  = loadObj("assets/Capsule.obj");
+cylinder = loadObj("assets/Cylinder.obj");</code></pre>
 <p><b>驗收</b>：印出 <code>cube.count</code> = 36。</p></details>
 
 <details class="step" id="s4"><summary><input type="checkbox"><span>4. 相機（P、V）+ 畫第一個部位</span></summary>
 <pre><code>void drawPart(const Mesh&amp; m, const glm::mat4&amp; M, glm::vec3 color, bool useTex = false)
 {
-	glUniformMatrix4fv(glGetUniformLocation(program, "uM"), 1, GL_FALSE, glm::value_ptr(M));
-	glUniform3fv(glGetUniformLocation(program, "uColor"), 1, glm::value_ptr(color));
-	glUniform1i(glGetUniformLocation(program, "uUseTex"), useTex);
+	glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(M));
+	glUniform3fv(locColor, 1, glm::value_ptr(color));
+	glUniform1i(locUseTex, useTex);
 	glBindVertexArray(m.vao);
 	glDrawArrays(GL_TRIANGLES, 0, m.count);
 }
@@ -384,9 +385,9 @@ plane   = loadObj("assets/Plane.obj");</code></pre>
 <span class="c">// on_display(w, h)</span>
 glUseProgram(program);
 glm::mat4 P = glm::perspective(glm::radians(45.0f), (float)w / (float)h, 0.1f, 100.0f);
-glm::mat4 V = glm::lookAt(glm::vec3(0, 1.5f, 7), glm::vec3(0, 0.5f, 0), glm::vec3(0, 1, 0));
-glUniformMatrix4fv(glGetUniformLocation(program, "uP"), 1, GL_FALSE, glm::value_ptr(P));
-glUniformMatrix4fv(glGetUniformLocation(program, "uV"), 1, GL_FALSE, glm::value_ptr(V));
+glm::mat4 V = glm::lookAt(glm::vec3(0, 3.2f, 9), glm::vec3(0, 2.5f, 0), glm::vec3(0, 1, 0));   <span class="c">// 固定相機</span>
+glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(P));
+glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(V));
 drawPart(cube, glm::mat4(1.0f), glm::vec3(0.2f, 0.3f, 0.8f));</code></pre>
 <p><b>驗收</b>：畫面中央一個藍色方塊。黑畫面 / 看不到 → 對照 <a href="02-project-syntax.html#pit">黑畫面檢查表</a>。</p></details>
 
@@ -402,12 +403,12 @@ drawPart(cube, glm::mat4(1.0f), glm::vec3(0.2f, 0.3f, 0.8f));</code></pre>
 
 <details class="step" id="s6"><summary><input type="checkbox"><span>6. 動畫（牽動所有部位）</span></summary>
 <pre><code>bool playing = true;
-int animMode = 0;            <span class="c">// 0 = walk, 1 = wave ...</span>
-float speed = 1.0f, animTime = 0.0f;
+int animMode = 0;            <span class="c">// 0 = walk, 1 = wave, 2 = jump</span>
+float animTime = 0.0f;
 
 <span class="c">// main loop，每幀</span>
 double now = glfwGetTime();
-if (playing) animTime += (float)(now - last) * speed;
+if (playing) animTime += (float)(now - last);
 last = now;
 
 <span class="c">// on_display：用 animTime 算各關節角度</span>
@@ -419,57 +420,57 @@ float swing = 0.6f * s;                        <span class="c">// 左手 / 右�
 <details class="step" id="s7"><summary><input type="checkbox"><span>7. ImGui 選單：播放 / 暫停 / 切換動畫</span></summary>
 <pre><code>void on_gui()
 {
-	ImGui::Begin("Robot");
-	ImGui::Checkbox("Play", &amp;playing);
-	const char* modes[] = { "Walk", "Wave" };
-	ImGui::Combo("Animation", &amp;animMode, modes, IM_ARRAYSIZE(modes));
-	ImGui::SliderFloat("Speed", &amp;speed, 0.0f, 3.0f);
-	if (ImGui::Button("Reset")) { robotPos = glm::vec3(0); robotYaw = 0; }
+	ImGui::Begin("Robot Control", nullptr, ImGuiWindowFlags_AlwaysAutoResize);   <span class="c">// 大小貼合內容</span>
+	ImGui::Checkbox("Play animation", &amp;playing);                <span class="c">// 開始 / 暫停</span>
+	const char* modes[] = { "Walk", "Wave", "Jump" };
+	ImGui::Combo("Animation", &amp;animMode, modes, IM_ARRAYSIZE(modes));   <span class="c">// 切換動畫</span>
 	ImGui::End();
 }</code></pre>
-<p>template 已經在 main loop 中呼叫 <code>on_gui()</code>，只要改這個函式。更多元件看 <code>ImGui::ShowDemoWindow()</code> 和 <code>imgui_demo.cpp</code>。</p>
+<p>template 已經在 main loop 中呼叫 <code>on_gui()</code>，只要改這個函式。評分只要求「開始 / 暫停或切換動畫」，這兩個元件就夠了。</p>
 <p><b>驗收</b>：取消勾選 Play 動畫停住；切換 Combo 換動作。</p></details>
 
 <details class="step" id="s8"><summary><input type="checkbox"><span>8. 鍵盤 / 滑鼠控制位置與旋轉</span></summary>
 <pre><code>glm::vec3 robotPos(0.0f);
 float robotYaw = 0.0f;
 bool dragging = false;
-double lastX = 0;
+double lastMouseX = 0.0;
 
-void key_callback(GLFWwindow*, int key, int, int action, int)
+<span class="c">// 鍵盤：每幀檢查（glfwGetKey），按住就持續移動，乘 dt 和 FPS 無關</span>
+void processInput(GLFWwindow* window, float dt)
 {
-	if (ImGui::GetIO().WantCaptureKeyboard || action == GLFW_RELEASE) return;
-	if (key == GLFW_KEY_W) robotPos.z -= 0.1f;
-	if (key == GLFW_KEY_S) robotPos.z += 0.1f;
-	if (key == GLFW_KEY_A) robotPos.x -= 0.1f;
-	if (key == GLFW_KEY_D) robotPos.x += 0.1f;
-	if (key == GLFW_KEY_Q) robotYaw += 0.1f;
-	if (key == GLFW_KEY_E) robotYaw -= 0.1f;
-	if (key == GLFW_KEY_SPACE &amp;&amp; action == GLFW_PRESS) playing = !playing;
+	if (ImGui::GetIO().WantCaptureKeyboard) return;
+	float move = 2.0f * dt, turn = 2.0f * dt;
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) robotPos.z -= move;
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) robotPos.z += move;
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) robotPos.x -= move;
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) robotPos.x += move;
+	if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) robotYaw += turn;
+	if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) robotYaw -= turn;
+}
+<span class="c">// main loop 每幀：processInput(window, dt);</span>
+
+<span class="c">// 滑鼠：左鍵按下開始拖曳、放開結束</span>
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+	if (action == GLFW_RELEASE) { dragging = false; return; }
+	if (ImGui::GetIO().WantCaptureMouse) return;   <span class="c">// 在選單上就不轉機器人</span>
+	dragging = true;
+	double y;
+	glfwGetCursorPos(window, &amp;lastMouseX, &amp;y);
 }
 
-void mouse_button_callback(GLFWwindow* w, int button, int action, int)
+void cursor_pos_callback(GLFWwindow* window, double x, double y)
 {
-	if (ImGui::GetIO().WantCaptureMouse) return;
-	if (button == GLFW_MOUSE_BUTTON_LEFT) {
-		dragging = action == GLFW_PRESS;
-		double y; glfwGetCursorPos(w, &amp;lastX, &amp;y);
-	}
-}
-
-void cursor_pos_callback(GLFWwindow*, double x, double)
-{
-	if (!dragging) return;
-	robotYaw += (float)(x - lastX) * 0.01f;      <span class="c">// 左右拖曳 = 轉身</span>
-	lastX = x;
+	if (dragging) robotYaw += (float)(x - lastMouseX) * 0.01f;   <span class="c">// 左右拖曳 = 轉身</span>
+	lastMouseX = x;
 }
 
 <span class="c">// main()：在 ImGui_ImplGlfw_InitForOpenGL(window, true) 之前</span>
-glfwSetKeyCallback(window, key_callback);
 glfwSetMouseButtonCallback(window, mouse_button_callback);
 glfwSetCursorPosCallback(window, cursor_pos_callback);</code></pre>
 <p>Torso 的矩陣從 <code>translate(robotPos)</code> + <code>rotate(robotYaw)</code> 開始，整隻機器人就跟著動。</p>
-<p><b>驗收</b>：WASD 移動、QE / 拖曳轉身；在 ImGui 視窗上拖曳<b>不會</b>轉到機器人；ImGui 滑桿仍可操作。</p></details>
+<p><b>驗收</b>：按住 WASD 移動、QE / 左鍵拖曳轉身；在 ImGui 視窗上拖曳<b>不會</b>轉到機器人；選單仍可操作。</p></details>
 
 <details class="step" id="s9"><summary><input type="checkbox"><span>9. 貼圖（至少一個部位）</span></summary>
 <pre><code>#define STB_IMAGE_IMPLEMENTATION
@@ -494,8 +495,8 @@ GLuint loadTexture(const char* path)
 
 <span class="c">// on_display，畫之前</span>
 glActiveTexture(GL_TEXTURE0);
-glBindTexture(GL_TEXTURE_2D, bodyTex);
-glUniform1i(glGetUniformLocation(program, "uTex"), 0);
+glBindTexture(GL_TEXTURE_2D, chestTex);
+glUniform1i(locTex, 0);
 drawPart(cube, glm::scale(torso, glm::vec3(1.0f, 1.4f, 0.6f)), color, true);   <span class="c">// useTex = true</span></code></pre>
 <p>圖片放 <code>assets/</code>（png / jpg 皆可）。講義版本用 <code>memcpy</code> 複製到自己的 struct，概念相同，見 <a href="02-project-syntax.html#stb">stb_image</a>。</p>
 <p><b>驗收</b>：torso 上看得到圖片且方向正確（不上下顛倒）。</p></details>
@@ -517,23 +518,22 @@ drawPart(cube, glm::scale(torso, glm::vec3(1.0f, 1.4f, 0.6f)), color, true);   <
 
 <!-- ================================================================ -->
 <h2 id="api">8. 用到的 API</h2>
-<p class="mut">作業裡用到的 85 個函式（含 template 已寫好的部分），依類別 / 步驟排列。點名稱跳到 <a href="04-api.html">API 參考</a> 的說明（簽名、參數、範例、官方文件）。</p>
+<p class="mut">作業裡用到的 74 個函式（含 template 已寫好的部分），依類別 / 步驟排列。點名稱跳到 <a href="04-api.html">API 參考</a> 的說明（簽名、參數、範例、官方文件）。</p>
 <table>
 <tr><th style="width:24%">類別 / 用在哪</th><th>函式</th></tr>
 <tr><td><b>GLFW：視窗與主迴圈</b><br><span class="mut">步驟 0–1（template 已寫）</span></td><td class="apil"><div><a href="04-api.html#glfwSetErrorCallback"><code>glfwSetErrorCallback</code></a> <span class="mut">印出 GLFW 錯誤</span></div><div><a href="04-api.html#glfwInit"><code>glfwInit</code></a> <span class="mut">初始化</span></div><div><a href="04-api.html#glfwWindowHint"><code>glfwWindowHint</code></a> <span class="mut">要求 OpenGL 4.1 core</span></div><div><a href="04-api.html#glfwCreateWindow"><code>glfwCreateWindow</code></a> <span class="mut">建視窗</span></div><div><a href="04-api.html#glfwMakeContextCurrent"><code>glfwMakeContextCurrent</code></a> <span class="mut">設定 context</span></div><div><a href="04-api.html#glfwSwapInterval"><code>glfwSwapInterval</code></a> <span class="mut">vsync</span></div><div><a href="04-api.html#glfwWindowShouldClose"><code>glfwWindowShouldClose</code></a> <span class="mut">迴圈條件</span></div><div><a href="04-api.html#glfwPollEvents"><code>glfwPollEvents</code></a> <span class="mut">處理事件</span></div><div><a href="04-api.html#glfwGetWindowAttrib"><code>glfwGetWindowAttrib</code></a> <span class="mut">最小化時跳過</span></div><div><a href="04-api.html#glfwGetFramebufferSize"><code>glfwGetFramebufferSize</code></a> <span class="mut">視窗大小 → viewport、aspect</span></div><div><a href="04-api.html#glfwSwapBuffers"><code>glfwSwapBuffers</code></a> <span class="mut">顯示這一幀</span></div><div><a href="04-api.html#glfwDestroyWindow"><code>glfwDestroyWindow</code></a> <span class="mut">結束</span></div><div><a href="04-api.html#glfwTerminate"><code>glfwTerminate</code></a> <span class="mut">結束</span></div></td></tr>
 <tr><td><b>GLAD</b><br><span class="mut">步驟 1（要自己補）</span></td><td class="apil"><div><a href="04-api.html#gladLoadGLLoader"><code>gladLoadGLLoader</code></a> <span class="mut">載入 OpenGL 函式，context 建好之後</span></div></td></tr>
 <tr><td><b>Shader</b><br><span class="mut">步驟 2</span></td><td class="apil"><div><a href="04-api.html#glCreateShader"><code>glCreateShader</code></a> <span class="mut">建 shader</span></div><div><a href="04-api.html#glShaderSource"><code>glShaderSource</code></a> <span class="mut">放原始碼</span></div><div><a href="04-api.html#glCompileShader"><code>glCompileShader</code></a> <span class="mut">編譯</span></div><div><a href="04-api.html#glGetShaderiv"><code>glGetShaderiv</code></a> <span class="mut">查編譯結果</span></div><div><a href="04-api.html#glGetShaderInfoLog"><code>glGetShaderInfoLog</code></a> <span class="mut">錯誤訊息</span></div><div><a href="04-api.html#glCreateProgram"><code>glCreateProgram</code></a> <span class="mut">建 program</span></div><div><a href="04-api.html#glAttachShader"><code>glAttachShader</code></a> <span class="mut">掛上 shader</span></div><div><a href="04-api.html#glLinkProgram"><code>glLinkProgram</code></a> <span class="mut">連結</span></div><div><a href="04-api.html#glGetProgramiv"><code>glGetProgramiv</code></a> <span class="mut">查連結結果</span></div><div><a href="04-api.html#glDeleteShader"><code>glDeleteShader</code></a> <span class="mut">連結後刪 shader</span></div><div><a href="04-api.html#glUseProgram"><code>glUseProgram</code></a> <span class="mut">畫之前啟用</span></div></td></tr>
 <tr><td><b>OBJ 載入</b><br><span class="mut">步驟 3</span></td><td class="apil"><div><a href="04-api.html#tinyobj::LoadObj"><code>tinyobj::LoadObj</code></a> <span class="mut">讀 OBJ（attrib / shapes / index_t）</span></div></td></tr>
-<tr><td><b>VAO / VBO</b><br><span class="mut">步驟 3</span></td><td class="apil"><div><a href="04-api.html#glGenVertexArrays"><code>glGenVertexArrays</code></a> <span class="mut">建 VAO</span></div><div><a href="04-api.html#glBindVertexArray"><code>glBindVertexArray</code></a> <span class="mut">綁定 / 畫之前切換 mesh</span></div><div><a href="04-api.html#glGenBuffers"><code>glGenBuffers</code></a> <span class="mut">建 VBO</span></div><div><a href="04-api.html#glBindBuffer"><code>glBindBuffer</code></a> <span class="mut">綁定 VBO</span></div><div><a href="04-api.html#glBufferData"><code>glBufferData</code></a> <span class="mut">上傳頂點資料</span></div><div><a href="04-api.html#glVertexAttribPointer"><code>glVertexAttribPointer</code></a> <span class="mut">描述 pos / normal / uv 格式</span></div><div><a href="04-api.html#glEnableVertexAttribArray"><code>glEnableVertexAttribArray</code></a> <span class="mut">啟用 attribute</span></div></td></tr>
-<tr><td><b>Uniform</b><br><span class="mut">步驟 4–9</span></td><td class="apil"><div><a href="04-api.html#glGetUniformLocation"><code>glGetUniformLocation</code></a> <span class="mut">找 uniform 位置</span></div><div><a href="04-api.html#glUniformMatrix4fv"><code>glUniformMatrix4fv</code></a> <span class="mut">傳 P、V、M</span></div><div><a href="04-api.html#glUniform1f"><code>glUniform1i / glUniform3fv</code></a> <span class="mut">傳 bool、sampler、顏色</span></div></td></tr>
+<tr><td><b>VAO / VBO</b><br><span class="mut">步驟 3</span></td><td class="apil"><div><a href="04-api.html#glGenVertexArrays"><code>glGenVertexArrays</code></a> <span class="mut">建 VAO</span></div><div><a href="04-api.html#glBindVertexArray"><code>glBindVertexArray</code></a> <span class="mut">綁定 / 畫之前切換 mesh</span></div><div><a href="04-api.html#glGenBuffers"><code>glGenBuffers</code></a> <span class="mut">建 VBO</span></div><div><a href="04-api.html#glBindBuffer"><code>glBindBuffer</code></a> <span class="mut">綁定 VBO</span></div><div><a href="04-api.html#glBufferData"><code>glBufferData</code></a> <span class="mut">上傳頂點資料</span></div><div><a href="04-api.html#glVertexAttribPointer"><code>glVertexAttribPointer</code></a> <span class="mut">描述 pos / uv 格式</span></div><div><a href="04-api.html#glEnableVertexAttribArray"><code>glEnableVertexAttribArray</code></a> <span class="mut">啟用 attribute</span></div></td></tr>
+<tr><td><b>Uniform</b><br><span class="mut">步驟 4–9</span></td><td class="apil"><div><a href="04-api.html#glGetUniformLocation"><code>glGetUniformLocation</code></a> <span class="mut">link 後取一次 uniform 位置</span></div><div><a href="04-api.html#glUniformMatrix4fv"><code>glUniformMatrix4fv</code></a> <span class="mut">傳 P、V、M</span></div><div><a href="04-api.html#glUniform1f"><code>glUniform1i / glUniform3fv</code></a> <span class="mut">傳 bool、sampler、顏色</span></div></td></tr>
 <tr><td><b>繪製與狀態</b><br><span class="mut">步驟 1、4</span></td><td class="apil"><div><a href="04-api.html#glClearColor"><code>glClearColor</code></a> <span class="mut">背景色</span></div><div><a href="04-api.html#glClear"><code>glClear</code></a> <span class="mut">清 color + depth</span></div><div><a href="04-api.html#glEnable"><code>glEnable</code></a> <span class="mut">GL_DEPTH_TEST</span></div><div><a href="04-api.html#glViewport"><code>glViewport</code></a> <span class="mut">繪製範圍</span></div><div><a href="04-api.html#glDrawArrays"><code>glDrawArrays</code></a> <span class="mut">畫每個部位</span></div></td></tr>
-<tr><td><b>GLM：矩陣</b><br><span class="mut">步驟 4–5、8</span></td><td class="apil"><div><a href="04-api.html#glm::perspective"><code>glm::perspective</code></a> <span class="mut">P</span></div><div><a href="04-api.html#glm::lookAt"><code>glm::lookAt</code></a> <span class="mut">V</span></div><div><a href="04-api.html#glm::translate"><code>glm::translate</code></a> <span class="mut">移到關節 / 位置</span></div><div><a href="04-api.html#glm::rotate"><code>glm::rotate</code></a> <span class="mut">關節旋轉、轉身</span></div><div><a href="04-api.html#glm::scale"><code>glm::scale</code></a> <span class="mut">部位大小（不傳給子節點）</span></div><div><a href="04-api.html#glm::radians"><code>glm::radians</code></a> <span class="mut">角度 → 弧度</span></div><div><a href="04-api.html#glm::value_ptr"><code>glm::value_ptr</code></a> <span class="mut">傳給 glUniformMatrix4fv</span></div><div><a href="04-api.html#glm::inverse"><code>glm::inverse / transpose</code></a> <span class="mut">normal matrix</span></div></td></tr>
-<tr><td><b>GLSL</b><br><span class="mut">步驟 2、9</span></td><td class="apil"><div><a href="04-api.html#gl_Position"><code>gl_Position</code></a> <span class="mut">VS 輸出 clip space 位置</span></div><div><a href="04-api.html#texture"><code>texture</code></a> <span class="mut">FS 取貼圖顏色</span></div><div><a href="04-api.html#normalize"><code>normalize</code></a> <span class="mut">光照方向</span></div><div><a href="04-api.html#dot"><code>dot</code></a> <span class="mut">diffuse 光照</span></div></td></tr>
+<tr><td><b>GLM：矩陣</b><br><span class="mut">步驟 4–5、8</span></td><td class="apil"><div><a href="04-api.html#glm::perspective"><code>glm::perspective</code></a> <span class="mut">P</span></div><div><a href="04-api.html#glm::lookAt"><code>glm::lookAt</code></a> <span class="mut">V</span></div><div><a href="04-api.html#glm::translate"><code>glm::translate</code></a> <span class="mut">移到關節 / 位置</span></div><div><a href="04-api.html#glm::rotate"><code>glm::rotate</code></a> <span class="mut">關節旋轉、轉身</span></div><div><a href="04-api.html#glm::scale"><code>glm::scale</code></a> <span class="mut">部位大小（不傳給子節點）</span></div><div><a href="04-api.html#glm::radians"><code>glm::radians</code></a> <span class="mut">角度 → 弧度</span></div><div><a href="04-api.html#glm::value_ptr"><code>glm::value_ptr</code></a> <span class="mut">傳給 glUniformMatrix4fv</span></div></td></tr>
+<tr><td><b>GLSL</b><br><span class="mut">步驟 2</span></td><td class="apil"><div><a href="04-api.html#gl_Position"><code>gl_Position</code></a> <span class="mut">VS 輸出 clip space 位置</span></div><div><a href="04-api.html#texture"><code>texture</code></a> <span class="mut">FS 取貼圖顏色</span></div></td></tr>
 <tr><td><b>動畫</b><br><span class="mut">步驟 6</span></td><td class="apil"><div><a href="04-api.html#glfwGetTime"><code>glfwGetTime</code></a> <span class="mut">經過時間 → 動畫角度</span></div></td></tr>
-<tr><td><b>ImGui</b><br><span class="mut">步驟 0、7（初始化 template 已寫）</span></td><td class="apil"><div><a href="04-api.html#ImGui::CreateContext"><code>ImGui::CreateContext</code></a> <span class="mut">建 context</span></div><div><a href="04-api.html#ImGui_ImplGlfw_InitForOpenGL"><code>ImGui_ImplGlfw_InitForOpenGL</code></a> <span class="mut">接 GLFW（自己的 callback 要先設）</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_Init"><code>ImGui_ImplOpenGL3_Init</code></a> <span class="mut">接 OpenGL</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_NewFrame"><code>NewFrame ×3</code></a> <span class="mut">每幀開始</span></div><div><a href="04-api.html#ImGui::Begin"><code>ImGui::Begin / End</code></a> <span class="mut">開視窗</span></div><div><a href="04-api.html#ImGui::Checkbox"><code>ImGui::Checkbox</code></a> <span class="mut">Play / Pause</span></div><div><a href="04-api.html#ImGui::Combo"><code>ImGui::Combo</code></a> <span class="mut">切換動畫</span></div><div><a href="04-api.html#ImGui::SliderFloat"><code>ImGui::SliderFloat</code></a> <span class="mut">速度</span></div><div><a href="04-api.html#ImGui::Button"><code>ImGui::Button</code></a> <span class="mut">Reset</span></div><div><a href="04-api.html#ImGui::Text"><code>ImGui::Text</code></a> <span class="mut">操作說明</span></div><div><a href="04-api.html#ImGui::ColorEdit3"><code>ImGui::ColorEdit3</code></a> <span class="mut">選顏色（選用）</span></div><div><a href="04-api.html#ImGui::Render"><code>ImGui::Render / RenderDrawData</code></a> <span class="mut">畫出 UI</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_Shutdown"><code>Shutdown / DestroyContext</code></a> <span class="mut">結束</span></div></td></tr>
-<tr><td><b>鍵盤 / 滑鼠</b><br><span class="mut">步驟 8</span></td><td class="apil"><div><a href="04-api.html#glfwSetKeyCallback"><code>glfwSetKeyCallback</code></a> <span class="mut">WASD / QE</span></div><div><a href="04-api.html#glfwSetMouseButtonCallback"><code>glfwSetMouseButtonCallback</code></a> <span class="mut">按下開始拖曳</span></div><div><a href="04-api.html#glfwSetCursorPosCallback"><code>glfwSetCursorPosCallback</code></a> <span class="mut">拖曳轉身</span></div><div><a href="04-api.html#glfwGetCursorPos"><code>glfwGetCursorPos</code></a> <span class="mut">記錄起點</span></div><div><a href="04-api.html#glfwSetScrollCallback"><code>glfwSetScrollCallback</code></a> <span class="mut">滾輪縮放（選用）</span></div><div><a href="04-api.html#glfwGetKey"><code>glfwGetKey</code></a> <span class="mut">輪詢按鍵（選用，按住連續移動）</span></div><div><a href="04-api.html#ImGui::GetIO"><code>ImGui::GetIO</code></a> <span class="mut">WantCaptureMouse / Keyboard</span></div></td></tr>
+<tr><td><b>ImGui</b><br><span class="mut">步驟 0、7（初始化 template 已寫）</span></td><td class="apil"><div><a href="04-api.html#ImGui::CreateContext"><code>ImGui::CreateContext</code></a> <span class="mut">建 context</span></div><div><a href="04-api.html#ImGui_ImplGlfw_InitForOpenGL"><code>ImGui_ImplGlfw_InitForOpenGL</code></a> <span class="mut">接 GLFW（自己的 callback 要先設）</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_Init"><code>ImGui_ImplOpenGL3_Init</code></a> <span class="mut">接 OpenGL</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_NewFrame"><code>NewFrame ×3</code></a> <span class="mut">每幀開始</span></div><div><a href="04-api.html#ImGui::Begin"><code>ImGui::Begin / End</code></a> <span class="mut">開視窗</span></div><div><a href="04-api.html#ImGui::Checkbox"><code>ImGui::Checkbox</code></a> <span class="mut">Play / Pause</span></div><div><a href="04-api.html#ImGui::Combo"><code>ImGui::Combo</code></a> <span class="mut">切換動畫</span></div><div><a href="04-api.html#ImGui::Render"><code>ImGui::Render / RenderDrawData</code></a> <span class="mut">畫出 UI</span></div><div><a href="04-api.html#ImGui_ImplOpenGL3_Shutdown"><code>Shutdown / DestroyContext</code></a> <span class="mut">結束</span></div></td></tr>
+<tr><td><b>鍵盤 / 滑鼠</b><br><span class="mut">步驟 8</span></td><td class="apil"><div><a href="04-api.html#glfwSetMouseButtonCallback"><code>glfwSetMouseButtonCallback</code></a> <span class="mut">按下開始拖曳</span></div><div><a href="04-api.html#glfwSetCursorPosCallback"><code>glfwSetCursorPosCallback</code></a> <span class="mut">拖曳轉身</span></div><div><a href="04-api.html#glfwGetCursorPos"><code>glfwGetCursorPos</code></a> <span class="mut">記錄起點</span></div><div><a href="04-api.html#glfwGetKey"><code>glfwGetKey</code></a> <span class="mut">按住 WASD / QE 移動、轉向</span></div><div><a href="04-api.html#ImGui::GetIO"><code>ImGui::GetIO</code></a> <span class="mut">WantCaptureMouse / Keyboard</span></div></td></tr>
 <tr><td><b>貼圖</b><br><span class="mut">步驟 9</span></td><td class="apil"><div><a href="04-api.html#stbi_set_flip_vertically_on_load"><code>stbi_set_flip_vertically_on_load</code></a> <span class="mut">上下翻轉</span></div><div><a href="04-api.html#stbi_load"><code>stbi_load</code></a> <span class="mut">讀圖</span></div><div><a href="04-api.html#stbi_image_free"><code>stbi_image_free</code></a> <span class="mut">釋放</span></div><div><a href="04-api.html#glGenTextures"><code>glGenTextures</code></a> <span class="mut">建 texture</span></div><div><a href="04-api.html#glBindTexture"><code>glBindTexture</code></a> <span class="mut">綁定</span></div><div><a href="04-api.html#glTexImage2D"><code>glTexImage2D</code></a> <span class="mut">上傳圖片</span></div><div><a href="04-api.html#glTexParameteri"><code>glTexParameteri</code></a> <span class="mut">filter / wrap</span></div><div><a href="04-api.html#glGenerateMipmap"><code>glGenerateMipmap</code></a> <span class="mut">mipmap</span></div><div><a href="04-api.html#glActiveTexture"><code>glActiveTexture</code></a> <span class="mut">選 texture unit</span></div></td></tr>
-<tr><td><b>除錯</b><br><span class="mut">隨時</span></td><td class="apil"><div><a href="04-api.html#glGetError"><code>glGetError</code></a> <span class="mut">檢查錯誤碼</span></div><div><a href="04-api.html#glGetString"><code>glGetString</code></a> <span class="mut">印 OpenGL 版本 / 顯卡</span></div></td></tr>
 </table>
 
 <!-- ================================================================ -->
