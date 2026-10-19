@@ -45,3 +45,13 @@ ol.steps>li{margin:6px 0}
 .ex{border:1px solid #d9e2d0;background:#f6faf2;border-radius:8px;padding:8px 14px;margin:10px 0}
 .ex>b:first-child{color:var(--prog)}
 .ex pre{margin:6px 0}
+.sbox{margin-left:auto;position:relative}
+.sbox input{font:inherit;font-size:13px;padding:4px 10px;width:200px;border:1px solid var(--line);border-radius:14px;background:#fafaf8}
+.sbox input:focus{outline:2px solid var(--acc);background:#fff;width:260px}
+.sres{position:absolute;right:0;top:34px;width:min(560px,92vw);max-height:70vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:20}
+.sres a{display:block;padding:7px 12px;border-bottom:1px solid #f0f0ec;color:var(--fg);text-decoration:none;font-size:13px}
+.sres a.sel,.sres a:hover{background:#eef4ff}
+.sres .pg{font-size:11px;color:#fff;background:var(--mut);border-radius:8px;padding:0 7px;margin-left:4px}
+.sres .sn{color:var(--mut);font-size:12px;line-height:1.5;margin-top:2px;word-break:break-all}
+.sres .more{padding:8px 12px;color:var(--mut);font-size:12px}
+.sres mark{background:#fde68a;color:inherit;border-radius:2px}
