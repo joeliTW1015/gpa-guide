@@ -205,21 +205,53 @@ M<sub>draw</sub>  = M<sub>joint</sub> * T(0, -半長, 0) * S(粗, 半長, 粗)  
 </div>
 
 <h3>對應到 3D 程式</h3>
-<pre><code><span class="c">// 往下傳的是「關節矩陣」，畫自己時另外乘 offset + scale</span>
-glm::mat4 torso = glm::translate(glm::mat4(1.0f), robotPos);
-torso = glm::rotate(torso, robotYaw, glm::vec3(0, 1, 0));
-drawPart(cube, glm::scale(torso, glm::vec3(1.0f, 1.4f, 0.6f)), color);      <span class="c">// scale 只給自己</span>
+<p>每個部位都會用到<b>兩種矩陣</b>，分清楚就不會錯：</p>
+<table>
+<tr><th style="width:18%">矩陣</th><th>內容</th><th style="width:30%">用途</th></tr>
+<tr><td><b>關節矩陣</b></td><td>父的關節矩陣 × T(關節位置) × R(關節角度)</td><td><b>往下傳給子部位</b>當 parent</td></tr>
+<tr><td><b>繪製矩陣</b></td><td>關節矩陣 × T(往下移半截) × S(部位大小)</td><td><b>只拿來畫自己</b>，不往下傳</td></tr>
+</table>
+<p class="mut">scale 只出現在繪製矩陣，所以不會傳給子部位；這就是「scale 不能傳給子節點」的做法。</p>
 
-glm::mat4 arm1 = glm::translate(torso, glm::vec3(-0.65f, 0.6f, 0));       <span class="c">// 移到肩膀</span>
-arm1 = glm::rotate(arm1, angleArm1, glm::vec3(1, 0, 0));                   <span class="c">// 繞肩膀轉</span>
-drawPart(capsule, glm::scale(glm::translate(arm1, glm::vec3(0, -0.4f, 0)),  <span class="c">// 往下長半截</span>
-                             glm::vec3(0.25f, 0.4f, 0.25f)), color);       <span class="c">// Capsule 高 2 → 0.4 倍 = 0.8</span>
+<p>以下用作業程式的實際數字（Torso → 左上臂 → 左前臂），把 <code>main.cpp</code> 的 <code>jointMatrix</code> / <code>drawPart</code> 展開成 glm 寫法：</p>
+<pre><code><span class="c">// ① Torso（root）：沒有 parent，從單位矩陣開始</span>
+glm::mat4 torso = glm::mat4(1.0f);
+torso = glm::translate(torso, robotPos + glm::vec3(0, 2.26f, 0));   <span class="c">// 放到世界中的位置（WASD 控制）</span>
+torso = glm::rotate(torso, robotYaw, glm::vec3(0, 1, 0));            <span class="c">// 整隻轉向（QE / 滑鼠控制）</span>
+<span class="c">//   （main.cpp 這裡還會再乘上動畫的身體傾斜 p.torso，這裡省略）</span>
+<span class="c">//   畫身體：Cube 邊長 1 → 縮放成 1.1 × 1.2 × 0.6</span>
+drawPart(cube, glm::scale(torso, glm::vec3(1.1f, 1.2f, 0.6f)), BODY_COLOR);
 
-glm::mat4 arm2 = glm::translate(arm1, glm::vec3(0, -0.8f, 0));            <span class="c">// 手肘：用 arm1，不是畫 arm1 的那個矩陣</span>
-arm2 = glm::rotate(arm2, angleArm2, glm::vec3(1, 0, 0));
-drawPart(capsule, glm::scale(glm::translate(arm2, glm::vec3(0, -0.4f, 0)),
-                             glm::vec3(0.22f, 0.4f, 0.22f)), color);</code></pre>
-<p class="mut"><code>glm::translate(m, v)</code> = <code>m * T(v)</code>（右乘），所以一路寫下來就是 <code>M<sub>torso</sub> * M<sub>arm1</sub> * M<sub>arm2</sub></code>。也可以用 <code>std::stack&lt;glm::mat4&gt;</code> 做 push / pop，概念一樣。</p>
+<span class="c">// ② 左上臂（L1 Arm）：parent = torso 的「關節矩陣」</span>
+glm::mat4 arm1 = glm::translate(torso, glm::vec3(-0.7f, 0.45f, 0));  <span class="c">// 關節位置 = 肩膀（相對於 torso 中心）</span>
+arm1 = glm::rotate(arm1, angleArm1, glm::vec3(1, 0, 0));             <span class="c">// 繞肩膀前後擺（繞 x 軸）</span>
+<span class="c">//   畫上臂：長 0.6。Capsule 高 2、中心在原點 → y 縮放 0.3 變成高 0.6，</span>
+<span class="c">//   再往下移 0.3（半個長度），頂端才剛好接在肩膀上</span>
+glm::mat4 arm1Draw = glm::translate(arm1, glm::vec3(0, -0.3f, 0));
+arm1Draw = glm::scale(arm1Draw, glm::vec3(0.22f, 0.3f, 0.22f));
+drawPart(capsule, arm1Draw, ARM_COLOR);
+
+<span class="c">// ③ 左前臂（L2 Arm）：parent = arm1（關節矩陣），不是 arm1Draw！</span>
+glm::mat4 arm2 = glm::translate(arm1, glm::vec3(0, -0.6f, 0));      <span class="c">// 關節位置 = 手肘 = 上臂末端（往下一整個長度）</span>
+arm2 = glm::rotate(arm2, angleArm2, glm::vec3(1, 0, 0));             <span class="c">// 繞手肘彎曲</span>
+glm::mat4 arm2Draw = glm::translate(arm2, glm::vec3(0, -0.3f, 0));
+arm2Draw = glm::scale(arm2Draw, glm::vec3(0.198f, 0.3f, 0.198f));   <span class="c">// 比上臂細一點（0.22 × 0.9）</span>
+drawPart(capsule, arm2Draw, ARM_COLOR);</code></pre>
+
+<table>
+<tr><th>變數</th><th>等於（矩陣乘法）</th><th>說明</th></tr>
+<tr><td><code>torso</code></td><td>T(位置) · R<sub>y</sub>(yaw)</td><td>= 講義的 M<sub>torso</sub></td></tr>
+<tr><td><code>arm1</code></td><td>M<sub>torso</sub> · T(肩膀) · R(angleArm1)</td><td>= M<sub>torso</sub> · M<sub>arm1</sub></td></tr>
+<tr><td><code>arm2</code></td><td>M<sub>torso</sub> · M<sub>arm1</sub> · T(手肘) · R(angleArm2)</td><td>= M<sub>torso</sub> · M<sub>arm1</sub> · M<sub>arm2</sub></td></tr>
+<tr><td><code>arm2Draw</code></td><td><code>arm2</code> · T(0, −0.3, 0) · S(0.198, 0.3, 0.198)</td><td>只用來畫前臂</td></tr>
+</table>
+<ul>
+<li><b>為什麼一路寫下來就是矩陣連乘？</b><code>glm::translate(m, v)</code>、<code>glm::rotate(m, …)</code>、<code>glm::scale(m, …)</code> 都是「<b>m 乘上新矩陣</b>」（新矩陣乘在右邊）。所以從 torso 開始一行一行往下寫，結果自動是 M<sub>torso</sub> · M<sub>arm1</sub> · M<sub>arm2</sub>。</li>
+<li><b>為什麼 torso 一動整隻手跟著動？</b>arm1、arm2 都是從 <code>torso</code> 乘出來的，torso 改了，它們全部跟著改。</li>
+<li><b>常見錯誤：</b>把 <code>arm1Draw</code>（含 scale）當成 arm2 的 parent → 前臂被上臂的 scale 壓扁、手肘位置跑掉。在上面互動圖選「scale 傳給子節點」可以看到。</li>
+<li><b>和 <code>main.cpp</code> 的對應：</b><code>jointMatrix(parent, 位置, 角度)</code> = 上面的 translate + rotate；<code>drawPart(mesh, joint, offset, size, …)</code> = 上面的 translate(offset) + scale(size) + 畫。</li>
+<li>也可以用 <code>std::stack&lt;glm::mat4&gt;</code>：進入子部位前 push 目前矩陣、畫完 pop 回來，概念相同；本作業直接用變數保存各關節矩陣，比較好讀。</li>
+</ul>
 
 <!-- ================================================================ -->
 <h2 id="notes">6. 實作須知</h2>
