@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fragment Shader 與 Framebuffer</title><link rel="stylesheet" href="style.css">
+<style>
+canvas{border:1px solid var(--line);border-radius:6px;background:#fff}
+.sw{display:inline-block;width:56px;height:40px;border-radius:6px;border:1px solid #999;vertical-align:middle}
+.blendRow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px}
+.blendRow select{font:inherit;font-size:12px}
+#bfTbl tr.on td{background:#fde7b6}
+#fboSteps button{margin:2px}
+.kgrid{display:inline-grid;gap:2px;vertical-align:top}
+.kgrid div{width:22px;height:22px;font:10px ui-monospace,monospace;display:flex;align-items:center;justify-content:center;background:#dbeafe;border-radius:3px}
+.kgrid div.c{background:#f6ad55}
+.qbar{display:flex;height:26px;border:1px solid #999;border-radius:4px;overflow:hidden;font:11px ui-monospace,monospace}
+.qbar div{flex:1;display:flex;align-items:center;justify-content:center;border-right:1px solid #fff;color:#fff;text-shadow:0 0 2px #000}
+svg text{font-family:system-ui,sans-serif}
+.hl rect.box{transition:fill .2s}
+</style></head>
+<body><main>
+<h1>Fragment Shader 與 Framebuffer</h1>
+<p class="mut">對應講義 06（Fragment Processing and Frame buffer）。重點：fragment shader 前後的處理（per-sample tests、blending）、fragment shader 本身、用 framebuffer object（FBO）做 off-screen rendering 與後製。</p>
+<div class="toc"><a href="#overview">總覽</a><a href="#fs">Fragment Shader</a><a href="#persample">Per-Sample Processing</a><a href="#blend">Blending</a><a href="#order">透明物件順序</a><a href="#offscreen">Off-Screen Rendering</a><a href="#fbo">FBO 結構</a><a href="#cube">範例：Spinning Cube → FBO</a><a href="#fboapi">FBO API</a><a href="#mrt">Multiple Render Targets</a><a href="#post">影像後製</a><a href="#smooth">smoothstep</a><a href="#sprite">Point Sprites</a><a href="#errata">講義程式小錯</a></div>
+
+<div class="note"><b>講義的程式碼區塊顏色</b>：<span style="background:#fffbcc;padding:0 4px">黃色</span> = Application（CPU，C++：建 context、管理 OpenGL 物件、產生 GPU 工作）；<span style="background:#dbeafe;padding:0 4px">藍色</span> = Shader（GPU，以 <code>#version 410 core</code> 開頭）。本頁的 code 以註解標示是 C++ 或 GLSL。</div>
+
+<!-- ============================================================ -->
+<h2 id="overview">總覽：Fragment 的位置</h2>
+<svg viewBox="0 0 960 120" style="width:100%" font-size="12" text-anchor="middle" id="pipeSvg"></svg>
+<p class="mut">綠 = programmable、橘 = optional programmable、灰 = fixed function。本講聚焦右邊三格：<b>Fragment Shader → Per-Sample Processing → Framebuffer</b>。完整 pipeline 見 <a href="01-pipeline.html#pipeline">Rendering Pipeline</a>。</p>
+
+<!-- ============================================================ -->
+<h2 id="fs">Fragment Shader Stage</h2>
+<div class="grid2">
+<div class="card"><b>特性</b>
+<ul><li><b>最後一個</b> programmable stage</li>
+<li>rasterizer 產生的<b>每個 fragment 執行一次</b></li>
+<li>看不到旁邊的 fragment，彼此<b>平行</b>執行</li></ul></div>
+<div class="card"><b>做什麼</b>
+<ul><li>決定像素的<b>顏色</b></li>
+<li>執行頻率遠高於前面的 stage（1080p ≈ 200 萬像素，頂點可能才幾千個）</li>
+<li>大部分「細節」在這裡加：<b>光照計算</b>、<b>貼圖取樣</b></li></ul></div>
+</div>
+<div class="ex"><b>範例：最簡單的 fragment shader（講義 Spinning Cube）</b>
+<pre><code><span class="c">// GLSL：vertex shader 用 interface block 傳顏色</span>
+#version 410 core
+in vec4 position;
+out VS_OUT { vec4 color; } vs_out;
+uniform mat4 mv_matrix;
+uniform mat4 proj_matrix;
+void main(void) {
+    gl_Position = proj_matrix * mv_matrix * position;
+    vs_out.color = position * 2.0 + vec4(0.5, 0.5, 0.5, 0.0);   <span class="c">// 用位置當顏色</span>
+}
+
+<span class="c">// GLSL：fragment shader，block 名稱要相同（VS_OUT），變數名可不同（vs_out / fs_in）</span>
+#version 410 core
+in VS_OUT { vec4 color; } fs_in;
+out vec4 color;                    <span class="c">// 輸出到 framebuffer 的 color attachment 0</span>
+void main(void) {
+    color = fs_in.color;           <span class="c">// 已被 rasterizer 內插過</span>
+}</code></pre></div>
+
+<!-- ============================================================ -->
+<h2 id="persample">Per-Sample Processing</h2>
+<p>fragment 寫入 framebuffer 前的<b>最後一關</b>（fixed function），做三種測試：</p>
+<svg viewBox="0 0 960 110" style="width:100%" font-size="13" text-anchor="middle">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<g stroke="#999"><rect x="10" y="30" width="120" height="44" rx="8" fill="#c6f0d6"/><rect x="170" y="30" width="130" height="44" rx="8" fill="#e5e7eb"/><rect x="340" y="30" width="130" height="44" rx="8" fill="#e5e7eb"/><rect x="510" y="30" width="130" height="44" rx="8" fill="#e5e7eb"/><rect x="680" y="30" width="120" height="44" rx="8" fill="#fde7b6"/><rect x="840" y="30" width="110" height="44" rx="8" fill="#dbeafe"/></g>
+<text x="70" y="57">Fragment Shader</text><text x="235" y="50">Scissor Test</text><text x="235" y="66" font-size="11" fill="#666">在矩形範圍內？</text>
+<text x="405" y="50">Stencil Test</text><text x="405" y="66" font-size="11" fill="#666">比對 stencil 值</text>
+<text x="575" y="50">Depth Test</text><text x="575" y="66" font-size="11" fill="#666">比較近？</text>
+<text x="740" y="50">Blending</text><text x="740" y="66" font-size="11" fill="#666">（若 GL_BLEND 開）</text><text x="895" y="57">Framebuffer</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)"><path d="M130 52h38"/><path d="M300 52h38"/><path d="M470 52h38"/><path d="M640 52h38"/><path d="M800 52h38"/></g>
+<g fill="#c53030" font-size="11"><text x="235" y="96">失敗 → 丟棄</text><text x="405" y="96">失敗 → 丟棄</text><text x="575" y="96">失敗 → 丟棄</text></g>
+</svg>
+<p class="mut">全部通過才寫入 framebuffer；有開 blending 就先和 framebuffer 既有顏色混合再寫入。Depth test 的互動示範見 <a href="01-pipeline.html#persample">Rendering Pipeline</a>。</p>
+
+<!-- ============================================================ -->
+<h2 id="blend">Blending</h2>
+<h3>Opacity 與 Transparency</h3>
+<table>
+<tr><th>表面</th><th>光線</th><th>alpha（opacity）</th></tr>
+<tr><td>Opaque（不透明）</td><td>完全不透光</td><td>a = 1</td></tr>
+<tr><td>Transparent（全透明）</td><td>全部透過</td><td>a = 0</td></tr>
+<tr><td>Translucent（半透明）</td><td>部分透過</td><td>translucency = 1 − a</td></tr>
+</table>
+<p class="mut">物理上正確的半透明很難：光和物質的內部交互複雜，而且 pipeline renderer 一次只處理一個 fragment。所以 OpenGL 用簡化的「寫入模型」。</p>
+
+<h3>寫入模型（Writing Model）</h3>
+<svg viewBox="0 0 960 170" style="width:100%" font-size="13" text-anchor="middle">
+<g stroke="#999"><rect x="20" y="20" width="150" height="46" rx="8" fill="#c6f0d6"/><rect x="230" y="20" width="190" height="46" rx="8" fill="#fde7b6"/>
+<rect x="20" y="104" width="150" height="46" rx="8" fill="#dbeafe"/><rect x="230" y="104" width="190" height="46" rx="8" fill="#fde7b6"/>
+<circle cx="520" cy="85" r="34" fill="#e9d5ff"/><rect x="620" y="62" width="160" height="46" rx="8" fill="#dbeafe"/></g>
+<text x="95" y="40">Source</text><text x="95" y="57" font-size="11" fill="#666">fragment shader 輸出</text>
+<text x="325" y="40">Source blending factor</text><text x="325" y="57" font-size="11" fill="#666">s = (sr, sg, sb, sa)</text>
+<text x="95" y="124">Destination</text><text x="95" y="141" font-size="11" fill="#666">framebuffer 既有顏色</text>
+<text x="325" y="124">Destination blending factor</text><text x="325" y="141" font-size="11" fill="#666">d = (dr, dg, db, da)</text>
+<text x="520" y="82">Blend</text><text x="520" y="98" font-size="11">b⊙s + c⊙d</text><text x="700" y="90">Color Buffer</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)" fill="none"><path d="M170 43h58"/><path d="M170 127h58"/><path d="M420 43 Q470 43 495 62"/><path d="M420 127 Q470 127 495 108"/><path d="M554 85h64"/><path d="M700 108 Q700 160 170 140" stroke-dasharray="4 3"/></g>
+<text x="830" y="160" font-size="11" fill="#666">寫回後成為下一次的 destination</text>
+</svg>
+<div class="card">
+<p>RGBA 的 <b>A</b> 存 opacity。source 顏色 <b>b</b> = (br, bg, bb, ba)、destination 顏色 <b>c</b> = (cr, cg, cb, ca)，每個分量各自乘上 factor 再相加（⊙ = 逐分量相乘）：</p>
+<p style="text-align:center;font:15px ui-monospace,monospace">c′ = b ⊙ s + c ⊙ d = (br·sr + cr·dr, bg·sg + cg·dg, bb·sb + cb·db, ba·sa + ca·da)</p>
+<pre><code><span class="c">// C++：要先開 blending，再選 factor</span>
+glEnable(GL_BLEND);
+glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);   <span class="c">// (sfactor, dfactor)</span></code></pre>
+</div>
+
+<h3>Blending Factor 表 + 計算器</h3>
+<p class="mut">選 sfactor / dfactor 和兩個顏色，看結果。表中對應的列會標亮。Output = Src_color × sfactor + Dst_color × dfactor（結果超過 1 會被 clamp）。</p>
+<div class="grid2">
+<table id="bfTbl"><tr><th>Blending Factor Enum</th><th>factor (R, G, B, A)</th></tr></table>
+<div>
+<div class="blendRow">
+<span>Destination <input type="color" id="bDst" value="#ff0000"> α <input type="range" id="bDa" min="0" max="100" value="100" style="width:70px"><span id="bDaV"></span></span>
+<span>Source <input type="color" id="bSrc" value="#00ff00"> α <input type="range" id="bSa" min="0" max="100" value="70" style="width:70px"><span id="bSaV"></span></span>
+</div>
+<div class="blendRow" style="margin-top:6px"><label><input type="checkbox" id="bOn" checked> glEnable(GL_BLEND)</label>
+sfactor <select id="bSf"></select> dfactor <select id="bDf"></select></div>
+<div class="ctrl">預設：<button class="b" data-p="off">關閉 blending</button><button class="b" data-p="add">ONE, ONE（粒子）</button><button class="b" data-p="sa1">SRC_ALPHA, ONE</button><button class="b" data-p="std">SRC_ALPHA, ONE_MINUS_SRC_ALPHA（最常用）</button></div>
+<div class="blendRow" style="margin:10px 0"><span>Dst <span class="sw" id="swD"></span></span><span>Src <span class="sw" id="swS"></span></span><span>⇒ 結果 <span class="sw" id="swR" style="width:80px"></span></span></div>
+<div class="card" id="bOut" style="font:13px/1.7 ui-monospace,monospace"></div>
+</div></div>
+<div class="ex"><b>講義的三個例子</b>（Dst = 紅 (1,0,0,1)、Src = 綠）
+<table><tr><th>設定</th><th>Src</th><th>結果</th><th>用途</th></tr>
+<tr><td><code>glDisable(GL_BLEND)</code></td><td>(0,1,0,1)</td><td>(0,1,0,1) 直接覆蓋</td><td>不透明物體</td></tr>
+<tr><td><code>glBlendFunc(GL_ONE, GL_ONE)</code></td><td>(0,1,0,1)</td><td>(1,1,0,1) 相加 → 黃</td><td>粒子（越疊越亮）</td></tr>
+<tr><td><code>glBlendFunc(GL_SRC_ALPHA, GL_ONE)</code></td><td>(0,1,0,0.7)</td><td>(1,0.7,0,1)</td><td>加亮但依 alpha 減弱</td></tr>
+<tr><td><code>glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)</code></td><td>(0,1,0,0.7)</td><td>(0.3,0.7,0,1)*</td><td><b>最常用</b>：一般半透明</td></tr>
+</table>
+<p class="mut">* 講義只看 RGB。glBlendFunc 對 alpha 也用同一組 factor：0.7×0.7 + 1×0.3 = 0.79，所以計算器顯示 A = 0.79。要讓 alpha 用不同規則可用 <code>glBlendFuncSeparate</code>。</p></div>
+
+<!-- ============================================================ -->
+<h2 id="order">透明物件的順序（Object Ordering）</h2>
+<p>畫半透明物件<b>最重要的是順序</b>：depth test 開著時，先畫近的半透明物件會把深度寫進去，後畫的遠物件被 depth test 丟掉 → 透明物體「後面」的東西消失。</p>
+<div class="grid2">
+<div><canvas id="ordCv" width="420" height="230"></canvas>
+<div class="ctrl"><button class="b on" data-o="bad">近 → 遠（錯）</button><button class="b" data-o="good">遠 → 近（對）</button></div></div>
+<div class="card"><b>處理透明物件的步驟</b>
+<ol><li>先畫<b>所有不透明</b>物件</li><li>把透明物件依<b>深度排序</b>（離相機遠的先）</li><li>依排序結果由遠到近畫透明物件</li></ol>
+<p class="mut">互相穿插的兩片（A 一部分在 B 前、一部分在 B 後）沒有正確的整體順序 → rasterization renderer 處理透明度先天困難。</p>
+<p><b>Order Independent Transparency（OIT）</b>：記錄<b>所有</b> fragment → 每個像素自己排序後再混合；做法之一是在 GPU 上為每個像素建 linked list（參考：<i>Order Independent Transparency in OpenGL 4.x</i>）。</p></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="offscreen">Off-Screen Rendering</h2>
+<ul>
+<li>OpenGL 允許你建立<b>自己的 framebuffer</b>，直接畫進 <b>texture</b>。</li>
+<li>這些 texture 可以再拿去畫別的東西或做<b>後製</b>。</li>
+<li>現代即時渲染<b>極重要</b>的技術，<b>期末專題會用到</b>。</li>
+</ul>
+<table>
+<tr><th>用途</th><th>說明</th></tr>
+<tr><td>FXAA</td><td>Fast approXimate Anti-Aliasing：在最終影像上找邊緣再模糊</td></tr>
+<tr><td>Screen-space 技術</td><td>SSR（Reflection）、SSAO（Ambient Occlusion）、SSGI（Global Illumination）、SSSSS（SubSurface Scattering）</td></tr>
+<tr><td>Post-processing</td><td>灰階、模糊、色彩量化、邊緣偵測…（見 <a href="#post">影像後製</a>）</td></tr>
+<tr><td>Deferred shading</td><td>先把 position / normal / albedo 寫到多張 texture（G-buffer），再一次算光照</td></tr>
+<tr><td>Shadow mapping</td><td>先從光源視角畫深度到 texture，再用它判斷陰影</td></tr>
+</table>
+
+<h3>為什麼 FBO 有幫助</h3>
+<svg viewBox="0 0 960 220" style="width:100%" font-size="13" text-anchor="middle">
+<text x="10" y="22" text-anchor="start" font-weight="600" fill="#c53030">以前：唯一的 framebuffer 是螢幕</text>
+<g stroke="#999"><rect x="20" y="36" width="130" height="44" rx="8" fill="#c6f0d6"/><rect x="220" y="36" width="150" height="44" rx="8" fill="#dbeafe"/><rect x="450" y="36" width="190" height="44" rx="8" fill="#fecaca"/><rect x="720" y="36" width="150" height="44" rx="8" fill="#dbeafe"/></g>
+<text x="85" y="63">Render（GPU）</text><text x="295" y="63">Screen</text><text x="545" y="55">讀回 CPU 再處理</text><text x="545" y="71" font-size="11" fill="#666">glReadPixels，很慢</text><text x="795" y="63">Screen</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)"><path d="M150 58h68"/><path d="M370 58h78"/><path d="M640 58h78"/></g>
+<text x="10" y="122" text-anchor="start" font-weight="600" fill="#2f855a">現在：有 FBO</text>
+<g stroke="#999"><rect x="20" y="136" width="130" height="44" rx="8" fill="#c6f0d6"/><rect x="220" y="136" width="150" height="44" rx="8" fill="#fde7b6"/><rect x="450" y="136" width="190" height="44" rx="8" fill="#c6f0d6"/><rect x="720" y="136" width="150" height="44" rx="8" fill="#dbeafe"/></g>
+<text x="85" y="163">Render（GPU）</text><text x="295" y="155">FBO texture</text><text x="295" y="171" font-size="11" fill="#666">資料留在 GPU 記憶體</text><text x="545" y="163">Post-processing（GPU）</text><text x="795" y="163">Screen</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)"><path d="M150 158h68"/><path d="M370 158h78"/><path d="M640 158h78"/></g>
+<text x="480" y="210" font-size="12" fill="#666">另一個好處：Multi-Render Target（MRT）一次畫到多張 texture（如 albedo、normal、metallic &amp; roughness）</text>
+</svg>
+
+<!-- ============================================================ -->
+<h2 id="fbo">Framebuffer Object（FBO）結構</h2>
+<div class="grid2">
+<svg viewBox="0 0 460 250" style="width:100%" font-size="13" text-anchor="middle">
+<rect x="10" y="85" width="120" height="70" rx="8" fill="#dbeafe" stroke="#999"/><text x="70" y="115">Framebuffer</text><text x="70" y="133" font-size="11" fill="#666">（容器，不存資料）</text>
+<rect x="300" y="20" width="150" height="70" rx="8" fill="#c6f0d6" stroke="#999"/><text x="375" y="47">Color</text><text x="375" y="64" font-size="11">Texture 或 Renderbuffer</text>
+<rect x="300" y="160" width="150" height="70" rx="8" fill="#fde7b6" stroke="#999"/><text x="375" y="187">Depth</text><text x="375" y="204" font-size="11">Renderbuffer</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)" fill="none"><path d="M130 105 L298 58"/><path d="M130 135 L298 192"/></g>
+<text x="200" y="66" font-size="11" fill="#2563eb">GL_COLOR_ATTACHMENT0</text><text x="205" y="192" font-size="11" fill="#2563eb">GL_DEPTH_ATTACHMENT</text>
+</svg>
+<div class="card">
+<ul>
+<li>FBO 定義 pipeline 的<b>輸出區域</b>，是一組 image 的集合，這些 image 叫 <b>attachment</b>：
+<ul><li><b>Color attachment</b>：顏色（RGB）輸出</li><li><b>Depth attachment</b>：depth test 用的深度</li><li>Stencil 等</li></ul></li>
+<li>建立視窗時 OS 會給一個<b>預設 framebuffer</b>，<b>ID = 0</b>（就是螢幕）；自己建的 FBO 從 <b>ID 1</b> 開始。</li>
+<li><b>Texture vs Renderbuffer</b>：要「之後拿來取樣」的（例如畫完要貼到螢幕）用 texture；只是讓 depth test 能運作、不需要讀的用 renderbuffer（RBO）。</li>
+</ul></div></div>
+
+<div class="warn"><b>FBO 不是 buffer object！</b>VBO（vertex buffer object）、UBO（uniform buffer object）是存資料的 buffer；FBO 是 OpenGL <b>object</b>，只記錄「attachment 接到哪些 image」，本身不存像素。</div>
+
+<h3>Attachment 種類</h3>
+<table>
+<tr><th>Attachment</th><th>接上的 image</th></tr>
+<tr><td><code>GL_COLOR_ATTACHMENTi</code></td><td>Color image（i = 0, 1, 2…，最多 <code>GL_MAX_COLOR_ATTACHMENTS</code>）</td></tr>
+<tr><td><code>GL_DEPTH_ATTACHMENT</code></td><td>Depth buffer</td></tr>
+<tr><td><code>GL_STENCIL_ATTACHMENT</code></td><td>Stencil buffer</td></tr>
+<tr><td><code>GL_DEPTH_STENCIL_ATTACHMENT</code></td><td>Depth 和 Stencil 合在一起</td></tr>
+</table>
+
+<h3>使用流程（和其他 OpenGL object 一樣）</h3>
+<ol class="steps">
+<li><code>glGenFramebuffers</code> 建立 FBO</li>
+<li><code>glBindFramebuffer</code> 綁定</li>
+<li>用 <code>glFramebufferTexture2D</code> / <code>glFramebufferRenderbuffer</code> 等設定 attachment</li>
+<li>要畫的時候再 <code>glBindFramebuffer</code> 把它接到 pipeline 輸出</li>
+<li>發出 draw call → 結果寫進 FBO 的 attachment</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="cube">範例：Spinning Cube 畫到 FBO 再貼到螢幕</h2>
+<p class="mut">點步驟看每一步做什麼、資料流到哪。兩個 draw call、兩個 program。</p>
+<div id="fboSteps" class="ctrl"></div>
+<div class="grid2">
+<svg id="fboSvg" viewBox="0 0 470 400" style="width:100%" font-size="12" text-anchor="middle"></svg>
+<div><div class="card" id="fboTxt"></div><pre><code id="fboCode"></code></pre></div>
+</div>
+
+<h3>全螢幕四邊形（Window Quad）的座標</h3>
+<div class="grid2">
+<svg viewBox="0 0 420 220" style="width:100%" font-size="12" text-anchor="middle">
+<rect x="20" y="20" width="170" height="170" fill="#dbeafe" stroke="#2563eb"/><text x="105" y="210">position（NDC）</text>
+<text x="20" y="14">(-1, 1)</text><text x="190" y="14">(1, 1)</text><text x="20" y="204" fill="#2563eb"></text>
+<text x="34" y="185">(-1,-1)</text><text x="172" y="185">(1,-1)</text>
+<rect x="230" y="20" width="170" height="170" fill="#c6f0d6" stroke="#2f855a"/><text x="315" y="210">texcoord</text>
+<text x="240" y="34">(0, 1)</text><text x="386" y="34">(1, 1)</text><text x="242" y="185">(0, 0)</text><text x="386" y="185">(1, 0)</text>
+<g fill="#c53030"><circle cx="190" cy="190" r="4"/><circle cx="20" cy="190" r="4"/><circle cx="20" cy="20" r="4"/><circle cx="190" cy="20" r="4"/></g>
+<g fill="#c53030" font-size="11"><text x="178" y="178">0</text><text x="30" y="170">1</text><text x="30" y="40">2</text><text x="178" y="40">3</text></g>
+</svg>
+<pre><code><span class="c">// C++：vec2 position, vec2 texcoord（interleaved，stride = 16 bytes）</span>
+static const GLfloat window_vertex[] = {
+     1.0f, -1.0f,   1.0f, 0.0f,     <span class="c">// 0 右下</span>
+    -1.0f, -1.0f,   0.0f, 0.0f,     <span class="c">// 1 左下</span>
+    -1.0f,  1.0f,   0.0f, 1.0f,     <span class="c">// 2 左上</span>
+     1.0f,  1.0f,   1.0f, 1.0f      <span class="c">// 3 右上</span>
+};
+glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat) * 4, 0);
+glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(GLfloat) * 4,
+                      (const GLvoid*)(sizeof(GLfloat) * 2));
+glEnableVertexAttribArray(0);
+glEnableVertexAttribArray(1);
+<span class="c">// 畫的時候：glDrawArrays(GL_TRIANGLE_FAN, 0, 4);</span></code></pre>
+</div>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Vertex Shader 2（直接輸出 NDC，不需要矩陣）</span>
+#version 410 core
+layout (location = 0) in vec2 position;
+layout (location = 1) in vec2 texcoord;
+out VS_OUT { vec2 texcoord; } vs_out;
+void main(void) {
+    gl_Position = vec4(position, 1.0, 1.0);
+    vs_out.texcoord = texcoord;
+}</code></pre>
+<pre><code><span class="c">// GLSL：Fragment Shader 2（把 FBO 的 texture 貼上）</span>
+#version 410 core
+uniform sampler2D tex;
+out vec4 color;
+in VS_OUT { vec2 texcoord; } fs_in;
+void main(void) {
+    color = texture(tex, fs_in.texcoord);
+}</code></pre></div>
+
+<details><summary>完整的 FBO 建立程式（講義 Set Up FBO）</summary>
+<pre><code><span class="c">// C++</span>
+GLuint fbo, depthrbo, fboDataTexture;
+
+glGenFramebuffers(1, &amp;fbo);                       <span class="c">// 1. 建 FBO</span>
+
+glGenRenderbuffers(1, &amp;depthrbo);                 <span class="c">// 2. 建 depth renderbuffer</span>
+glBindRenderbuffer(GL_RENDERBUFFER, depthrbo);
+glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32, window_width, window_height);
+
+glGenTextures(1, &amp;fboDataTexture);                <span class="c">// 3. 建 color texture（data = NULL：只配置空間）</span>
+glBindTexture(GL_TEXTURE_2D, fboDataTexture);
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, window_width, window_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);      <span class="c">// 4. 接上 attachment</span>
+glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthrbo);
+glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboDataTexture, 0);
+
+<span class="c">// 建議（講義沒寫）：檢查 FBO 是否完整</span>
+if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    printf("FBO incomplete\n");</code></pre>
+<p class="mut">視窗 resize 時，texture 和 renderbuffer 的大小要<b>重新配置</b>（再呼叫一次 <code>glTexImage2D</code> / <code>glRenderbufferStorage</code>），否則 FBO 解析度不會跟著變。</p>
+</details>
+
+<!-- ============================================================ -->
+<h2 id="fboapi">FBO 相關 API</h2>
+<p class="mut">點函式名看 <a href="04-api.html">API 參考</a> 的完整說明。</p>
+<table>
+<tr><th>函式</th><th>參數重點</th><th>做什麼</th></tr>
+<tr><td><a href="04-api.html#glGenFramebuffers"><code>glGenFramebuffers(n, ids)</code></a></td><td>n 個名字寫進 ids</td><td>產生 FBO 名字</td></tr>
+<tr><td><a href="04-api.html#glBindFramebuffer"><code>glBindFramebuffer(target, fbo)</code></a></td><td>target：<code>GL_DRAW_FRAMEBUFFER</code> / <code>GL_READ_FRAMEBUFFER</code> / <code>GL_FRAMEBUFFER</code>（兩者都綁）；fbo = 0 回到螢幕</td><td>綁定 FBO</td></tr>
+<tr><td><a href="04-api.html#glGenRenderbuffers"><code>glGenRenderbuffers(n, rbos)</code></a></td><td></td><td>產生 renderbuffer 名字</td></tr>
+<tr><td><a href="04-api.html#glBindRenderbuffer"><code>glBindRenderbuffer(GL_RENDERBUFFER, rbo)</code></a></td><td>target 必須是 <code>GL_RENDERBUFFER</code></td><td>綁定 renderbuffer</td></tr>
+<tr><td><a href="04-api.html#glRenderbufferStorage"><code>glRenderbufferStorage(target, internalformat, w, h)</code></a></td><td>internalformat 如 <code>GL_DEPTH_COMPONENT32</code></td><td>配置 renderbuffer 的儲存空間與格式</td></tr>
+<tr><td><a href="04-api.html#glFramebufferRenderbuffer"><code>glFramebufferRenderbuffer(target, attachment, GL_RENDERBUFFER, rbo)</code></a></td><td>attachment 如 <code>GL_DEPTH_ATTACHMENT</code></td><td>把 renderbuffer 接到目前 FBO（不能接到預設 framebuffer 0）</td></tr>
+<tr><td><a href="04-api.html#glFramebufferTexture2D"><code>glFramebufferTexture2D(target, attachment, textarget, tex, level)</code></a></td><td>textarget = <code>GL_TEXTURE_2D</code>；level = mipmap 層，必須 0</td><td>把 texture 接到目前 FBO</td></tr>
+<tr><td><a href="04-api.html#glFramebufferTexture"><code>glFramebufferTexture(target, attachment, tex, level)</code></a></td><td>不用指定 textarget</td><td>同上（MRT 範例使用）</td></tr>
+<tr><td><a href="04-api.html#glDrawBuffer"><code>glDrawBuffer(buf)</code></a></td><td>預設 FB：<code>GL_BACK</code> 等；FBO：<code>GL_COLOR_ATTACHMENTm</code> 或 <code>GL_NONE</code></td><td>指定 fragment 輸出寫到哪個 color buffer</td></tr>
+<tr><td><a href="04-api.html#glDrawBuffers"><code>glDrawBuffers(n, bufs)</code></a></td><td>bufs[i] 對應 shader 的 <code>layout(location = i) out</code></td><td>MRT：多個輸出各寫到哪個 attachment</td></tr>
+<tr><td><a href="04-api.html#glCheckFramebufferStatus"><code>glCheckFramebufferStatus(target)</code></a></td><td>回傳 <code>GL_FRAMEBUFFER_COMPLETE</code> 才可用</td><td>檢查 FBO 設定（講義未提，建議加）</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="mrt">Multiple Render Targets（MRT）</h2>
+<p>一個 FBO 可以接<b>多個 color attachment</b>，一個 fragment shader 同時寫進多張 texture。</p>
+<svg viewBox="0 0 960 200" style="width:100%" font-size="12" text-anchor="middle">
+<rect x="10" y="20" width="270" height="160" rx="8" fill="#dbeafe" stroke="#999"/><text x="145" y="40" font-weight="600">Fragment Shader</text>
+<g font-family="ui-monospace,monospace" font-size="11" text-anchor="start"><text x="24" y="72">layout(location = 0) out color_tex;</text><text x="24" y="112">layout(location = 1) out color_normal;</text><text x="24" y="152">layout(location = 2) out color_depth;</text></g>
+<rect x="360" y="20" width="230" height="160" rx="8" fill="#fde7b6" stroke="#999"/><text x="475" y="40" font-weight="600">glDrawBuffers(3, draw_buffers)</text>
+<g font-family="ui-monospace,monospace" font-size="11"><text x="475" y="72">[0] GL_COLOR_ATTACHMENT0</text><text x="475" y="112">[1] GL_COLOR_ATTACHMENT1</text><text x="475" y="152">[2] GL_COLOR_ATTACHMENT2</text></g>
+<g stroke="#999"><rect x="680" y="52" width="120" height="30" rx="5" fill="#c6f0d6"/><rect x="680" y="92" width="120" height="30" rx="5" fill="#c6f0d6"/><rect x="680" y="132" width="120" height="30" rx="5" fill="#c6f0d6"/></g>
+<text x="740" y="72">color_texture[0]</text><text x="740" y="112">color_texture[1]</text><text x="740" y="152">color_texture[2]</text>
+<text x="880" y="72">Color</text><text x="880" y="112">Normal</text><text x="880" y="152">Depth</text>
+<g stroke="#555" stroke-width="1.6" marker-end="url(#ar)"><path d="M280 68h78"/><path d="M280 108h78"/><path d="M280 148h78"/><path d="M590 68h88"/><path d="M590 108h88"/><path d="M590 148h88"/></g>
+</svg>
+<div class="grid2">
+<pre><code><span class="c">// C++：建 FBO + 3 張 texture</span>
+static const GLenum draw_buffers[] = {
+    GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+glGenFramebuffers(1, &amp;fbo);
+glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+glGenTextures(3, &amp;color_texture[0]);
+for (int i = 0; i &lt; 3; i++) {
+    glBindTexture(GL_TEXTURE_2D, color_texture[i]);
+    glTexStorage2D(GL_TEXTURE_2D, 9, GL_RGBA8, window_width, window_height);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture(GL_FRAMEBUFFER, draw_buffers[i], color_texture[i], 0);
+}
+glDrawBuffers(3, draw_buffers);   <span class="c">// 輸出 location i → draw_buffers[i]</span></code></pre>
+<pre><code><span class="c">// GLSL：一次寫三個輸出</span>
+#version 410 core
+uniform sampler2D tex;
+layout (location = 0) out vec4 color_tex;     <span class="c">// → ATTACHMENT0</span>
+layout (location = 1) out vec4 color_normal;  <span class="c">// → ATTACHMENT1</span>
+layout (location = 2) out vec4 color_depth;   <span class="c">// → ATTACHMENT2</span>
+in VS_OUT { vec2 texcoord; vec3 normal; } fs_in;
+void main(void) {
+    color_tex    = texture(tex, fs_in.texcoord).rgba;
+    color_normal = vec4(fs_in.normal, 1.0);
+    color_depth  = vec4(vec3(gl_FragCoord.z), 1.0);
+}</code></pre></div>
+<p class="mut"><code>glDrawBuffers</code>：location ≥ n 的輸出會被設為 <code>GL_NONE</code>，寫的值直接丟棄。<code>glTexStorage2D</code> 是 4.2+（macOS 4.1 改用 <code>glTexImage2D</code>）。</p>
+
+<!-- ============================================================ -->
+<h2 id="post">影像後製（Image Post-Processing using FBO）</h2>
+<p>流程：先把場景畫進 FBO texture → 再畫一個全螢幕四邊形，fragment shader 讀 texture 做處理 → 輸出到螢幕。每個像素在 GPU 上<b>平行</b>處理（對照 CPU 版需要兩層 for 迴圈逐像素跑）。</p>
+<p class="mut">下面用 JavaScript 在瀏覽器裡模擬同一份 shader 邏輯（每個像素跑一次 main）。調參數看效果，右邊是對應的 GLSL。</p>
+<div class="ctrl" id="ppBtns"></div>
+<div class="grid2">
+<div><canvas id="ppSrc" width="256" height="192" style="width:49%"></canvas> <canvas id="ppDst" width="256" height="192" style="width:49%"></canvas>
+<div class="mut">左：原圖（FBO texture）　右：後製結果</div>
+<div class="ctrl" id="ppCtrl"></div>
+<div id="ppExtra"></div></div>
+<div><div class="card" id="ppTxt"></div><pre><code id="ppCode"></code></pre></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="smooth">smoothstep</h2>
+<div class="grid2">
+<div><canvas id="ssCv" width="420" height="220"></canvas>
+<div class="ctrl">edge0 <input type="range" id="e0" min="-100" max="100" value="-50"><span id="e0V"></span> edge1 <input type="range" id="e1" min="-100" max="100" value="50"><span id="e1V"></span></div></div>
+<div class="card">
+<pre><code>genType smoothstep(genType edge0, genType edge1, genType x);</code></pre>
+<ul><li><b>edge0 / edge1</b>：Hermite 曲線的下 / 上邊界</li><li><b>x</b>：輸入值</li>
+<li>x ≤ edge0 → 0；x ≥ edge1 → 1；中間平滑過渡（兩端斜率為 0）</li></ul>
+<pre><code><span class="c">// 等價於</span>
+genType t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+return t * t * (3.0 - 2.0 * t);</code></pre>
+<p class="mut">藍 = smoothstep、灰虛線 = 線性 clamp。DoG 用它把邊緣值平滑地映射到黑白；星空範例用它讓小星星淡出。</p></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sprite">Point Sprites</h2>
+<div class="grid2">
+<div class="card">
+<ul><li>想畫很多帶貼圖的點做<b>粒子效果</b>。不用 point sprite 就得畫大量帶貼圖的四邊形。</li>
+<li>OpenGL 為 point 模式提供自動產生 texture coordinate 的機制 = <b>Point Sprites</b>。</li></ul>
+<b>使用步驟</b>
+<ol><li>啟用 <code>GL_POINT_SPRITE</code>（以及 <code>GL_PROGRAM_POINT_SIZE</code> 讓 shader 設定大小）</li>
+<li>用 <code>GL_POINTS</code> 模式畫</li>
+<li>fragment shader 從內建變數 <b><code>gl_PointCoord</code></b>（點內的 (0,0)~(1,1)）讀 texture coordinate</li></ol>
+<p class="mut">Core profile（3.2+）中 point sprite 永遠開著，<code>glEnable(GL_POINT_SPRITE)</code> 在 core profile 會產生 <code>GL_INVALID_ENUM</code>，可省略。</p></div>
+<div><canvas id="starCv" width="420" height="240" style="background:#000"></canvas>
+<div class="ctrl"><button class="b" id="starBtn">⏸ 暫停</button> 速度 <input type="range" id="starSpd" min="1" max="30" value="10"></div>
+<p class="mut">Flying Star Field 示意：每顆星 z 隨時間增加（fract 循環），越近越大（gl_PointSize = 20·z²）、用 smoothstep(1, 7, size) 淡入，加法混合（GL_ONE, GL_ONE）。</p></div>
+</div>
+<details><summary>Flying Star Field 程式（講義）</summary>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Vertex Shader</span>
+#version 410 core
+layout (location = 0) in vec3 position;   <span class="c">// camera space</span>
+layout (location = 1) in vec3 color;
+uniform float time;
+uniform mat4 proj_matrix;
+flat out vec4 starColor;
+void main(void) {
+    vec4 starPosition = vec4(position.xy, position.z + time, 1.0);
+    float starSize = 20.0 * starPosition.z * starPosition.z;
+    starColor = vec4(color * smoothstep(1.0, 7.0, starSize), 1.0);
+    starPosition.z = (999.9 * starPosition.z) - 1000.0;
+    gl_Position = proj_matrix * starPosition;
+    gl_PointSize = starSize;
+}</code></pre>
+<pre><code><span class="c">// GLSL：Fragment Shader</span>
+#version 410 core
+layout (location = 0) out vec4 color;
+uniform sampler2D tex_star;
+flat in vec4 starColor;
+void main(void) {
+    color = starColor * texture(tex_star, gl_PointCoord);
+}</code></pre></div>
+<pre><code><span class="c">// C++：建資料（用 glMapBufferRange 直接寫進 GPU buffer）</span>
+struct star_t { glm::vec3 position; glm::vec3 color; };
+glGenBuffers(1, &amp;buffer);
+glBindBuffer(GL_ARRAY_BUFFER, buffer);
+glBufferData(GL_ARRAY_BUFFER, NUM_STARS * sizeof(star_t), NULL, GL_STATIC_DRAW);
+star_t* star = (star_t*)glMapBufferRange(GL_ARRAY_BUFFER, 0, NUM_STARS * sizeof(star_t),
+                                         GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+for (int i = 0; i &lt; NUM_STARS; i++) {
+    star[i].position[0] = (random_float() * 2.0f - 1.0f) * 100.0f;
+    star[i].position[1] = (random_float() * 2.0f - 1.0f) * 100.0f;
+    star[i].position[2] = random_float();
+    star[i].color[0] = 0.8f + random_float() * 0.2f;   <span class="c">// color[1], color[2] 同理</span>
+}
+glUnmapBuffer(GL_ARRAY_BUFFER);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(star_t), NULL);
+glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(star_t), (void*)sizeof(glm::vec3));
+glEnableVertexAttribArray(0);
+glEnableVertexAttribArray(1);
+
+<span class="c">// C++：render</span>
+glUniform1f(time_location, currentTime);
+glUniformMatrix4fv(proj_location, 1, GL_FALSE, &amp;proj_matrix[0][0]);
+glBindTexture(GL_TEXTURE_2D, m_texture);
+glEnable(GL_PROGRAM_POINT_SIZE);
+glEnable(GL_BLEND);
+glBlendFunc(GL_ONE, GL_ONE);
+glDrawArrays(GL_POINTS, 0, NUM_STARS);</code></pre>
+</details>
+
+<!-- ============================================================ -->
+<h2 id="errata">講義程式小錯（照抄會編不過或有 bug）</h2>
+<table>
+<tr><th>位置</th><th>講義寫法</th><th>應改為</th></tr>
+<tr><td>Reshape</td><td><code>aspect = (float)w / (float)f;</code></td><td><code>(float)w / (float)h</code></td></tr>
+<tr><td>Reshape / Render</td><td><code>deg2rad(...)</code></td><td>GLM 用 <code>glm::radians(...)</code>（講義註解也說 glm 要用弧度）</td></tr>
+<tr><td>Render</td><td><code>glUniformMatrix4fv(mv_location, 1, GL_FALSE, mv_matrix)</code></td><td>傳指標：<code>glm::value_ptr(mv_matrix)</code> 或 <code>&amp;mv_matrix[0][0]</code></td></tr>
+<tr><td>Render（回到螢幕）</td><td>先 <code>glClear</code> 再 <code>glClearColor</code></td><td><code>glClearColor</code> 要在 <code>glClear</code> 之前才會作用在這次清除</td></tr>
+<tr><td>Grayscale CPU 版</td><td><code>0.722 * B</code></td><td><code>0.0722 * B</code>（Rec.709 係數 0.2126 / 0.7152 / 0.0722）</td></tr>
+<tr><td>glBlendFunc 說明</td><td>dfactor 寫成「source blending factors」</td><td>dfactor 是 <b>destination</b> factor</td></tr>
+<tr><td>glDrawBuffer 說明</td><td><code>Glenum</code></td><td><code>GLenum</code></td></tr>
+<tr><td>Box blur</td><td>投影片標題寫 Median Blur</td><td>程式其實是<b>平均</b>（box filter / mean blur）；真正的 median 要排序取中位數</td></tr>
+</table>
+</main>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// ---------- Pipeline 總覽 ----------
+(() => {
+  const S = [['Input', 'io'], ['Vertex\nSpecification', 'fix'], ['Vertex\nShader', 'prog'], ['Tessellation\nShader', 'opt'], ['Geometry\nShader', 'opt'], ['Rasterizer', 'fix'], ['Fragment\nShader', 'prog'], ['Per-Sample\nProcessing', 'fix'], ['Frame\nbuffers', 'io']];
+  const col = { io: '#dbeafe', fix: '#e5e7eb', prog: '#c6f0d6', opt: '#fde7b6' };
+  let s = '<defs><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>';
+  S.forEach(([n, t], i) => {
+    const x = 6 + i * 106, hl = i >= 6;
+    s += `<rect x="${x}" y="25" width="92" height="56" rx="8" fill="${col[t]}" stroke="${hl ? '#c53030' : '#999'}" stroke-width="${hl ? 3 : 1}"/>`;
+    n.split('\n').forEach((l, k, a) => s += `<text x="${x + 46}" y="${57 + (k - (a.length - 1) / 2) * 15}">${l}</text>`);
+    if (i < S.length - 1) s += `<path d="M${x + 92} 53h12" stroke="#555" stroke-width="2" marker-end="url(#ap)"/>`;
+  });
+  s += '<text x="740" y="108" fill="#c53030" font-size="12">本講範圍</text>';
+  $('pipeSvg').innerHTML = s;
+})();
+
+// ---------- Blending 計算器 ----------
+const BF = ['GL_ZERO', 'GL_ONE', 'GL_SRC_COLOR', 'GL_ONE_MINUS_SRC_COLOR', 'GL_SRC_ALPHA', 'GL_ONE_MINUS_SRC_ALPHA', 'GL_DST_COLOR', 'GL_ONE_MINUS_DST_COLOR', 'GL_DST_ALPHA', 'GL_ONE_MINUS_DST_ALPHA'];
+const BFdesc = ['(0, 0, 0, 0)', '(1, 1, 1, 1)', '(Rs, Gs, Bs, As)', '(1,1,1,1) − (Rs, Gs, Bs, As)', '(As, As, As, As)', '(1,1,1,1) − (As, As, As, As)', '(Rd, Gd, Bd, Ad)', '(1,1,1,1) − (Rd, Gd, Bd, Ad)', '(Ad, Ad, Ad, Ad)', '(1,1,1,1) − (Ad, Ad, Ad, Ad)'];
+function factor(name, s, d) {
+  const one = [1, 1, 1, 1], inv = v => v.map(x => 1 - x);
+  return { GL_ZERO: [0, 0, 0, 0], GL_ONE: one, GL_SRC_COLOR: s, GL_ONE_MINUS_SRC_COLOR: inv(s), GL_SRC_ALPHA: [s[3], s[3], s[3], s[3]], GL_ONE_MINUS_SRC_ALPHA: inv([s[3], s[3], s[3], s[3]]),
+    GL_DST_COLOR: d, GL_ONE_MINUS_DST_COLOR: inv(d), GL_DST_ALPHA: [d[3], d[3], d[3], d[3]], GL_ONE_MINUS_DST_ALPHA: inv([d[3], d[3], d[3], d[3]]) }[name];
+}
+$('bfTbl').innerHTML += BF.map((b, i) => `<tr data-b="${b}"><td><code>${b}</code></td><td>${BFdesc[i]}</td></tr>`).join('');
+['bSf', 'bDf'].forEach(id => $(id).innerHTML = BF.map(b => `<option>${b}</option>`).join(''));
+$('bSf').value = 'GL_SRC_ALPHA'; $('bDf').value = 'GL_ONE_MINUS_SRC_ALPHA';
+const hex2 = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255);
+const f2 = v => v.map(x => (+x.toFixed(2)).toString()).join(', ');
+const css = (c, bgAlpha) => `rgba(${c.slice(0, 3).map(x => Math.round(Math.min(1, x) * 255)).join(',')},${bgAlpha ?? 1})`;
+function blendCalc() {
+  const d = [...hex2($('bDst').value), $('bDa').value / 100], s = [...hex2($('bSrc').value), $('bSa').value / 100];
+  $('bDaV').textContent = d[3].toFixed(2); $('bSaV').textContent = s[3].toFixed(2);
+  const on = $('bOn').checked, sfN = $('bSf').value, dfN = $('bDf').value;
+  let r, txt;
+  if (!on) { r = s; txt = 'GL_BLEND 關閉 → 直接寫入 source：<br>結果 = (' + f2(s) + ')'; }
+  else {
+    const sf = factor(sfN, s, d), df = factor(dfN, s, d);
+    const raw = s.map((v, i) => v * sf[i] + d[i] * df[i]); r = raw.map(v => Math.min(1, Math.max(0, v)));
+    txt = `Src = (${f2(s)})<br>sfactor ${sfN} = (${f2(sf)})<br>Dst = (${f2(d)})<br>dfactor ${dfN} = (${f2(df)})<br>` +
+      `Src⊙s + Dst⊙d = (${f2(raw)})` + (raw.some(v => v > 1) ? '<br><span style="color:#c53030">超過 1 → clamp</span>' : '') + `<br><b>結果 = (${f2(r)})</b>`;
+  }
+  $('swD').style.background = css(d); $('swS').style.background = `linear-gradient(${css(s, s[3])},${css(s, s[3])}),repeating-conic-gradient(#ccc 0 25%,#fff 0 50%) 0 0/12px 12px`;
+  $('swR').style.background = css(r); $('bOut').innerHTML = txt;
+  $('bfTbl').querySelectorAll('tr[data-b]').forEach(tr => tr.classList.toggle('on', on && (tr.dataset.b === sfN || tr.dataset.b === dfN)));
+}
+['bDst', 'bSrc', 'bDa', 'bSa', 'bOn', 'bSf', 'bDf'].forEach(id => $(id).oninput = blendCalc);
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+  const P = { off: [false, 'GL_ONE', 'GL_ZERO', 100], add: [true, 'GL_ONE', 'GL_ONE', 100], sa1: [true, 'GL_SRC_ALPHA', 'GL_ONE', 70], std: [true, 'GL_SRC_ALPHA', 'GL_ONE_MINUS_SRC_ALPHA', 70] }[b.dataset.p];
+  $('bOn').checked = P[0]; $('bSf').value = P[1]; $('bDf').value = P[2]; $('bSa').value = P[3]; $('bDst').value = '#ff0000'; $('bSrc').value = '#00ff00'; $('bDa').value = 100; blendCalc();
+});
+blendCalc();
+
+// ---------- 透明物件順序 ----------
+function drawOrder(mode) {
+  const c = $('ordCv').getContext('2d'); c.clearRect(0, 0, 420, 230);
+  c.fillStyle = '#f3f4f6'; c.fillRect(0, 0, 420, 230);
+  c.fillStyle = '#888'; c.fillRect(40, 150, 340, 30); c.fillStyle = '#fff'; c.font = '12px sans-serif'; c.fillText('不透明地板（先畫）', 160, 170);
+  const far = { x: 170, y: 30, w: 180, h: 140, col: [37, 99, 235], n: '遠：藍色玻璃' }, near = { x: 70, y: 60, w: 180, h: 140, col: [220, 38, 38], n: '近：紅色玻璃' };
+  const fill = (o, clipNear) => {
+    c.save();
+    if (clipNear) { c.beginPath(); c.rect(0, 0, 420, 230); c.rect(near.x + near.w, near.y, -near.w, near.h); c.clip('evenodd'); }
+    c.fillStyle = `rgba(${o.col},0.5)`; c.fillRect(o.x, o.y, o.w, o.h); c.restore();
+    c.strokeStyle = `rgb(${o.col})`; c.lineWidth = 2; c.strokeRect(o.x, o.y, o.w, o.h);
+  };
+  if (mode === 'good') { fill(far, false); fill(near, false); }
+  else { fill(near, false); fill(far, true); }
+  c.fillStyle = '#111'; c.font = '13px sans-serif';
+  c.fillText(far.n, far.x + 70, far.y + 18); c.fillText(near.n, near.x + 8, near.y + 130);
+  c.fillStyle = mode === 'good' ? '#2f855a' : '#c53030';
+  c.fillText(mode === 'good' ? '✓ 重疊處看得到紅後面的藍' : '✗ 重疊處：藍被 depth test 丟掉，紅後面只剩背景', 10, 222);
+}
+document.querySelectorAll('[data-o]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-o]').forEach(x => x.classList.toggle('on', x === b)); drawOrder(b.dataset.o); });
+drawOrder('bad');
+
+// ---------- FBO 兩階段 ----------
+const FS = [
+  ['1. 綁 FBO', 'glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);\nglDrawBuffer(GL_COLOR_ATTACHMENT0);   // 寫到哪個 attachment\nglViewport(0, 0, window_width, window_height);', '之後的 draw call 全部寫進 FBO，不會出現在螢幕。', ['fbo']],
+  ['2. 清 FBO', 'static const GLfloat green[] = { 0.0f, 0.25f, 0.0f, 1.0f };\nglClearBufferfv(GL_COLOR, 0, green);   // 清 color attachment 0 為深綠\nglClear(GL_DEPTH_BUFFER_BIT);', '清掉 FBO 的 color（深綠）和 depth（depth RBO）。', ['fbo', 'tex', 'rbo']],
+  ['3. Draw #1：畫方塊', 'glUseProgram(program);          // Program #1\nglBindVertexArray(vao);\nglUniformMatrix4fv(mv_location, 1, GL_FALSE, glm::value_ptr(mv_matrix));\nglUniformMatrix4fv(proj_location, 1, GL_FALSE, glm::value_ptr(proj_matrix));\nglDrawArrays(GL_TRIANGLES, 0, 36);  // 6 面 × 2 三角形 × 3 頂點', 'Program #1（VS #1 + FS #1）把旋轉方塊畫進 FBO：顏色寫到 FBOData texture，深度寫到 depth RBO。', ['p1', 'd1', 'fbo', 'tex', 'rbo']],
+  ['4. 回到螢幕', 'glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);   // 0 = 預設 framebuffer\nglViewport(0, 0, window_width, window_height);\nglClearColor(1.0f, 0.0f, 0.0f, 1.0f);\nglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);', '綁回 ID 0（螢幕），清成紅色。', ['screen']],
+  ['5. 綁 FBO texture', 'glBindTexture(GL_TEXTURE_2D, fboDataTexture);', '剛剛畫好的 FBOData texture 現在當作一般 texture 讀取。', ['tex', 'bind']],
+  ['6. Draw #2：全螢幕四邊形', 'glBindVertexArray(vao2);\nglUseProgram(program2);         // Program #2\nglDrawArrays(GL_TRIANGLE_FAN, 0, 4);', 'Program #2 畫一個蓋滿螢幕的四邊形，FS #2 用 texture(tex, texcoord) 取樣 → 方塊影像顯示在螢幕上。（這裡就是做後製的地方）', ['bind', 'p2', 'd2', 'screen', 'mon']],
+];
+const FN = {
+  d1: [20, 10, 150, 30, 'Drawcall #1', '#2563eb'], p1: [20, 60, 150, 80, 'Program #1\nVS #1 / FS #1', '#dbeafe'],
+  fbo: [20, 200, 150, 30, 'FBO', '#2563eb'], tex: [20, 232, 150, 40, 'Color Attachment0\n(FBOData Texture)', '#fecaca'], rbo: [20, 274, 150, 34, 'Depth RBO', '#e5e7eb'],
+  bind: [260, 232, 170, 40, 'Bind\nFBOData Texture', '#e5e7eb'], d2: [260, 160, 170, 30, 'Drawcall #2', '#2563eb'],
+  p2: [260, 60, 170, 80, 'Program #2\nVS #2 / FS #2', '#dbeafe'], screen: [260, 300, 170, 30, 'Screen FBO (ID 0)', '#2563eb'], mon: [290, 345, 110, 45, '🖥 螢幕', '#f3f4f6']
+};
+function fboDraw(k) {
+  const on = FS[k][3];
+  let s = '<defs><marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2f855a"/></marker></defs>';
+  [['M95 40v18'], ['M95 140v58'], ['M170 252h88'], ['M345 232v-40'], ['M345 160v-18'], ['M430 100 Q460 100 460 200 Q460 315 432 315'], ['M345 330v13']].forEach(([d]) => s += `<path d="${d}" stroke="#2f855a" stroke-width="2" fill="none" marker-end="url(#af)"/>`);
+  for (const [id, [x, y, w, h, t, c]] of Object.entries(FN)) {
+    const hl = on.includes(id), dark = c === '#2563eb';
+    s += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5" fill="${c}" stroke="${hl ? '#c53030' : '#999'}" stroke-width="${hl ? 3 : 1}" opacity="${hl ? 1 : .45}"/>`;
+    t.split('\n').forEach((l, i, a) => s += `<text x="${x + w / 2}" y="${y + h / 2 + 4 + (i - (a.length - 1) / 2) * 14}" fill="${dark ? '#fff' : '#111'}" opacity="${hl ? 1 : .6}">${l}</text>`);
+  }
+  $('fboSvg').innerHTML = s;
+  $('fboTxt').innerHTML = `<b>${FS[k][0]}</b><br>${FS[k][2]}`; $('fboCode').textContent = '// C++\n' + FS[k][1];
+  $('fboSteps').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === k));
+}
+$('fboSteps').innerHTML = FS.map((f, i) => `<button class="b">${f[0]}</button>`).join('');
+$('fboSteps').querySelectorAll('button').forEach((b, i) => b.onclick = () => fboDraw(i));
+fboDraw(0);
+
+// ---------- 影像後製 ----------
+const W = 256, H = 192;
+const src = (() => {   // 程式產生的測試圖（file:// 下讀圖檔的 canvas 會被視為跨來源）
+  const c = $('ppSrc').getContext('2d');
+  const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#5ba3e0'); g.addColorStop(1, '#f6d8a8'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(200, 45, 26, 0, 7); c.fill();
+  c.fillStyle = '#2f855a'; c.beginPath(); c.moveTo(0, 150); c.lineTo(70, 80); c.lineTo(140, 150); c.fill();
+  c.fillStyle = '#276749'; c.beginPath(); c.moveTo(90, 150); c.lineTo(160, 95); c.lineTo(240, 150); c.fill();
+  c.fillStyle = '#8b5a2b'; c.fillRect(0, 150, W, 42);
+  c.fillStyle = '#c53030'; c.fillRect(30, 118, 40, 32); c.fillStyle = '#7b341e'; c.beginPath(); c.moveTo(24, 120); c.lineTo(50, 98); c.lineTo(76, 120); c.fill();
+  c.fillStyle = '#fff'; c.font = 'bold 22px sans-serif'; c.fillText('GPA', 150, 182);
+  for (let i = 0; i < 6; i++) { c.fillStyle = i % 2 ? '#111' : '#eee'; c.fillRect(180 + i * 12, 120, 12, 12); c.fillStyle = i % 2 ? '#eee' : '#111'; c.fillRect(180 + i * 12, 132, 12, 12); }
+  const d = c.getImageData(0, 0, W, H);
+  for (let i = 0; i < d.data.length; i += 4) { const n = (Math.random() - .5) * 18; d.data[i] += n; d.data[i + 1] += n; d.data[i + 2] += n; }
+  c.putImageData(d, 0, 0);
+  const a = new Float32Array(W * H * 3); for (let i = 0; i < W * H; i++) for (let k = 0; k < 3; k++) a[i * 3 + k] = d.data[i * 4 + k] / 255;
+  return a;
+})();
+const fetchT = (x, y) => { x = Math.max(0, Math.min(W - 1, x)); y = Math.max(0, Math.min(H - 1, y)); const i = (y * W + x) * 3; return [src[i], src[i + 1], src[i + 2]]; };
+const sstep = (e0, e1, x) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+const PP = {
+  orig: { n: '原圖', txt: '直接輸出 FBO texture。', ctrl: [], code: () => 'color = texture(tex, fs_in.texcoord);', f: (x, y) => fetchT(x, y) },
+  gray: { n: 'Grayscale', txt: '灰階：與亮度係數 (0.212, 0.715, 0.072) 做 dot。人眼對綠色最敏感，所以 G 的權重最大。',
+    ctrl: [], f: (x, y) => { const c = fetchT(x, y), Y = c[0] * .212 + c[1] * .715 + c[2] * .072; return [Y, Y, Y]; },
+    code: () => '#version 410 core\nuniform sampler2D tex;\nout vec4 color;\nin VS_OUT { vec2 texcoord; } fs_in;\nvoid main(void) {\n    vec3 tex_color = texture(tex, fs_in.texcoord).rgb;\n    const vec3 grayscale = vec3(0.212, 0.715, 0.072);\n    float Y = dot(tex_color, grayscale);\n    color = vec4(vec3(Y), 1.0);\n}' },
+  blur: { n: 'Box Blur', txt: '講義稱 Median Blur，實際是<b>平均</b>（box filter）：取周圍 (2·half_size+1)² 個像素平均。範圍越大越模糊、也越慢（樣本數平方成長）。',
+    ctrl: [['half_size', 1, 8, 2]], f: (x, y, p) => { const h = p.half_size; let s = [0, 0, 0]; for (let i = -h; i <= h; i++) for (let j = -h; j <= h; j++) { const c = fetchT(x + i, y + j); s[0] += c[0]; s[1] += c[1]; s[2] += c[2]; } const n = (2 * h + 1) ** 2; return s.map(v => v / n); },
+    code: p => `#version 410 core\nuniform sampler2D tex;\nout vec4 color;\nvoid main(void) {\n    int half_size = ${p.half_size};\n    vec4 color_sum = vec4(0);\n    for (int i = -half_size; i <= half_size; ++i)\n        for (int j = -half_size; j <= half_size; ++j) {\n            ivec2 coord = ivec2(gl_FragCoord.xy) + ivec2(i, j);\n            color_sum += texelFetch(tex, coord, 0);   // 整數像素座標\n        }\n    int sample_count = (half_size * 2 + 1) * (half_size * 2 + 1);   // = ${(2 * p.half_size + 1) ** 2}\n    color = color_sum / sample_count;\n}`,
+    extra: p => { const n = 2 * p.half_size + 1; return `<p class="mut">Kernel（${n}×${n}，每格權重 1/${n * n}；橘 = 目前像素）</p><div class="kgrid" style="grid-template-columns:repeat(${n},22px)">` + Array.from({ length: n * n }, (_, i) => `<div class="${i === (n * n - 1) / 2 ? 'c' : ''}">${n <= 5 ? '1/' + n * n : ''}</div>`).join('') + '</div><p class="mut">texelFetch 超出邊界的結果是 undefined；這裡模擬成 clamp to edge。</p>'; } },
+  quant: { n: 'Quantization', txt: '色彩量化：把每個通道的連續值切成 nbins 段，同一段都變成同一個值 → 顏色數變少，像海報 / 卡通風格。',
+    ctrl: [['nbins', 2, 16, 8]], f: (x, y, p) => fetchT(x, y).map(v => Math.floor(v * p.nbins) / p.nbins),
+    code: p => `#version 410 core\nuniform sampler2D tex;\nout vec4 color;\nvoid main(void) {\n    float nbins = ${p.nbins}.0;\n    vec3 tex_color = texelFetch(tex, ivec2(gl_FragCoord.xy), 0).rgb;\n    tex_color = floor(tex_color * nbins) / nbins;\n    color = vec4(tex_color, 1.0);\n}`,
+    extra: p => { const n = p.nbins, w = 256 / n; return `<p class="mut">0~255 分成 ${n} 組，每組 ${w % 1 ? w.toFixed(1) : w} 個值 → 輸出 floor(v·${n})/${n}</p><div class="qbar">` + Array.from({ length: n }, (_, i) => `<div style="background:hsl(220,60%,${15 + 70 * i / n}%)">${n <= 8 ? Math.round(i * w) + '~' + Math.round((i + 1) * w - 1) : i}</div>`).join('') + '</div>'; } },
+  dog: { n: 'DoG 邊緣', txt: 'Difference of Gaussians：兩個不同 σ 的 Gaussian 模糊相減，保留邊緣。Γ = I∗G(σe) − τ·I∗G(σr)，再用 smoothstep 映射成黑白線稿。',
+    ctrl: [['sigma_e', 5, 40, 20, 10], ['tau', 90, 100, 99, 100], ['phi', 5, 60, 34, 10]],
+    f: (x, y, p) => {
+      const se = p.sigma_e, sr = se * 1.4, hw = Math.ceil(2 * sr), te = 2 * se * se, tr = 2 * sr * sr; let sx = 0, sy = 0, nx = 0, ny = 0;
+      for (let i = -hw; i <= hw; i++) for (let j = -hw; j <= hw; j++) { const d2 = i * i + j * j, ke = Math.exp(-d2 / te), kr = Math.exp(-d2 / tr), c = fetchT(x + i, y + j), L = .299 * c[0] + .587 * c[1] + .114 * c[2]; nx += ke; ny += kr; sx += ke * L; sy += kr * L; }
+      sx /= nx; sy /= ny; const Hh = 100 * (sx - p.tau * sy), e = Hh > 0 ? 1 : 2 * sstep(-2, 2, p.phi * Hh); return [e, e, e];
+    },
+    code: p => `#version 410 core\nuniform sampler2D tex;\nuniform vec2 img_size;\nout vec4 color;\nin VS_OUT { vec2 texcoord; } fs_in;\nfloat sigma_e = ${p.sigma_e.toFixed(1)}f;\nfloat sigma_r = ${(p.sigma_e * 1.4).toFixed(1)}f;   // 講義 2.0 / 2.8\nfloat phi = ${p.phi.toFixed(1)}f;\nfloat tau = ${p.tau.toFixed(2)}f;\nfloat twoSigmaESquared = 2.0 * sigma_e * sigma_e;\nfloat twoSigmaRSquared = 2.0 * sigma_r * sigma_r;\nint halfWidth = int(ceil(2.0 * sigma_r));\nvoid main(void) {\n    vec2 sum = vec2(0.0), norm = vec2(0.0);\n    for (int i = -halfWidth; i <= halfWidth; ++i)\n        for (int j = -halfWidth; j <= halfWidth; ++j) {\n            float d = length(vec2(i, j));\n            vec2 kernel = vec2(exp(-d * d / twoSigmaESquared),\n                               exp(-d * d / twoSigmaRSquared));\n            vec4 c = texture(tex, fs_in.texcoord + vec2(i, j) / img_size);\n            vec2 L = vec2(0.299 * c.r + 0.587 * c.g + 0.114 * c.b);\n            norm += kernel;\n            sum += kernel * L;\n        }\n    sum /= norm;                       // 兩個加權平均（權重正規化）\n    float H = 100.0 * (sum.x - tau * sum.y);\n    float edge = (H > 0.0) ? 1.0 : 2.0 * smoothstep(-2.0, 2.0, phi * H);\n    color = vec4(edge, edge, edge, 1.0);\n}`,
+    extra: () => '<p class="mut">Gaussian 權重 w(i,j,k,l) = exp(−((i−k)² + (j−l)²) / 2σ²)，g(i,j) = Σ f(k,l)·w / Σ w。σr 固定為 1.4·σe（講義比例）。</p>' }
+};
+let ppK = 'gray', ppP = {};
+function ppRun() {
+  const F = PP[ppK], out = $('ppDst').getContext('2d'), img = out.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = F.f(x, y, ppP), i = (y * W + x) * 4; img.data[i] = c[0] * 255; img.data[i + 1] = c[1] * 255; img.data[i + 2] = c[2] * 255; img.data[i + 3] = 255; }
+  out.putImageData(img, 0, 0);
+  $('ppCode').textContent = '// GLSL：Fragment Shader\n' + F.code(ppP); $('ppExtra').innerHTML = F.extra ? F.extra(ppP) : '';
+}
+function ppSel(k) {
+  ppK = k; ppP = {}; const F = PP[k];
+  $('ppBtns').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  $('ppTxt').innerHTML = `<b>${F.n}</b><br>${F.txt}`;
+  $('ppCtrl').innerHTML = F.ctrl.map(([n, a, b, v, div]) => `${n} <input type="range" data-n="${n}" data-d="${div || 1}" min="${a}" max="${b}" value="${v}"> <span id="pv_${n}"></span>`).join(' ');
+  const upd = () => { $('ppCtrl').querySelectorAll('input').forEach(r => { ppP[r.dataset.n] = r.value / r.dataset.d; $('pv_' + r.dataset.n).textContent = ppP[r.dataset.n]; }); ppRun(); };
+  $('ppCtrl').querySelectorAll('input').forEach(r => r.onchange = upd); upd();
+}
+$('ppBtns').innerHTML = Object.entries(PP).map(([k, v]) => `<button class="b" data-k="${k}">${v.n}</button>`).join('');
+$('ppBtns').querySelectorAll('button').forEach(b => b.onclick = () => ppSel(b.dataset.k));
+ppSel('gray');
+
+// ---------- smoothstep ----------
+function ssDraw() {
+  const e0 = $('e0').value / 50, e1 = $('e1').value / 50, c = $('ssCv').getContext('2d'), X = x => 30 + (x + 2) / 4 * 370, Y = y => 190 - y * 160;
+  $('e0V').textContent = e0.toFixed(2); $('e1V').textContent = e1.toFixed(2);
+  c.clearRect(0, 0, 420, 220); c.strokeStyle = '#ccc'; c.lineWidth = 1; c.beginPath(); c.moveTo(X(-2), Y(0)); c.lineTo(X(2), Y(0)); c.moveTo(X(0), Y(-0.1)); c.lineTo(X(0), Y(1.1)); c.moveTo(X(-2), Y(1)); c.lineTo(X(2), Y(1)); c.stroke();
+  c.fillStyle = '#666'; c.font = '11px sans-serif'; c.fillText('1', X(0) + 4, Y(1) - 2); c.fillText('0', X(0) + 4, Y(0) - 2); c.fillText('x', X(2) - 8, Y(0) - 4);
+  const plot = (f, col, dash) => { c.strokeStyle = col; c.setLineDash(dash); c.lineWidth = 2; c.beginPath(); for (let i = 0; i <= 200; i++) { const x = -2 + 4 * i / 200; i ? c.lineTo(X(x), Y(f(x))) : c.moveTo(X(x), Y(f(x))); } c.stroke(); c.setLineDash([]); };
+  if (e1 > e0) { plot(x => Math.max(0, Math.min(1, (x - e0) / (e1 - e0))), '#999', [4, 4]); plot(x => sstep(e0, e1, x), '#2563eb', []); }
+  else { c.fillStyle = '#c53030'; c.fillText('edge0 ≥ edge1：結果未定義', 140, 100); }
+  [[e0, 'edge0'], [e1, 'edge1']].forEach(([e, n]) => { c.strokeStyle = '#c53030'; c.setLineDash([2, 3]); c.beginPath(); c.moveTo(X(e), Y(-0.1)); c.lineTo(X(e), Y(1.1)); c.stroke(); c.setLineDash([]); c.fillStyle = '#c53030'; c.fillText(n, X(e) - 14, 212); });
+}
+['e0', 'e1'].forEach(id => $(id).oninput = ssDraw); ssDraw();
+
+// ---------- 星空 ----------
+(() => {
+  const c = $('starCv').getContext('2d'), N = 500, stars = Array.from({ length: N }, () => ({ x: (Math.random() * 2 - 1), y: (Math.random() * 2 - 1), z: Math.random() }));
+  let run = true, t = 0, last = performance.now();
+  $('starBtn').onclick = () => { run = !run; $('starBtn').textContent = run ? '⏸ 暫停' : '▶ 播放'; if (run) { last = performance.now(); requestAnimationFrame(f); } };
+  function f(now) {
+    if (!run) return; t += (now - last) / 1000 * $('starSpd').value / 100; last = now;
+    c.globalCompositeOperation = 'source-over'; c.fillStyle = '#000'; c.fillRect(0, 0, 420, 240); c.globalCompositeOperation = 'lighter';
+    for (const s of stars) {
+      const z = (s.z + t) % 1, size = 20 * z * z, k = sstep(1, 7, size);
+      if (k <= 0) continue;
+      const px = 210 + s.x / (1.05 - z) * 60, py = 120 + s.y / (1.05 - z) * 60, r = size / 2;
+      const g = c.createRadialGradient(px, py, 0, px, py, r); g.addColorStop(0, `rgba(255,255,240,${k})`); g.addColorStop(1, 'rgba(255,255,240,0)');
+      c.fillStyle = g; c.fillRect(px - r, py - r, 2 * r, 2 * r);
+    }
+    requestAnimationFrame(f);
+  }
+  requestAnimationFrame(f);
+})();
+</script></body></html>

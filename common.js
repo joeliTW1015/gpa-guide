@@ -2,8 +2,8 @@
 (function () {
   // 閱讀順序：觀念 → 實作 → 作業 → 參考
   const groups = [['', [['index.html', '首頁']]],
-    ['觀念', [['01-pipeline.html', 'Rendering Pipeline'], ['05-vertex-draw.html', 'Vertex & Draw']]],
-    ['實作', [['03-env-git.html', '環境 / Git / 繳交'], ['02-project-syntax.html', '專案結構與語法']]],
+    ['觀念', [['01-pipeline.html', 'Pipeline'], ['05-vertex-draw.html', 'Vertex & Draw'], ['06-fragment-fbo.html', 'Fragment & FBO'], ['07-mesh-rendering.html', 'Mesh & 加速']]],
+    ['實作', [['03-env-git.html', '環境 / 繳交'], ['02-project-syntax.html', '專案與語法']]],
     ['作業', [['as1-robot.html', 'AS1 機器人']]],
     ['參考', [['04-api.html', 'API 參考']]]];
   const pages = groups.flatMap(([, ps]) => ps);

@@ -184,6 +184,8 @@ glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 �
 結果 = 0.3 × (1,0,0) + 0.7 × (0,0,1) = <b>(0.3, 0, 0.7)</b>。</li></ul></div>
 <div class="warn">開了 depth test，每幀必須 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>，否則上一幀的深度會擋住新畫面。半透明物體通常要<b>先畫不透明、再由遠到近畫透明</b>。</div>
 
+<p class="mut">Blending factor、透明物件排序、framebuffer object 的詳細內容見 <a href="06-fragment-fbo.html">Fragment Shader 與 Framebuffer</a>。</p>
+
 <h2 id="compute">Compute Pipeline</h2>
 <ul>
 <li>OpenGL 4.3+，只有一個 programmable stage，沒有固定輸入輸出，可任意讀寫 buffer / texture（概念近 CUDA）。</li>

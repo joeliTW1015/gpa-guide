@@ -4,7 +4,7 @@
 <style>.sec{font-size:13px;color:var(--mut);margin:1.6em 0 .2em;letter-spacing:.05em}</style></head>
 <body><main>
 <h1>繪圖程式設計與應用（CS5507）速成指南</h1>
-<p class="mut">依 2026 Fall 講義 00–05、Appendix 與作業說明整理。上方導覽依建議閱讀順序排列：觀念 → 實作 → 作業 → 參考。</p>
+<p class="mut">依 2026 Fall 講義 00–07、Appendix 與作業說明整理。上方導覽依建議閱讀順序排列：觀念 → 實作 → 作業 → 參考。</p>
 
 <div class="warn"><b>進行中：作業 1</b>，截止 <b>2026/10/19（日）23:59</b>，FTP 繳交。→ <a href="as1-robot.html">作業 1 頁面</a></div>
 
@@ -19,6 +19,16 @@
 <li>VS 輸出（gl_Position / gl_PointSize / gl_ClipDistance）、flat / smooth 插值</li>
 <li>Primitive 模式互動圖、glDrawElements、BaseVertex、Primitive restart</li>
 <li>Instancing 與 divisor 互動表、Indirect draw、版本對照</li></ul></div>
+
+<div class="card"><h3><a href="06-fragment-fbo.html">Fragment Shader 與 Framebuffer</a>（講義 06）</h3>
+<ul><li>Per-sample tests 流程圖、Blending 寫入模型與 factor 表 + 互動計算器、透明物件順序示範</li>
+<li>Off-screen rendering、FBO 結構圖、Spinning Cube 兩階段（FBO → 螢幕）逐步互動圖、attachment 表、MRT</li>
+<li>影像後製互動（Grayscale / Box Blur / Quantization / DoG，附對應 GLSL）、smoothstep 曲線、Point sprite 星空</li></ul></div>
+
+<div class="card"><h3><a href="07-mesh-rendering.html">Mesh Rendering 與場景加速</a>（講義 07、Appendix - Assimp）</h3>
+<ul><li>3D model 結構、格式表、OBJ / MTL 格式 + 互動 OBJ 解析（算 GPU 頂點數）、per-face vs per-vertex normal 互動</li>
+<li>Assimp：aiScene 結構互動圖、post-process flag 表、完整載入流程（含講義骨架補完）</li>
+<li>AABB / 平面 / frustum culling 互動、階層式 culling、driver overhead、instancing 矩陣、multi-draw 與 indirect 互動、GPU-driven instance culling 逐步示範</li></ul></div>
 
 <div class="sec">實作</div>
 <div class="card"><h3><a href="03-env-git.html">環境架設 / Git / 繳交規則</a>（Appendix - Project Configuration、Syllabus）</h3>
@@ -44,7 +54,7 @@
 
 <div class="sec">參考</div>
 <div class="card"><h3><a href="04-api.html">常用 API 參考</a></h3>
-<ul><li>GLFW / Shader / Buffer / Uniform / Draw / Texture / GLSL / GLM / ImGui / OBJ 共 130 個函式（含講義 05、stb_image、tinyobjloader）</li>
+<ul><li>GLFW / Shader / Buffer / Uniform / Draw / Texture / FBO / GLSL / GLM / ImGui / OBJ / Assimp 共 154 個函式（含講義 05–07、stb_image、tinyobjloader、Assimp、FBO、compute）</li>
 <li>每個都有簽名、回傳型別、參數表、範例、官方文件連結；可搜尋與分類篩選</li></ul></div>
 
 <div class="note">GitLab 網址已更新為 <a href="https://cgvlab.igvi.cs.nthu.edu.tw/">https://cgvlab.igvi.cs.nthu.edu.tw/</a>（1005 公告），講義內舊網址作廢。</div>

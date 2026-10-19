@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mesh Rendering 與場景加速</title><link rel="stylesheet" href="style.css">
+<style>
+canvas{border:1px solid var(--line);border-radius:6px;background:#fff}
+textarea{width:100%;font:12px/1.5 ui-monospace,monospace;border:1px solid var(--line);border-radius:6px;padding:6px}
+.cells{display:flex;gap:2px;flex-wrap:wrap;margin:4px 0}
+.cells div{min-width:30px;height:28px;display:flex;align-items:center;justify-content:center;font:12px ui-monospace,monospace;border:1px solid #999;border-radius:3px;background:#fff;position:relative}
+.cells div small{position:absolute;top:-13px;font-size:9px;color:#888}
+.cells .m1{background:#fecaca}.cells .m2{background:#c6f0d6}.cells .hl{outline:3px solid #c53030;outline-offset:-1px}
+.cells .vis{background:#fde7b6}.cells .gone{opacity:.3}
+.objT td{font:12px ui-monospace,monospace;text-align:center;padding:2px 6px}
+#aiSvg rect{cursor:pointer}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;color:#fff}
+svg text{font-family:system-ui,sans-serif}
+</style></head>
+<body><main>
+<h1>Mesh Rendering 與場景加速</h1>
+<p class="mut">對應講義 07（Mesh Rendering）與 Appendix - Assimp。重點：讀進 3D 模型（OBJ / Assimp）、把整個場景畫出來、讓場景畫得更快（culling、減少 draw call、GPU-driven rendering）。</p>
+<div class="toc"><a href="#model">3D Model 結構</a><a href="#formats">模型格式</a><a href="#obj">Wavefront OBJ</a><a href="#mtl">材質 MTL</a><a href="#problems">格式問題</a><a href="#normal">Per-face / Per-vertex Normal</a><a href="#assimp">Assimp</a><a href="#load">載入流程</a><a href="#accel">加速總覽</a><a href="#aabb">AABB 與平面</a><a href="#frustum">Frustum Culling</a><a href="#hier">階層式 Culling</a><a href="#overhead">Driver Overhead</a><a href="#instance">Instancing 矩陣</a><a href="#multidraw">Multi-draw</a><a href="#indirect">Indirect Draw</a><a href="#gpudriven">GPU-driven</a><a href="#thread">Multi-thread</a><a href="#errata">講義程式小錯</a></div>
+
+<!-- ============================================================ -->
+<h2 id="model">3D Model 的組成</h2>
+<div class="grid2">
+<svg viewBox="0 0 460 260" style="width:100%" font-size="12" text-anchor="middle">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="180" y="10" width="100" height="34" rx="8" fill="#2563eb"/><text x="230" y="32" fill="#fff">Scene</text>
+<g id="objs"></g>
+</svg>
+<div class="card">
+<ul><li>由 3D 美術用建模軟體製作</li>
+<li>定義一個場景，包含：
+<ul><li><b>Scene</b>：物件的配置 / 排列</li>
+<li><b>Shape</b>：表面的頂點與 index（<b>三角形</b>）</li>
+<li><b>Material</b>：表面的光照性質（顏色、貼圖…）</li></ul></li>
+<li>一個 <b>Object</b> = 一個 Shape + 一個 Material；多個 object 可以共用同一個 material。</li></ul>
+<p><b>最直接的畫法</b>：一次畫一個 object。每個 shape 載成一個 <b>VAO</b>、每個 material 載成一張 <b>texture</b>：</p>
+<pre><code><span class="c">// C++</span>
+glBindVertexArray(cone_vao);
+glBindTexture(GL_TEXTURE_2D, cone_tex);
+glDrawElements(...);
+glBindVertexArray(torus_vao);
+glBindTexture(GL_TEXTURE_2D, torus_tex);
+glDrawElements(...);
+<span class="c">// cylinder、sphere 同理</span></code></pre></div></div>
+
+<!-- ============================================================ -->
+<h2 id="formats">3D 模型格式</h2>
+<table>
+<tr><th>格式</th><th>副檔名</th><th>格式</th><th>副檔名</th></tr>
+<tr><td>Autodesk</td><td><code>.fbx</code></td><td>Stanford Polygon Library</td><td><code>.ply</code></td></tr>
+<tr><td>Collada</td><td><code>.dae</code></td><td>AutoCAD DXF</td><td><code>.dxf</code></td></tr>
+<tr><td>glTF</td><td><code>.gltf</code> <code>.glb</code></td><td>LightWave / LightWave Scene</td><td><code>.lwo</code> / <code>.lws</code></td></tr>
+<tr><td>Blender 3D</td><td><code>.blend</code></td><td>Modo</td><td><code>.lxo</code></td></tr>
+<tr><td>3ds Max 3DS / ASE</td><td><code>.3ds</code> / <code>.ase</code></td><td>Stereolithography</td><td><code>.stl</code></td></tr>
+<tr><td><b>Wavefront Object</b></td><td><code>.obj</code></td><td>DirectX X</td><td><code>.x</code></td></tr>
+<tr><td>Industry Foundation Classes</td><td><code>.ifc</code></td><td>AC3D</td><td><code>.ac</code></td></tr>
+<tr><td>XGL</td><td><code>.xgl</code> <code>.zgl</code></td><td>Milkshape 3D</td><td><code>.ms3d</code></td></tr>
+<tr><td>SDKMesh</td><td><code>.sdkmesh</code></td><td>TrueSpace</td><td><code>.cob</code> <code>.scn</code></td></tr>
+</table>
+<p class="mut">各格式為了不同的美術 / 渲染需求而生。免費模型最常見的是 <b>.OBJ</b> 和 <b>.FBX</b>。</p>
+
+<!-- ============================================================ -->
+<h2 id="obj">Wavefront OBJ</h2>
+<div class="grid2">
+<table>
+<tr><th>行首</th><th>意思</th><th>範例</th></tr>
+<tr><td><code>v</code></td><td>頂點位置 (x, y, z [, w])</td><td><code>v 0.123 0.234 0.345 1.0</code></td></tr>
+<tr><td><code>vt</code></td><td>貼圖座標 (u, v [, w])</td><td><code>vt 0.500 1 0</code></td></tr>
+<tr><td><code>vn</code></td><td>頂點法向量 (x, y, z)</td><td><code>vn 0.707 0.000 0.707</code></td></tr>
+<tr><td><code>f</code></td><td>多邊形面，每個角 = <code>v/vt/vn</code></td><td><code>f 6/4/1 3/5/3 7/6/5</code></td></tr>
+<tr><td><code>mtllib</code> / <code>usemtl</code></td><td>材質檔 / 之後的面用哪個材質</td><td><code>usemtl Mat1</code></td></tr>
+</table>
+<table>
+<tr><th>面的寫法</th><th>每個角有</th></tr>
+<tr><td><code>f 1 2 3</code></td><td>只有位置</td></tr>
+<tr><td><code>f 3/1 4/2 5/3</code></td><td>位置 / 貼圖座標</td></tr>
+<tr><td><code>f 6/4/1 3/5/3 7/6/5</code></td><td>位置 / 貼圖座標 / 法向量</td></tr>
+<tr><td><code>f 7//1 8//2 9//3</code></td><td>位置 // 法向量（沒有貼圖座標）</td></tr>
+</table></div>
+<div class="note">Index <b>從 1 開始</b>，而且 <b>v、vt、vn 各自編號</b>：<code>f 1/1/1 2/2/2 3/3/3</code> 的第一個角 = 第 1 個 v + 第 1 個 vt + 第 1 個 vn。</div>
+
+<h3>互動：解析 OBJ → GPU 需要幾個頂點？</h3>
+<p class="mut">GPU 的一個頂點 = 一組 (位置, uv, 法向量)。同一個位置搭配不同 normal / uv 就必須拆成不同頂點。編輯左邊文字或選範例。</p>
+<div class="ctrl"><button class="b" data-ex="tri">講義範例（1 個三角形）</button><button class="b" data-ex="flat">立方體：每面一個 normal</button><button class="b" data-ex="smooth">立方體：只有位置（共用頂點）</button></div>
+<div class="grid2">
+<textarea id="objTxt" rows="16"></textarea>
+<div><div class="card" id="objSum"></div><div style="max-height:260px;overflow:auto"><table class="objT" id="objTbl"></table></div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="mtl">材質（.mtl）</h2>
+<div class="grid2">
+<table>
+<tr><th>關鍵字</th><th>意思</th></tr>
+<tr><td><code>newmtl Textured</code></td><td>定義一個叫 Textured 的材質</td></tr>
+<tr><td><code>Ka</code> / <code>Kd</code> / <code>Ks</code></td><td>ambient / diffuse / specular 顏色（Phong BRDF 參數）</td></tr>
+<tr><td><code>d</code></td><td>不透明度（dissolve，1 = 不透明）</td></tr>
+<tr><td><code>illum</code></td><td>光照模型編號</td></tr>
+<tr><td><code>map_Ka</code></td><td>ambient texture map</td></tr>
+<tr><td><code>map_Kd</code></td><td><b>diffuse texture map</b>（最常用，就是「貼圖」）</td></tr>
+<tr><td><code>map_Ks</code></td><td>specular color texture map</td></tr>
+<tr><td><code>map_Ns</code></td><td>specular highlight（光澤度）map</td></tr>
+<tr><td><code>map_d</code></td><td>alpha texture map</td></tr>
+<tr><td><code>map_bump</code></td><td>bump（normal）map</td></tr>
+</table>
+<pre><code><span class="c"># .obj 裡用 usemtl 切換材質</span>
+usemtl Mat1
+<span class="c"># 以下的三角形用 Mat1</span>
+f 1/1/1 2/2/2 3/3/3
+f 4/4/4 5/5/5 6/6/6
+
+usemtl Mat2
+<span class="c"># 以下的三角形用 Mat2</span>
+f 7/7/7 8/8/8 9/9/9
+f 10/10/10 11/11/11 12/12/12</code></pre></div>
+<p class="mut">更多格式細節：<a href="http://paulbourke.net/dataformats/obj/">paulbourke.net/dataformats/obj</a></p>
+
+<!-- ============================================================ -->
+<h2 id="problems">3D 模型格式常見問題</h2>
+<table>
+<tr><th>問題</th><th>要做的事</th></tr>
+<tr><td>缺少頂點法向量</td><td>從頂點位置自己算（三角形兩邊 cross product；Assimp 可用 <code>aiProcess_GenNormals</code> / <code>GenSmoothNormals</code>）</td></tr>
+<tr><td>材質貼圖路徑是<b>絕對路徑</b>（建模者電腦上的路徑）</td><td>修正路徑：通常只取檔名，接在模型檔所在資料夾後面</td></tr>
+<tr><td>Per-face / per-vertex normal 混用</td><td>需要<b>拆頂點</b>（下一節）</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="normal">Per-face Normal vs Per-vertex Normal</h2>
+<div class="grid2">
+<div><canvas id="nCv" width="420" height="300"></canvas>
+<div class="ctrl"><button class="b on" data-n="face">Per-face（flat）</button><button class="b" data-n="vertex">Per-vertex（smooth）</button> 邊數 <input type="range" id="nSeg" min="4" max="16" value="6"> 光源角度 <input type="range" id="nLight" min="0" max="360" value="60"></div></div>
+<div class="card" id="nTxt"></div></div>
+<div class="grid2">
+<div class="card"><b>可以讓 OpenGL 對同一個位置用不同 normal 嗎？</b>
+<p>短答：<b>不行</b>。長答：GPU 為了最大平行度，<b>不能讓 vertex shader 輸入共用 attribute</b>；每次 vertex shader 呼叫都讀一整組 attribute（同一個 index 同時取位置和 normal）。所以<b>必須複製位置</b>——不管你做還是 GPU 做，佔的記憶體都一樣。</p></div>
+<div><table style="font-size:12px"><tr><th>VBO#1 Position</th><th>VBO#2 Normal</th><th>→ VS 呼叫</th></tr>
+<tr><td>Position#1</td><td>Normal#1</td><td>VS#1 (P1, N1)</td></tr><tr><td>Position#1</td><td>Normal#2</td><td>VS#2 (P1, N2)</td></tr>
+<tr><td>Position#1</td><td>Normal#3</td><td>VS#3 (P1, N3)</td></tr><tr><td>Position#1</td><td>Normal#4</td><td>VS#4 (P1, N4)</td></tr></table>
+<p class="mut">一個被 6 個面共用的頂點，若要 per-face normal → 1 個位置要配 6 個 normal → 拆成 6 個 GPU 頂點。</p></div></div>
+<p class="mut">兩種都要清楚自己要哪一種；免費模型可能是 per-face、per-vertex 甚至混用，要小心處理。例：Ubisoft《Grow Home》刻意用 per-face 營造特殊美術風格。</p>
+
+<!-- ============================================================ -->
+<h2 id="assimp">Assimp（Open Asset Import Library）</h2>
+<div class="grid2">
+<div class="card"><ul>
+<li>開源 C++ 3D 模型格式 parser，讀 OBJ、FBX、PLY、STL、glTF 等數十種格式</li>
+<li>能<b>解析並前處理</b>場景（三角化、產生 normal / tangent、最佳化 mesh）</li>
+<li><a href="https://github.com/assimp/assimp">GitHub</a>、<a href="https://assimp-docs.readthedocs.io/en/latest/">API 文件</a></li>
+<li>需依自己環境用 CMake 從原始碼建置——<b>課程 template 已附</b>（<code>builder/external/assimp</code>，已連結 <code>assimp::assimp</code>）</li></ul></div>
+<table>
+<tr><th></th><th>Tiny Obj Loader</th><th>Assimp</th></tr>
+<tr><td>格式</td><td>只支援 OBJ + MTL</td><td>各種格式</td></tr>
+<tr><td>資料</td><td>只有靜態 mesh（位置、法向量、UV、材質）</td><td>幾何、材質、貼圖、動畫…</td></tr>
+<tr><td>前處理</td><td>可三角化</td><td>三角化、產生 normal / tangent、最佳化</td></tr>
+<tr><td>大小</td><td>單一 header</td><td>大型函式庫（template 建置時間主要花在它）</td></tr>
+</table></div>
+
+<h3>aiScene 的資料結構（點方塊看說明）</h3>
+<div class="grid2">
+<svg id="aiSvg" viewBox="0 0 600 330" style="width:100%" font-size="12"></svg>
+<div class="card" id="aiTxt">點左圖的方塊。</div></div>
+
+<!-- ============================================================ -->
+<h2 id="load">載入流程</h2>
+<h3>資料結構</h3>
+<div class="grid2">
+<pre><code><span class="c">// C++：講義 07 的版本（直接存 GPU handle）</span>
+struct Shape {
+    GLuint vao;
+    GLuint vbo_position;
+    GLuint vbo_normal;
+    GLuint vbo_texcoord;
+    GLuint ibo;            <span class="c">// index buffer（EBO）</span>
+    int drawCount;         <span class="c">// index 數 = mNumFaces * 3</span>
+    int materialID;        <span class="c">// 對應 materials[] 的 index</span>
+};
+struct Material {
+    GLuint diffuse_tex;
+};</code></pre>
+<pre><code><span class="c">// C++：Appendix 的版本（先存 CPU 端資料，之後再上傳）</span>
+typedef struct _MeshData {
+    std::vector&lt;float&gt; positions;
+    std::vector&lt;float&gt; normals;
+    std::vector&lt;float&gt; texcoords;
+    std::vector&lt;unsigned int&gt; indices;
+    int material_id;       <span class="c">// Material idx</span>
+} MeshData;</code></pre></div>
+
+<h3>1. 讀檔</h3>
+<table>
+<tr><th></th><th>C API（講義 07）</th><th>C++ API（Appendix）</th></tr>
+<tr><td>標頭</td><td><code>#include &lt;assimp/cimport.h&gt;</code><br><code>#include &lt;assimp/scene.h&gt;</code><br><code>#include &lt;assimp/postprocess.h&gt;</code></td><td><code>#include &lt;assimp/Importer.hpp&gt;</code><br><code>#include &lt;assimp/scene.h&gt;</code><br><code>#include &lt;assimp/postprocess.h&gt;</code></td></tr>
+<tr><td>讀檔</td><td><code>const aiScene* scene = aiImportFile(path, aiProcessPreset_TargetRealtime_MaxQuality);</code></td><td><code>Assimp::Importer importer;</code><br><code>const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_SortByPType);</code></td></tr>
+<tr><td>失敗</td><td><code>scene == NULL</code>，訊息 <code>aiGetErrorString()</code></td><td><code>scene == nullptr</code>，訊息 <code>importer.GetErrorString()</code></td></tr>
+<tr><td>釋放</td><td><code>aiReleaseImport(scene);</code></td><td>importer 解構時自動釋放（scene 指標不能活得比 importer 久）</td></tr>
+</table>
+<h3>常用 post-processing flag</h3>
+<table>
+<tr><th>Flag</th><th>效果</th></tr>
+<tr><td><code>aiProcess_Triangulate</code></td><td>多邊形全部切成三角形（之後每個 face 剛好 3 個 index）</td></tr>
+<tr><td><code>aiProcess_JoinIdenticalVertices</code></td><td>合併完全相同的頂點 → 產生 index buffer，減少頂點數</td></tr>
+<tr><td><code>aiProcess_SortByPType</code></td><td>依 primitive 種類（點 / 線 / 三角形）拆成不同 mesh</td></tr>
+<tr><td><code>aiProcess_GenNormals</code> / <code>aiProcess_GenSmoothNormals</code></td><td>沒有 normal 時自動產生（flat / smooth）</td></tr>
+<tr><td><code>aiProcess_CalcTangentSpace</code></td><td>算 tangent / bitangent（normal mapping 用）</td></tr>
+<tr><td><code>aiProcess_FlipUVs</code></td><td>上下翻轉 UV（和 <code>stbi_set_flip_vertically_on_load</code> 擇一，別翻兩次）</td></tr>
+<tr><td><code>aiProcessPreset_TargetRealtime_MaxQuality</code></td><td>即時渲染用的預設組合（含上面多數 + 最佳化）</td></tr>
+</table>
+<p class="mut">完整清單：<a href="https://github.com/assimp/assimp/blob/master/include/assimp/postprocess.h">assimp/postprocess.h</a></p>
+
+<h3>2. 材質 → texture</h3>
+<pre><code><span class="c">// C++（講義 07）</span>
+for (unsigned int i = 0; i &lt; scene-&gt;mNumMaterials; ++i) {
+    aiMaterial* material = scene-&gt;mMaterials[i];
+    Material mat;
+    aiString texturePath;
+    if (material-&gt;GetTexture(aiTextureType_DIFFUSE, 0, &amp;texturePath) == aiReturn_SUCCESS) {
+        <span class="c">// 用 texturePath.C_Str() 讀圖（stb_image）得到 width, height, data</span>
+        glGenTextures(1, &amp;mat.diffuse_tex);
+        glBindTexture(GL_TEXTURE_2D, mat.diffuse_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    } else {
+        mat.diffuse_tex = default_diffuse_tex;   <span class="c">// 沒貼圖：用預設圖（保持 index 對齊！）</span>
+    }
+    materials.push_back(mat);                    <span class="c">// materials[i] 對應 mMaterials[i]</span>
+}</code></pre>
+
+<h3>3. 幾何 → VAO / VBO / IBO（補完版）</h3>
+<p class="mut">講義只給迴圈骨架，下面補上實際的 buffer 建立（3 個 VBO 分開存 = stacked 的一種）。</p>
+<pre><code><span class="c">// C++</span>
+for (unsigned int i = 0; i &lt; scene-&gt;mNumMeshes; ++i) {
+    aiMesh* mesh = scene-&gt;mMeshes[i];
+    std::vector&lt;float&gt; pos, nor, uv;
+    std::vector&lt;unsigned int&gt; idx;
+    for (unsigned int v = 0; v &lt; mesh-&gt;mNumVertices; ++v) {
+        pos.insert(pos.end(), { mesh-&gt;mVertices[v].x, mesh-&gt;mVertices[v].y, mesh-&gt;mVertices[v].z });
+        if (mesh-&gt;HasNormals())
+            nor.insert(nor.end(), { mesh-&gt;mNormals[v].x, mesh-&gt;mNormals[v].y, mesh-&gt;mNormals[v].z });
+        if (mesh-&gt;HasTextureCoords(0))                  <span class="c">// mTextureCoords[0] = 第 0 組 UV</span>
+            uv.insert(uv.end(), { mesh-&gt;mTextureCoords[0][v].x, mesh-&gt;mTextureCoords[0][v].y });
+        else
+            uv.insert(uv.end(), { 0.0f, 0.0f });
+    }
+    for (unsigned int f = 0; f &lt; mesh-&gt;mNumFaces; ++f)  <span class="c">// Triangulate 後每個 face 3 個 index</span>
+        for (int k = 0; k &lt; 3; ++k)
+            idx.push_back(mesh-&gt;mFaces[f].mIndices[k]);
+
+    Shape shape;
+    glGenVertexArrays(1, &amp;shape.vao);
+    glBindVertexArray(shape.vao);
+
+    glGenBuffers(1, &amp;shape.vbo_position);
+    glBindBuffer(GL_ARRAY_BUFFER, shape.vbo_position);
+    glBufferData(GL_ARRAY_BUFFER, pos.size() * sizeof(float), pos.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+    <span class="c">// vbo_normal（location 1, size 3）、vbo_texcoord（location 2, size 2）同理</span>
+
+    glGenBuffers(1, &amp;shape.ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, shape.ibo);   <span class="c">// VAO 會記住 IBO</span>
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned int), idx.data(), GL_STATIC_DRAW);
+
+    shape.materialID = mesh-&gt;mMaterialIndex;
+    shape.drawCount = mesh-&gt;mNumFaces * 3;
+    shapes.push_back(shape);
+}
+aiReleaseImport(scene);   <span class="c">// 4. 資料都上傳到 GPU 後就釋放 scene</span></code></pre>
+
+<h3>5. 畫整個場景</h3>
+<div class="grid2">
+<pre><code><span class="c">// C++</span>
+glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+glUseProgram(program);
+glUniformMatrix4fv(mv_location, 1, GL_FALSE, glm::value_ptr(mv_matrix));
+glUniformMatrix4fv(proj_location, 1, GL_FALSE, glm::value_ptr(proj_matrix));
+glActiveTexture(GL_TEXTURE0);
+glUniform1i(tex_location, 0);
+for (size_t i = 0; i &lt; shapes.size(); ++i) {
+    glBindVertexArray(shapes[i].vao);
+    int materialID = shapes[i].materialID;
+    glBindTexture(GL_TEXTURE_2D, materials[materialID].diffuse_tex);
+    glDrawElements(GL_TRIANGLES, shapes[i].drawCount, GL_UNSIGNED_INT, 0);
+}</code></pre>
+<svg viewBox="0 0 440 210" style="width:100%" font-size="12" text-anchor="middle">
+<text x="220" y="16" fill="#666">載入後得到兩個陣列（Appendix 圖）</text>
+<g stroke="#999"><rect x="20" y="34" width="120" height="50" rx="6" fill="#dbeafe"/><rect x="160" y="34" width="120" height="50" rx="6" fill="#dbeafe"/><rect x="300" y="34" width="120" height="50" rx="6" fill="#dbeafe"/>
+<rect x="90" y="150" width="120" height="44" rx="6" fill="#c6f0d6"/><rect x="230" y="150" width="120" height="44" rx="6" fill="#c6f0d6"/></g>
+<text x="80" y="55">Meshes[0]</text><text x="80" y="73" font-size="11">material_id: 1</text><text x="220" y="55">Meshes[1]</text><text x="220" y="73" font-size="11">material_id: 0</text><text x="360" y="55">Meshes[2]</text><text x="360" y="73" font-size="11">material_id: 1</text>
+<text x="150" y="177">Textures[0]</text><text x="290" y="177">Textures[1]</text>
+<g stroke="#c53030" stroke-width="1.6" marker-end="url(#ar)" fill="none"><path d="M80 84 L280 148"/><path d="M220 84 L160 148"/><path d="M360 84 L300 148"/></g>
+<text x="220" y="125" fill="#c53030" font-size="11">material_id → 哪張 texture</text>
+</svg></div>
+
+<details><summary>Appendix 的完整 C++ API 範例（含錯誤說明）</summary>
+<pre><code><span class="c">// C++</span>
+#include &lt;assimp/Importer.hpp&gt;      <span class="c">// C++ importer interface</span>
+#include &lt;assimp/scene.h&gt;           <span class="c">// Output data structure</span>
+#include &lt;assimp/postprocess.h&gt;     <span class="c">// Post processing flags</span>
+
+void my_load_object(const char* const my_filepath) {
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(my_filepath,
+        aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_SortByPType);
+    if (!scene) {
+        std::cerr &lt;&lt; "Fail to load Scene" &lt;&lt; '\n' &lt;&lt; importer.GetErrorString() &lt;&lt; '\n';
+        std::exit(1);
+    }
+
+    std::vector&lt;MeshData&gt; meshes;
+    for (unsigned int i = 0; i &lt; scene-&gt;mNumMeshes; i++) {
+        aiMesh* aimesh = scene-&gt;mMeshes[i];
+        MeshData mesh;
+        bool hasNormals = aimesh-&gt;HasNormals();            <span class="c">// 講義沒定義，補上</span>
+        bool hasUV = aimesh-&gt;HasTextureCoords(0);
+        for (unsigned int vi = 0; vi &lt; aimesh-&gt;mNumVertices; ++vi) {
+            const aiVector3D&amp; p = aimesh-&gt;mVertices[vi];
+            mesh.positions.insert(mesh.positions.end(), { p.x, p.y, p.z });
+            if (hasNormals) {
+                const aiVector3D&amp; n = aimesh-&gt;mNormals[vi];
+                mesh.normals.insert(mesh.normals.end(), { n.x, n.y, n.z });
+            }
+            if (hasUV) {
+                const aiVector3D&amp; t = aimesh-&gt;mTextureCoords[0][vi];
+                mesh.texcoords.insert(mesh.texcoords.end(), { t.x, t.y });
+            }
+        }
+        for (unsigned int fi = 0; fi &lt; aimesh-&gt;mNumFaces; ++fi) {
+            const aiFace&amp; face = aimesh-&gt;mFaces[fi];
+            for (int k = 0; k &lt; 3; ++k) mesh.indices.push_back(face.mIndices[k]);
+        }
+        mesh.material_id = aimesh-&gt;mMaterialIndex;
+        meshes.push_back(mesh);
+    }
+
+    std::vector&lt;GLuint&gt; textures;
+    for (unsigned int i = 0; i &lt; scene-&gt;mNumMaterials; i++) {
+        aiMaterial* material = scene-&gt;mMaterials[i];
+        aiString path;
+        GLuint diffuseTexture = default_texture;            <span class="c">// 講義：只有找到貼圖才 push → index 會錯位</span>
+        if (material-&gt;GetTexture(aiTextureType_DIFFUSE, 0, &amp;path) == AI_SUCCESS)
+            diffuseTexture = loadTextureImage(path.data);   <span class="c">// 自己寫的讀圖 → GL texture</span>
+        textures.push_back(diffuseTexture);                 <span class="c">// 每個 material 都 push，textures[i] 才對得上</span>
+        <span class="c">// 其他類型（OPACITY、EMISSIVE…）同樣方式讀</span>
+    }
+    <span class="c">// 講義寫 return meshes, textures; —— C++ 不能這樣回傳兩個值，改用參數或 struct</span>
+}</code></pre>
+<p class="mut">參考：<a href="https://www.mbsoftworks.sk/tutorials/opengl3/20-assimp-model-loading/">mbsoftworks Assimp tutorial</a>、<a href="https://learnopengl.com/Model-Loading/Assimp">LearnOpenGL - Assimp</a></p>
+</details>
+
+<!-- ============================================================ -->
+<h2 id="accel">加速場景渲染：總覽</h2>
+<div class="grid2">
+<div class="card"><b>Algorithm view：少畫一點</b>
+<ul><li><b>Frustum culling</b>：視錐外的物件不畫</li><li><b>Occlusion culling</b>：被擋住的不畫（本課不講）</li><li>Distance culling：太遠的不畫</li>
+<li>回想：rasterizer 的 face culling 只丟背面三角形，但 CPU 送資料、vertex shader 的時間已經花掉了 → 最好在<b>畫之前</b>就判斷物件看不看得到</li></ul></div>
+<div class="card"><b>Implementation view：畫得有效率</b>
+<ul><li>減少 draw call 數（instancing、multi-draw）</li><li>減少 CPU ↔ GPU 的資料傳輸</li><li>GPU-driven rendering</li><li>Multi-thread rendering</li></ul></div></div>
+
+<!-- ============================================================ -->
+<h2 id="aabb">Bounding Box 與平面測試</h2>
+<div class="grid2">
+<div class="card">
+<p><b>Bounding box</b>：用簡單形狀粗略代表複雜物件，換取速度（容許一點誤差：box 在視錐內不代表物件本身看得到）。</p>
+<p><b>AABB</b>（Axis Aligned Bounding Box）：邊和 X、Y、Z 軸平行，只要存最小 / 最大角 <b>a<sup>min</sup>、a<sup>max</sup></b>，或中心 + 半長：</p>
+<p style="text-align:center;font:15px ui-monospace,monospace">c = (a<sup>max</sup> + a<sup>min</sup>) · 0.5<br>h = (a<sup>max</sup> − a<sup>min</sup>) · 0.5</p>
+<p><b>平面方程</b>：法向量 n = (a, b, c)、|n| = 1、平面上一點 (x₀, y₀, z₀)：</p>
+<p style="text-align:center;font:14px ui-monospace,monospace">ax + by + cz + D = 0，D = −ax₀ − by₀ − cz₀<br>點到平面的<b>有號距離</b> f(x,y,z) = ax + by + cz + D</p></div>
+<div class="card">
+<p><b>Plane / AABB 相交測試</b></p>
+<pre><code>bool PlaneAABBIntersect(B, π)   <span class="c">// 回傳 OUTSIDE / INSIDE / INTERSECTING</span>
+c = (b.max + b.min) / 2;
+h = (b.max - b.min) / 2;
+e = h.x*|n.x| + h.y*|n.y| + h.z*|n.z|;  <span class="c">// box 往法向量方向最長的投影半徑</span>
+s = dot(c, n) + D;                      <span class="c">// 中心到平面的有號距離</span>
+if (s - e &gt; 0) return OUTSIDE;          <span class="c">// 整個 box 在正半空間</span>
+if (s + e &lt; 0) return INSIDE;           <span class="c">// 整個 box 在負半空間</span>
+return INTERSECTING;</code></pre>
+<p class="mut">這裡把法向量指向的<b>正半空間當作「外面」</b>（講義圖示）。|s| &gt; e 就一定不相交。實作參考 <a href="https://gdbooks.gitbooks.io/3dcollisions/content/Chapter2/">3D Collisions Ch.2</a>。</p></div></div>
+<h3>互動：Plane / AABB（2D）</h3>
+<div class="grid2">
+<canvas id="paCv" width="420" height="300"></canvas>
+<div><div class="ctrl">box 中心 x <input type="range" id="pcx" min="-150" max="150" value="-40"> y <input type="range" id="pcy" min="-100" max="100" value="0"></div>
+<div class="ctrl">半長 hx <input type="range" id="phx" min="10" max="100" value="60"> hy <input type="range" id="phy" min="10" max="100" value="35"></div>
+<div class="ctrl">平面角度 <input type="range" id="pang" min="0" max="360" value="20"> D <input type="range" id="pD" min="-150" max="150" value="-30"></div>
+<div class="card" id="paTxt" style="font:13px/1.7 ui-monospace,monospace"></div></div></div>
+
+<!-- ============================================================ -->
+<h2 id="frustum">Frustum Culling</h2>
+<h3>從矩陣求視錐的 6 個平面</h3>
+<div class="grid2">
+<div class="card">
+<p>NDC 點 <b>u</b>、clip space 點 <b>t</b>、世界座標點 <b>s</b>：u<sub>xyz</sub> = t<sub>xyz</sub> / t<sub>w</sub>，t = M · s，<b>M = P · V</b>。設 m<sub>i</sub> 為 M 的第 i 列（row）。</p>
+<p>以 x 為例，點在左平面內側：</p>
+<p style="font:13px/1.9 ui-monospace,monospace">−1 ≤ u<sub>x</sub> ⇔ −1 ≤ t<sub>x</sub>/t<sub>w</sub> ⇔ t<sub>x</sub> + t<sub>w</sub> ≥ 0<br>⇔ (m<sub>0</sub>·s) + (m<sub>3</sub>·s) ≥ 0 ⇔ (m<sub>0</sub> + m<sub>3</sub>)·s ≥ 0</p>
+<p class="mut">（假設 t<sub>w</sub> &gt; 0，即點在相機前方）</p></div>
+<table>
+<tr><th>平面</th><th>內側條件</th><th>平面（法向量朝外，講義寫法）</th></tr>
+<tr><td>left</td><td>(m₃ + m₀)·s ≥ 0</td><td>−(m₃ + m₀)·(x,y,z,1) = 0</td></tr>
+<tr><td>right</td><td>(m₃ − m₀)·s ≥ 0</td><td>−(m₃ − m₀)·(x,y,z,1) = 0</td></tr>
+<tr><td>bottom</td><td>(m₃ + m₁)·s ≥ 0</td><td>−(m₃ + m₁)·(x,y,z,1) = 0</td></tr>
+<tr><td>top</td><td>(m₃ − m₁)·s ≥ 0</td><td>−(m₃ − m₁)·(x,y,z,1) = 0</td></tr>
+<tr><td>near</td><td>(m₃ + m₂)·s ≥ 0</td><td>−(m₃ + m₂)·(x,y,z,1) = 0</td></tr>
+<tr><td>far</td><td>(m₃ − m₂)·s ≥ 0</td><td>−(m₃ − m₂)·(x,y,z,1) = 0</td></tr>
+</table></div>
+<p class="mut">每個平面的係數 (a, b, c, D) 要除以 |(a, b, c)| 正規化，Plane/AABB 測試的 s 才是真正距離。GLM 是 column-major：第 i 列 = <code>glm::vec4(M[0][i], M[1][i], M[2][i], M[3][i])</code>。</p>
+<div class="grid2">
+<pre><code>bool FrustumAABBIntersect(π0..π5, B)
+intersecting = false;
+for (k = 0; k &lt;= 5; k++) {
+    result = PlaneAABBIntersect(B, πk);
+    if (result == OUTSIDE) return OUTSIDE;     <span class="c">// 在任一平面外 → 整個在視錐外</span>
+    else if (result == INTERSECTING) intersecting = true;
+}
+if (intersecting) return INTERSECTING;
+else return INSIDE;</code></pre>
+<pre><code><span class="c">// C++：render loop 加上 culling</span>
+for (int i = 0; i &lt; numShapes; ++i) {
+    if (FrustumAABBIntersect(shapes[i].AABB, camera.Frustum) == OUTSIDE)
+        continue;                               <span class="c">// 看不到就跳過 draw call</span>
+    glBindVertexArray(shapes[i].vao);
+    glBindTexture(GL_TEXTURE_2D, materials[shapes[i].materialID].diffuse_tex);
+    glDrawElements(GL_TRIANGLES, shapes[i].drawCount, GL_UNSIGNED_INT, 0);
+}</code></pre></div>
+<h3>互動：Frustum culling（俯視圖）</h3>
+<div class="grid2">
+<canvas id="fcCv" width="420" height="320"></canvas>
+<div><div class="ctrl">相機方向 <input type="range" id="fYaw" min="0" max="360" value="90"> FOV <input type="range" id="fFov" min="20" max="120" value="60"> far <input type="range" id="fFar" min="80" max="300" value="200"></div>
+<div class="ctrl"><button class="b" id="fNew">重新產生物件</button></div>
+<div class="card" id="fcTxt"></div>
+<p class="mut"><span class="pill" style="background:#2f855a">INSIDE</span> <span class="pill" style="background:#d69e2e">INTERSECTING</span> → 要畫；<span class="pill" style="background:#9ca3af">OUTSIDE</span> → 跳過。2D 只有 left / right / near / far 四個平面，3D 再加 top / bottom。</p></div></div>
+
+<!-- ============================================================ -->
+<h2 id="hier">階層式 Frustum Culling</h2>
+<div class="grid2">
+<div class="card">
+<ul><li>逐一測試所有物件是 <b>O(n)</b>；用階層結構可以到 <b>O(log n)</b></li>
+<li>任何有<b>空間一致性</b>的結構都適用：
+<ul><li>父節點<b>完全在內</b> → 所有子節點都在內（不用再測）</li>
+<li>父節點<b>完全在外</b> → 所有子節點都在外（整棵子樹跳過）</li>
+<li>相交 → 往下測子節點</li></ul></li></ul></div>
+<table>
+<tr><th>結構</th><th>建構方式</th><th>特點</th></tr>
+<tr><td>kd-tree</td><td>Top-down：沿軸交替切空間</td><td rowspan="3">切的是<b>空間</b>；問題：跨越格子邊界的物件要放哪？</td></tr>
+<tr><td>Octree</td><td>Top-down：每格切成 8 個子格</td></tr>
+<tr><td>BSP-tree</td><td>Top-down：用任意平面切</td></tr>
+<tr><td><b>BVH</b>（Bounding Volume Hierarchy）</td><td><b>Bottom-up</b>：把相近物件的 bounding box 合併成更大的 box</td><td>切的是<b>物件</b>，每個物件只屬於一個節點</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="overhead">效能問題：Driver Overhead</h2>
+<svg viewBox="0 0 960 150" style="width:100%" font-size="12" text-anchor="middle">
+<g stroke="#999"><rect x="20" y="40" width="150" height="44" rx="8" fill="#dbeafe"/><rect x="250" y="40" width="190" height="44" rx="8" fill="#fde7b6"/><rect x="520" y="40" width="120" height="44" rx="8" fill="#c6f0d6"/></g>
+<text x="95" y="67">Application（CPU）</text><text x="345" y="67">Graphics card driver</text><text x="580" y="67">GPU</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#ar)"><path d="M170 62h78"/><path d="M440 62h78"/></g><text x="210" y="55" font-size="11">command</text>
+<g font-size="11" text-anchor="start" fill="#444"><text x="680" y="30">Driver 要做的事：</text><text x="680" y="48">• 把指令翻成 GPU instruction</text><text x="680" y="64">• Context 管理、記憶體管理</text><text x="680" y="80">• 硬體 cache、資源狀態轉換</text><text x="680" y="96">• 驗證與錯誤檢查 …</text></g>
+<text x="300" y="125" fill="#c53030">每個 draw call 都要經過 driver → draw call 太多時 CPU 成為瓶頸、GPU 閒著等</text>
+</svg>
+<table>
+<tr><th>情境</th><th>做法</th><th>CPU 時間</th><th>加速</th></tr>
+<tr><td rowspan="2">不同 mesh（Heterogeneous）</td><td>迴圈：設材質 / model matrix / 綁 VAO / <code>glDrawElements</code></td><td>1.9 ms</td><td rowspan="2"><b>3.5×</b></td></tr>
+<tr><td>合併資料後一次 <code>glMultiDrawElements</code></td><td>0.54 ms</td></tr>
+<tr><td rowspan="2">同一個 mesh 很多份（Homogeneous）</td><td>迴圈 <code>glDrawElements</code></td><td>1.86 ms</td><td rowspan="2"><b>3.3×</b></td></tr>
+<tr><td>model matrix 放進 vertex attribute，一次 <code>glDrawElementsInstanced</code></td><td>0.57 ms</td></tr>
+</table>
+<p class="mut">結論：<b>減少 draw command 數</b>就能改善效率。</p>
+
+<!-- ============================================================ -->
+<h2 id="instance">Instancing：把整個矩陣當 vertex attribute</h2>
+<p>講義 05 用 instancing 傳 <code>vec3 offset</code>（只能平移，見 <a href="05-vertex-draw.html#inst">Instancing</a>）。要旋轉、縮放 → 傳整個 <code>mat4</code>。但 <code>glVertexAttribPointer</code> 的 size 只能是 1~4，一個矩陣有 16 個數字 → <b>每個 column 一個 attribute</b>。</p>
+<div class="grid2">
+<table>
+<tr><th>location</th><th>內容</th><th>size</th><th>stride</th><th>offset（byte）</th><th>divisor</th></tr>
+<tr><td>1</td><td>column 0</td><td>4</td><td>64</td><td>0</td><td>1</td></tr>
+<tr><td>2</td><td>column 1</td><td>4</td><td>64</td><td>16</td><td>1</td></tr>
+<tr><td>3</td><td>column 2</td><td>4</td><td>64</td><td>32</td><td>1</td></tr>
+<tr><td>4</td><td>column 3</td><td>4</td><td>64</td><td>48</td><td>1</td></tr>
+</table>
+<div><div class="cells" id="matCells"></div><p class="mut">每個 instance 的矩陣 = 64 bytes（16 float，column-major，正好是 glm::mat4 的記憶體排列）；一格 = 4 float = 16 bytes。</p></div></div>
+<div class="grid2">
+<pre><code><span class="c">// C++</span>
+glBindBuffer(GL_ARRAY_BUFFER, matrix_buffer);   <span class="c">// 每個 instance 一個 glm::mat4</span>
+for (int c = 0; c &lt; 4; c++) {
+    glVertexAttribPointer(1 + c, 4, GL_FLOAT, GL_FALSE, 64, (void*)(c * 16));
+    glEnableVertexAttribArray(1 + c);
+    glVertexAttribDivisor(1 + c, 1);             <span class="c">// 每個 instance 換一筆（講義沒寫，但必要）</span>
+}
+glDrawElementsInstanced(GL_TRIANGLES, count, GL_UNSIGNED_INT, 0, numInstance);</code></pre>
+<pre><code><span class="c">// GLSL：兩種寫法</span>
+layout (location = 0) in vec3 vertex;
+layout (location = 1) in mat4 modelMat;   <span class="c">// 自動佔用 location 1~4</span>
+
+<span class="c">// 或明確寫成 4 個 vec4</span>
+layout (location = 1) in vec4 matCol0;
+layout (location = 2) in vec4 matCol1;
+layout (location = 3) in vec4 matCol2;
+layout (location = 4) in vec4 matCol3;
+void main(void) {
+    mat4 modelMat = mat4(matCol0, matCol1, matCol2, matCol3);
+    ...
+}</code></pre></div>
+
+<!-- ============================================================ -->
+<h2 id="multidraw">Multi-draw：不同 mesh 一次畫</h2>
+<p>Instancing 只能重複畫<b>同一個</b> mesh。不同 mesh（Heterogeneous）要一次畫：</p>
+<ol class="steps"><li><b>初始化</b>：把所有要畫的 mesh 放進<b>同一個 VBO</b>（用 index 的話也放進同一個 IBO）</li>
+<li><b>繪製</b>：用 multi-draw API：<code>glMultiDrawArrays</code>、<code>glMultiDrawElements</code>、<code>glMultiDrawElementsBaseVertex</code></li></ol>
+<p class="mut">選一個呼叫方式，看它讀了 index buffer 的哪一段、加上 baseVertex 後取到 VBO 的哪些頂點。紅 = mesh 1（ABCD）、綠 = mesh 2（EFGHK）。一格 VBO = 3 float（12 bytes），一格 index = 4 bytes（GL_UNSIGNED_INT）。</p>
+<div class="ctrl" id="mdBtns"></div>
+<div class="grid2">
+<div>
+<svg viewBox="0 0 420 110" style="width:100%" font-size="13" text-anchor="middle" id="mdShape"></svg>
+<div><b>VBO</b><div class="cells" id="mdVbo"></div></div>
+<div style="margin-top:14px"><b>Indices</b> <span class="mut" id="mdIdxNote"></span><div class="cells" id="mdIdx"></div></div>
+<div class="card" id="mdTxt" style="margin-top:8px"></div></div>
+<pre><code id="mdCode"></code></pre></div>
+
+<h3>Multi-draw API</h3>
+<table>
+<tr><th>函式</th><th>等於</th><th>參數</th></tr>
+<tr><td><a href="04-api.html#glMultiDrawArrays"><code>glMultiDrawArrays(mode, first[], count[], drawcount)</code></a></td><td>drawcount 次 <code>glDrawArrays(mode, first[i], count[i])</code></td><td>first：每個物件起始頂點；count：頂點數</td></tr>
+<tr><td><a href="04-api.html#glMultiDrawElements"><code>glMultiDrawElements(mode, count[], type, indices[], drawcount)</code></a></td><td>drawcount 次 <code>glDrawElements</code></td><td>indices[i]：index 在 IBO 中的 byte offset</td></tr>
+<tr><td><a href="04-api.html#glMultiDrawElementsBaseVertex"><code>glMultiDrawElementsBaseVertex(mode, count[], type, indices[], drawcount, basevertex[])</code></a></td><td>drawcount 次 <code>glDrawElementsBaseVertex</code></td><td>basevertex[i]：每個 index 再加上的值 → 各 mesh 的 index 可以保持從 0 開始</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="indirect">Indirect Draw：draw 參數放進 buffer</h2>
+<p>Multi-draw 每一幀還是要把 <code>counts</code>、<code>indices</code>、<code>baseVertices</code> 這些（固定的）陣列從主記憶體送到顯卡 → 浪費。<b>把它們放進 GPU buffer</b>（<code>GL_DRAW_INDIRECT_BUFFER</code>）。</p>
+<div class="grid2">
+<table>
+<tr><th colspan="2">DrawArraysIndirectCommand</th></tr>
+<tr><td><code>GLuint vertexCount</code></td><td>頂點數</td></tr>
+<tr><td><code>GLuint instanceCount</code></td><td>instance 數</td></tr>
+<tr><td><code>GLuint firstVertex</code></td><td>起始頂點</td></tr>
+<tr><td><code>GLuint baseInstance</code></td><td>instanced attribute 起始</td></tr>
+<tr><td colspan="2" class="mut">直接版：<code>glDrawArraysInstancedBaseInstance(mode, first, count, instancecount, baseinstance)</code></td></tr>
+</table>
+<table>
+<tr><th colspan="2">DrawElementsIndirectCommand</th></tr>
+<tr><td><code>GLuint count</code></td><td>index 數</td></tr>
+<tr><td><code>GLuint instanceCount</code></td><td>instance 數</td></tr>
+<tr><td><code>GLuint firstIndex</code></td><td>第一個 index 的<b>位置（個數，不是 byte）</b></td></tr>
+<tr><td><code>GLint baseVertex</code></td><td>加到每個 index 的常數</td></tr>
+<tr><td><code>GLuint baseInstance</code></td><td>instanced attribute 起始</td></tr>
+<tr><td colspan="2" class="mut">直接版：<code>glDrawElementsInstancedBaseVertexBaseInstance(..., offset = firstIndex * sizeof(type), ...)</code></td></tr>
+</table></div>
+<div class="grid2">
+<pre><code><span class="c">// C++：初始化（上例兩個 mesh）</span>
+DrawElementsIndirectCommand drawCommands[2];
+drawCommands[0] = { 6, 1, 0, 0, 0 };   <span class="c">// count, instanceCount, firstIndex, baseVertex, baseInstance</span>
+drawCommands[1] = { 9, 1, 6, 4, 0 };   <span class="c">// firstIndex = 6 → byte offset 24</span>
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBufferHandle);
+glBufferData(GL_DRAW_INDIRECT_BUFFER, sizeof(drawCommands), drawCommands, GL_DYNAMIC_DRAW);
+glBindVertexArray(vaoHandle);
+<span class="c">// bind VBO and IBO ...</span>
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBufferHandle);
+glBindVertexArray(0);
+
+<span class="c">// C++：繪製，只剩一行</span>
+glBindVertexArray(vaoHandle);
+glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, (GLvoid*)0, 2, 0);
+<span class="c">//                                         indirect offset ↑  drawcount ↑ stride（0 = 緊密）</span></code></pre>
+<div class="card">
+<p>和 mesh 資料（頂點、法向量、index…）比起來，draw 參數很小，單看傳輸量好處不大。<b>真正的好處</b>：</p>
+<ul><li>把 indirect buffer 改用 <b>SSBO</b>（shader storage buffer：shader 可讀<b>也可寫</b>）存</li>
+<li>→ <b>GPU 可以自己寫 draw command 的參數</b>（例如 compute shader 做完 culling 後填 instanceCount）</li>
+<li>→ CPU 完全不用知道要畫幾個 → <b>GPU-driven rendering</b></li></ul>
+<pre><code><span class="c">// C++：同一塊 buffer 同時當 SSBO 和 indirect buffer</span>
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, cmdBufferHandle);
+glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(drawCommands), drawCommands, GL_MAP_READ_BIT);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, cmdBufferHandle);   <span class="c">// binding point 3</span>
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBufferHandle);</code></pre>
+<p class="mut"><code>glMultiDrawElementsIndirect</code> 等於多次 <code>glDrawElementsInstancedBaseVertexBaseInstance</code>，參數從 buffer 讀（綁了 <code>GL_DRAW_INDIRECT_BUFFER</code> 時 indirect 是 byte offset）。4.3+；SSBO / compute shader 也是 4.3+，<b>macOS（4.1）不支援</b>。</p></div></div>
+
+<!-- ============================================================ -->
+<h2 id="gpudriven">GPU-driven Rendering：Instance Culling</h2>
+<div class="card"><b>Compute Shader</b>：通用的 shader，用 OpenGL API + GLSL 寫 GPU 平行程式；限制比 vertex / fragment shader 少；<b>不屬於 graphics pipeline</b>；OpenGL 4.3+；細節之後的講義會講。</div>
+<p><b>情境</b>：草地有 131,072 根草，每根只差在位置（一個 vec3 offset）。看不到的草想跳過——但 <b>vertex shader 無法「丟掉」某個 instance</b>，只能在 draw 之前決定畫哪些。</p>
+<svg viewBox="0 0 960 170" style="width:100%" font-size="12" text-anchor="middle" id="flowSvg"></svg>
+<h3>互動：GPU 收集可見 instance</h3>
+<div class="grid2">
+<div><canvas id="icCv" width="420" height="260"></canvas>
+<div class="ctrl">視野方向 <input type="range" id="icYaw" min="0" max="360" value="95"> <button class="b" id="icStep">▶ 下一步</button><button class="b" id="icReset">重來</button></div></div>
+<div>
+<div><b>WHOLE instance data（SSBO, binding 1）</b><div class="cells" id="icAll"></div></div>
+<div style="margin-top:12px"><b>Visible instance data（SSBO, binding 2）</b><div class="cells" id="icVis"></div></div>
+<div style="margin-top:12px"><b>Indirect command（SSBO, binding 3）</b><div class="cells" id="icCmd"></div></div>
+<div class="card" id="icTxt" style="margin-top:8px"></div></div></div>
+<details><summary>完整程式：初始化、render、兩個 compute shader、vertex shader（講義）</summary>
+<pre><code><span class="c">// C++：初始化三個 SSBO</span>
+const int NUM_GRASS = 131072;
+<span class="c">// 1. 全部 instance 資料（vec4 position，std430 對齊用 vec4）</span>
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, wholeDataBufferHandle);
+glBufferStorage(GL_SHADER_STORAGE_BUFFER, NUM_GRASS * 4 * sizeof(float), grassOffsets, GL_MAP_READ_BIT);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, wholeDataBufferHandle);
+<span class="c">// 2. 這一幀可見的 instance</span>
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, visibleBufferHandle);
+glBufferStorage(GL_SHADER_STORAGE_BUFFER, NUM_GRASS * 4 * sizeof(float), NULL, 0);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, visibleBufferHandle);
+<span class="c">// 3. draw command（instanceCount 先設 0）</span>
+DrawElementsIndirectCommand drawCommands[1] = { { numIndex, 0, 0, 0, 0 } };
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, cmdBufferHandle);
+glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(drawCommands), drawCommands, GL_MAP_READ_BIT);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, cmdBufferHandle);
+
+<span class="c">// C++：每一幀</span>
+glUseProgram(resetProgram);                       <span class="c">// compute #1：instanceCount = 0</span>
+glDispatchCompute(1, 1, 1);
+glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);   <span class="c">// 等前一步寫完才讀</span>
+glUseProgram(collectProgram);                     <span class="c">// compute #2：收集可見 instance</span>
+glDispatchCompute(NUM_GRASS / 1024, 1, 1);
+glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);   <span class="c">// （讀 indirect 參數建議再加 GL_COMMAND_BARRIER_BIT）</span>
+glUseProgram(renderProgram);
+glBindVertexArray(vaoHandle);
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBufferHandle);
+glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, 0);</code></pre>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Compute Shader #1 Reset</span>
+#version 430 core
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+struct DrawCommand {
+    uint count; uint instanceCount; uint firstIndex;
+    uint baseVertex; uint baseInstance;
+};
+layout (std430, binding = 3) buffer DrawCommandsBlock {
+    DrawCommand commands[];
+};
+void main() {
+    const uint idx = gl_LocalInvocationID.x;
+    commands[idx].instanceCount = 0;
+}</code></pre>
+<pre><code><span class="c">// GLSL：Compute Shader #2 Collect</span>
+#version 430 core
+layout (local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+struct DrawCommand { uint count; uint instanceCount; uint firstIndex; uint baseVertex; uint baseInstance; };
+struct InstanceProperties { vec4 position; };
+layout (std430, binding = 3) buffer DrawCommandsBlock { DrawCommand commands[]; };
+layout (std430, binding = 1) buffer InstanceData { InstanceProperties instanceProps[]; };
+layout (std430, binding = 2) buffer CurrValidInstanceData { InstanceProperties currValidInstanceProps[]; };
+void main() {
+    const uint idx = gl_GlobalInvocationID.x;
+    if (/* visible */) {
+        <span class="c">// atomicAdd 回傳「加之前」的值 → 拿到不重複的位置</span>
+        currValidInstanceProps[atomicAdd(commands[0].instanceCount, 1)] = instanceProps[idx];
+    }
+}</code></pre></div>
+<pre><code><span class="c">// GLSL：Vertex Shader（用 gl_InstanceID 讀可見清單）</span>
+#version 430 core
+layout (location = 0) in vec3 vertex;
+uniform mat4 viewProjMatrix;
+struct InstanceProperties { vec4 position; };
+layout (std430, binding = 2) buffer CurrValidInstanceData { InstanceProperties currValidInstanceProps[]; };
+void main() {
+    gl_Position = viewProjMatrix * (vec4(vertex, 1.0) + currValidInstanceProps[gl_InstanceID].position);
+}</code></pre>
+<p class="mut">講義 vertex shader 的 uniform 名 <code>viewProjMatrix</code> 和使用處 <code>viewProjMat</code> 不一致，要統一。</p>
+</details>
+
+<!-- ============================================================ -->
+<h2 id="thread">Multi-thread Rendering</h2>
+<svg viewBox="0 0 960 230" style="width:100%" font-size="11" text-anchor="middle" id="mtSvg"></svg>
+<p class="mut">單執行緒：CPU 準備一幀時 GPU 閒著、GPU 畫的時候 CPU 閒著。多執行緒：game thread、render thread、GPU 像流水線一樣同時處理不同幀。OpenGL 的 context 綁定單一執行緒，多執行緒提交是 Vulkan 等新 API 的設計重點（GDC 2015 Khronos：Vulkan Explicit GPU Control）。</p>
+
+<div class="card"><b>結論：提升 renderer 效率</b>
+<div class="grid2"><div><b>Algorithm view</b><ul><li>Visibility culling</li><li>Distance culling</li></ul></div>
+<div><b>Implementation view</b><ul><li>減少 draw call 數</li><li>減少 CPU ↔ GPU 資料傳輸</li><li>GPU-driven rendering</li><li>Multi-thread rendering</li></ul></div></div></div>
+
+<!-- ============================================================ -->
+<h2 id="errata">講義程式小錯</h2>
+<table>
+<tr><th>位置</th><th>講義寫法</th><th>應改為</th></tr>
+<tr><td>Material</td><td><code>glGenTexture(1, ...)</code></td><td><code>glGenTextures</code></td></tr>
+<tr><td>Rendering a Scene</td><td><code>shape[i].materialID</code></td><td><code>shapes[i]</code>；矩陣要傳 <code>glm::value_ptr(...)</code></td></tr>
+<tr><td>Frustum culling loop</td><td><code>materials[i].diffuse_tex</code></td><td><code>materials[shapes[i].materialID]</code></td></tr>
+<tr><td>Plane/AABB 文字</td><td>「if e &lt; −s or e &lt; s」</td><td>|s| &gt; e（即 s − e &gt; 0 或 s + e &lt; 0）就不相交</td></tr>
+<tr><td>Instancing（matrix）</td><td>沒有設定 divisor</td><td>4 個 column attribute 都要 <code>glVertexAttribDivisor(loc, 1)</code></td></tr>
+<tr><td>IndirectCommand struct</td><td><code>GLuint baseVertex</code>（部分頁）</td><td>規格是 <code>GLint baseVertex</code>（可為負）</td></tr>
+<tr><td>Instance culling</td><td><code>const int NUM_GRASS = 131,072;</code>、<code>float* grassOffsets[...]</code></td><td><code>131072</code>（逗號是 comma operator）；陣列應為 <code>float grassOffsets[...]</code></td></tr>
+<tr><td>Appendix</td><td><code>hasNormals</code> / <code>hasUV</code> 未定義；<code>return meshes, textures;</code></td><td><code>aimesh-&gt;HasNormals()</code> / <code>HasTextureCoords(0)</code>；用參數或 struct 回傳</td></tr>
+<tr><td>Appendix</td><td>只有找到貼圖才 <code>textures.push_back</code></td><td>每個 material 都要 push（沒有就放預設貼圖），否則 <code>textures[material_id]</code> 會錯位</td></tr>
+</table>
+</main>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const AR = '<defs><marker id="aX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>';
+
+// ---------- 3D model 結構 ----------
+(() => {
+  const O = [['Cone', '#2f855a', 'Green'], ['Torus', '#0e9fb3', 'Cyan'], ['Cylinder', '#c53030', 'Red'], ['Sphere', '#7c3aed', 'Purple']];
+  let s = '';
+  O.forEach(([n, c, m], i) => {
+    const x = 15 + i * 112;
+    s += `<path d="M230 44 L${x + 50} 88" stroke="#555" stroke-width="1.5" marker-end="url(#ar)" fill="none"/>`;
+    s += `<rect x="${x}" y="90" width="100" height="34" rx="6" fill="#dbeafe" stroke="#999"/><text x="${x + 50}" y="111">Object#${n}</text>`;
+    s += `<path d="M${x + 30} 124 L${x + 25} 158" stroke="#555" marker-end="url(#ar)"/><path d="M${x + 70} 124 L${x + 75} 208" stroke="#555" marker-end="url(#ar)"/>`;
+    s += `<rect x="${x - 4}" y="160" width="68" height="30" rx="5" fill="#e5e7eb" stroke="#999"/><text x="${x + 30}" y="179" font-size="11">Shape#${n}</text>`;
+    s += `<rect x="${x + 34}" y="210" width="76" height="30" rx="5" fill="${c}"/><text x="${x + 72}" y="229" font-size="11" fill="#fff">Mat#${m}</text>`;
+  });
+  s += '<text x="230" y="256" font-size="11" fill="#666">Shape → VAO（頂點 + index）　Material → texture</text>';
+  $('objs').innerHTML = s;
+})();
+
+// ---------- OBJ 解析 ----------
+const OBJ_EX = {
+  tri: '# positions\nv 1 1 1\nv 2 2 2\nv 3 3 3\n# texture coordinates\nvt 0.0 0.0\nvt 0.5 0.5\nvt 1.0 1.0\n# normals\nvn 1.0 0.0 0.0\nvn 0.0 1.0 0.0\nvn 0.0 0.0 1.0\n# faces\nf 1/1/1 2/2/2 3/3/3',
+  flat: 'v -1 -1  1\nv  1 -1  1\nv  1  1  1\nv -1  1  1\nv -1 -1 -1\nv  1 -1 -1\nv  1  1 -1\nv -1  1 -1\nvn 0 0 1\nvn 0 0 -1\nvn 1 0 0\nvn -1 0 0\nvn 0 1 0\nvn 0 -1 0\nf 1//1 2//1 3//1\nf 1//1 3//1 4//1\nf 6//2 5//2 8//2\nf 6//2 8//2 7//2\nf 2//3 6//3 7//3\nf 2//3 7//3 3//3\nf 5//4 1//4 4//4\nf 5//4 4//4 8//4\nf 4//5 3//5 7//5\nf 4//5 7//5 8//5\nf 5//6 6//6 2//6\nf 5//6 2//6 1//6',
+  smooth: 'v -1 -1  1\nv  1 -1  1\nv  1  1  1\nv -1  1  1\nv -1 -1 -1\nv  1 -1 -1\nv  1  1 -1\nv -1  1 -1\nf 1 2 3\nf 1 3 4\nf 6 5 8\nf 6 8 7\nf 2 6 7\nf 2 7 3\nf 5 1 4\nf 5 4 8\nf 4 3 7\nf 4 7 8\nf 5 6 2\nf 5 2 1'
+};
+function objParse() {
+  const L = { v: [], vt: [], vn: [] }, faces = [], err = [];
+  $('objTxt').value.split('\n').forEach((ln, i) => {
+    const t = ln.trim().split(/\s+/); if (!t[0] || t[0][0] === '#') return;
+    if (L[t[0]]) L[t[0]].push(t.slice(1).map(Number));
+    else if (t[0] === 'f') faces.push(t.slice(1).map(c => { const [a, b, n] = c.split('/'); return [+a, b ? +b : 0, n ? +n : 0]; }));
+  });
+  const uniq = new Map(), rows = []; let tris = 0;
+  faces.forEach((f, fi) => {
+    if (f.length > 3) tris += f.length - 2; else tris++;
+    f.forEach(([a, b, n]) => {
+      const key = `${a}/${b || ''}/${n || ''}`; if (!uniq.has(key)) uniq.set(key, uniq.size);
+      if (!L.v[a - 1]) err.push(`f 第 ${fi + 1} 行：v ${a} 不存在`);
+      rows.push(`<tr><td>${fi + 1}</td><td>${key}</td><td>(${(L.v[a - 1] || ['?']).join(', ')})</td><td>${b ? '(' + (L.vt[b - 1] || ['?']).join(', ') + ')' : '—'}</td><td>${n ? '(' + (L.vn[n - 1] || ['?']).join(', ') + ')' : '—'}</td><td><b>${uniq.get(key)}</b></td></tr>`);
+    });
+  });
+  $('objTbl').innerHTML = '<tr><th>face</th><th>v/vt/vn</th><th>position</th><th>uv</th><th>normal</th><th>GPU 頂點 #</th></tr>' + rows.join('');
+  $('objSum').innerHTML = `v ${L.v.length}、vt ${L.vt.length}、vn ${L.vn.length}、face ${faces.length}（${tris} 個三角形）<br>` +
+    `<b>GPU 需要 ${uniq.size} 個不重複頂點</b>（位置只有 ${L.v.length} 個）` + (uniq.size > L.v.length ? `<br><span class="mut">同一位置配不同 normal / uv → 拆成 ${uniq.size} 個頂點。用 glDrawElements 時 index 數 = ${tris * 3}。</span>` : '<br><span class="mut">每個位置只有一種組合 → 頂點可共用，用 index buffer 最省。</span>') +
+    (err.length ? `<br><span style="color:#c53030">${err.slice(0, 3).join('<br>')}</span>` : '');
+}
+document.querySelectorAll('[data-ex]').forEach(b => b.onclick = () => { $('objTxt').value = OBJ_EX[b.dataset.ex]; document.querySelectorAll('[data-ex]').forEach(x => x.classList.toggle('on', x === b)); objParse(); });
+$('objTxt').oninput = objParse; document.querySelector('[data-ex="flat"]').click();
+
+// ---------- Normal：per-face vs per-vertex ----------
+let nMode = 'face';
+function nDraw() {
+  const c = $('nCv').getContext('2d'), N = +$('nSeg').value, la = $('nLight').value * Math.PI / 180, L = [Math.cos(la), -Math.sin(la)];
+  const cx = 210, cy = 150, R = 105, P = Array.from({ length: N }, (_, i) => { const a = i / N * 2 * Math.PI - Math.PI / 2; return [cx + R * Math.cos(a), cy + R * Math.sin(a)]; });
+  c.clearRect(0, 0, 420, 300);
+  const norm = v => { const l = Math.hypot(v[0], v[1]); return [v[0] / l, v[1] / l]; };
+  const fN = P.map((p, i) => { const q = P[(i + 1) % N]; return norm([q[1] - p[1], -(q[0] - p[0])]); });
+  const vN = P.map((p, i) => norm([fN[i][0] + fN[(i - 1 + N) % N][0], fN[i][1] + fN[(i - 1 + N) % N][1]]));
+  const shade = n => { const d = Math.max(0, n[0] * L[0] + n[1] * L[1]); const v = Math.round(40 + 200 * d); return `rgb(${v},${Math.round(v * 0.85)},${Math.round(v * 0.6)})`; };
+  for (let i = 0; i < N; i++) {   // 每條邊畫成一條粗帶，依 normal 上色
+    const p = P[i], q = P[(i + 1) % N], steps = 24;
+    for (let k = 0; k < steps; k++) {
+      const t0 = k / steps, t1 = (k + 1) / steps, tm = (t0 + t1) / 2;
+      const n = nMode === 'face' ? fN[i] : norm([vN[i][0] * (1 - tm) + vN[(i + 1) % N][0] * tm, vN[i][1] * (1 - tm) + vN[(i + 1) % N][1] * tm]);
+      c.strokeStyle = shade(n); c.lineWidth = 16; c.beginPath(); c.moveTo(p[0] + (q[0] - p[0]) * t0, p[1] + (q[1] - p[1]) * t0); c.lineTo(p[0] + (q[0] - p[0]) * t1, p[1] + (q[1] - p[1]) * t1); c.stroke();
+    }
+  }
+  const arrow = (p, n, col) => { c.strokeStyle = col; c.lineWidth = 2; c.beginPath(); c.moveTo(p[0], p[1]); c.lineTo(p[0] + n[0] * 36, p[1] + n[1] * 36); c.stroke(); c.fillStyle = col; c.beginPath(); c.arc(p[0] + n[0] * 36, p[1] + n[1] * 36, 3, 0, 7); c.fill(); };
+  if (nMode === 'face') P.forEach((p, i) => { arrow(p, fN[i], '#2563eb'); arrow(p, fN[(i - 1 + N) % N], '#c53030'); });
+  else P.forEach((p, i) => arrow(p, vN[i], '#2f855a'));
+  P.forEach(p => { c.fillStyle = '#111'; c.beginPath(); c.arc(p[0], p[1], 4, 0, 7); c.fill(); });
+  c.fillStyle = '#d69e2e'; c.beginPath(); c.arc(cx + L[0] * 135, cy + L[1] * 135, 9, 0, 7); c.fill(); c.fillStyle = '#666'; c.font = '11px sans-serif'; c.fillText('光源', cx + L[0] * 135 - 10, cy + L[1] * 135 + 22);
+  $('nTxt').innerHTML = nMode === 'face'
+    ? `<b>Per-face</b>：每個面一個 normal（紅、藍箭頭）。每個位置被 2 個面共用 → 有 2 個 normal → <b>GPU 頂點數 = ${N} × 2 = ${2 * N}</b>。<br>每個面顏色一致、邊界明顯（flat shading），適合方塊等硬邊物體。`
+    : `<b>Per-vertex</b>：把相鄰面的 normal <b>平均</b>（綠箭頭），每個位置只有 1 組 → <b>GPU 頂點數 = ${N}</b>。<br>OpenGL 沒問題（每個頂點唯一），顏色沿面平滑內插，適合曲面。但在硬邊（如立方體角）平均會造成錯誤的光照。`;
+}
+document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => { nMode = b.dataset.n; document.querySelectorAll('[data-n]').forEach(x => x.classList.toggle('on', x === b)); nDraw(); });
+['nSeg', 'nLight'].forEach(id => $(id).oninput = nDraw); nDraw();
+
+// ---------- aiScene 結構 ----------
+(() => {
+  const B = {
+    scene: [215, 8, 230, 118, 'aiScene', ['mRootNode', 'mAnimations[mNumAnimations]', 'mMeshes[mNumMeshes]', 'mTextures[mNumTextures]', 'mMaterials[mNumMaterials]'], '整個檔案的根。<b>所有 mesh 和 material 都存在這裡的陣列</b>；node 只存 index。<br><code>scene-&gt;mNumMeshes</code> / <code>mMeshes[i]</code>、<code>mNumMaterials</code> / <code>mMaterials[i]</code>。'],
+    node1: [10, 150, 180, 66, 'aiNode（root）', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], '場景圖（scene graph）的節點：<code>mMeshes</code> 是<b>指向 scene-&gt;mMeshes 的 index</b>，<code>mChildren</code> 是子節點；還有 <code>mTransformation</code>（相對父節點的矩陣）。講義的簡化做法直接走訪 <code>scene-&gt;mMeshes</code>，忽略 node 階層與變換。'],
+    node2: [10, 240, 180, 66, 'aiNode', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], '子節點，可以再往下（…）。要正確擺放物件時需遞迴走訪並累乘 mTransformation（像作業 1 的階層矩陣）。'],
+    mesh: [370, 150, 225, 100, 'aiMesh', ['mVertices[mNumVertices]', 'mNormals[mNumVertices]', 'mTextureCoords[0][mNumVertices]', 'mFaces[mNumFaces]', 'mMaterialIndex'], '一個 mesh 只用<b>一種材質</b>。<br>mVertices / mNormals / mTextureCoords → 放進 <b>VBO</b>（同長度、同 index）。<br>mFaces[f].mIndices[0~2] → 放進 <b>EBO / IBO</b>。<br>mMaterialIndex → <b>指向 scene-&gt;mMaterials 的 index</b>。'],
+    mat: [215, 262, 150, 58, 'aiMaterial', ['Get(KEY, ...)', 'GetTexture(TYPE, ...)'], '<code>Get(AI_MATKEY_COLOR_DIFFUSE, color)</code> 讀材質參數（MAT）；<code>GetTexture(aiTextureType_DIFFUSE, 0, &amp;path)</code> 讀貼圖路徑（TEX），路徑通常相對於模型檔所在資料夾。']
+  };
+  function draw(sel) {
+    let s = AR;
+    for (const [k, [x, y, w, h, t, f]] of Object.entries(B)) {
+      const on = k === sel;
+      s += `<rect data-k="${k}" x="${x}" y="${y}" width="${w}" height="${h}" fill="${on ? '#fde7b6' : '#f3f4f6'}" stroke="${on ? '#c53030' : '#999'}" stroke-width="${on ? 2.5 : 1}"/>`;
+      s += `<rect data-k="${k}" x="${x}" y="${y}" width="${w}" height="20" fill="${on ? '#f6ad55' : '#bbb'}"/><text x="${x + w / 2}" y="${y + 15}" text-anchor="middle" fill="#1d4ed8" style="pointer-events:none">${t}</text>`;
+      f.forEach((l, i) => s += `<text x="${x + 6}" y="${y + 36 + i * 16}" font-size="11" style="pointer-events:none">${l}</text>`);
+    }
+    const P = (d, col, dash) => s += `<path d="${d}" stroke="${col}" stroke-width="2" fill="none" ${dash ? 'stroke-dasharray="4 3"' : ''} marker-end="url(#aX)"/>`;
+    P('M215 35 H100 V148', '#111'); P('M100 216 V238', '#111'); P('M445 75 H480 V148', '#111'); P('M290 126 V260', '#111');
+    P('M190 172 Q205 170 212 72', '#c53030', 1); P('M370 240 Q330 240 330 260', '#c53030', 1);
+    s += '<text x="200" y="140" font-size="10" fill="#c53030">index → mesh</text><text x="340" y="232" font-size="10" fill="#c53030">index → material</text>';
+    s += '<g font-size="10" fill="#2563eb"><text x="560" y="182">VBO</text><text x="560" y="230">EBO</text><text x="330" y="292">MAT</text><text x="330" y="309">TEX</text></g>';
+    $('aiSvg').innerHTML = s;
+    $('aiSvg').querySelectorAll('[data-k]').forEach(r => r.onclick = () => { draw(r.dataset.k); $('aiTxt').innerHTML = `<b>${B[r.dataset.k][4]}</b><br>${B[r.dataset.k][6]}`; });
+  }
+  draw('scene'); $('aiTxt').innerHTML = `<b>aiScene</b><br>${B.scene[6]}`;
+})();
+
+// ---------- Plane / AABB ----------
+function paDraw() {
+  const cx = +$('pcx').value, cy = +$('pcy').value, hx = +$('phx').value, hy = +$('phy').value, a = $('pang').value * Math.PI / 180, D = +$('pD').value;
+  const n = [Math.cos(a), Math.sin(a)], e = hx * Math.abs(n[0]) + hy * Math.abs(n[1]), s = n[0] * cx + n[1] * cy + D;
+  const res = s - e > 0 ? 'OUTSIDE' : s + e < 0 ? 'INSIDE' : 'INTERSECTING', col = { OUTSIDE: '#9ca3af', INSIDE: '#2f855a', INTERSECTING: '#d69e2e' }[res];
+  const c = $('paCv').getContext('2d'), X = x => 210 + x, Y = y => 150 - y;
+  c.clearRect(0, 0, 420, 300);
+  // 正半空間塗灰
+  const p0 = [-n[0] * D, -n[1] * D], dir = [-n[1], n[0]];
+  c.fillStyle = '#eef0f3'; c.beginPath(); c.moveTo(X(p0[0] + dir[0] * 600), Y(p0[1] + dir[1] * 600)); c.lineTo(X(p0[0] - dir[0] * 600), Y(p0[1] - dir[1] * 600));
+  c.lineTo(X(p0[0] - dir[0] * 600 + n[0] * 900), Y(p0[1] - dir[1] * 600 + n[1] * 900)); c.lineTo(X(p0[0] + dir[0] * 600 + n[0] * 900), Y(p0[1] + dir[1] * 600 + n[1] * 900)); c.fill();
+  c.strokeStyle = '#111'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(X(p0[0] + dir[0] * 600), Y(p0[1] + dir[1] * 600)); c.lineTo(X(p0[0] - dir[0] * 600), Y(p0[1] - dir[1] * 600)); c.stroke();
+  c.strokeStyle = '#2563eb'; c.beginPath(); c.moveTo(X(p0[0]), Y(p0[1])); c.lineTo(X(p0[0] + n[0] * 40), Y(p0[1] + n[1] * 40)); c.stroke(); c.fillStyle = '#2563eb'; c.font = '12px sans-serif'; c.fillText('n', X(p0[0] + n[0] * 48), Y(p0[1] + n[1] * 48));
+  c.fillStyle = col + '55'; c.strokeStyle = col; c.lineWidth = 2; c.fillRect(X(cx - hx), Y(cy + hy), 2 * hx, 2 * hy); c.strokeRect(X(cx - hx), Y(cy + hy), 2 * hx, 2 * hy);
+  c.fillStyle = '#111'; c.beginPath(); c.arc(X(cx), Y(cy), 3.5, 0, 7); c.fill(); c.fillText('c', X(cx) + 5, Y(cy) - 5);
+  // s：中心沿 n 的距離；e：投影半徑
+  c.strokeStyle = '#c53030'; c.setLineDash([4, 3]); c.beginPath(); c.moveTo(X(cx), Y(cy)); c.lineTo(X(cx - n[0] * s), Y(cy - n[1] * s)); c.stroke(); c.setLineDash([]);
+  c.strokeStyle = '#7c3aed'; c.lineWidth = 4; c.beginPath(); c.moveTo(X(cx), Y(cy)); c.lineTo(X(cx + n[0] * e * Math.sign(-s || 1)), Y(cy + n[1] * e * Math.sign(-s || 1))); c.stroke();
+  c.fillStyle = '#666'; c.font = '11px sans-serif'; c.fillText('灰色 = 正半空間（外面）', 10, 290);
+  $('paTxt').innerHTML = `n = (${n.map(v => v.toFixed(2)).join(', ')})，D = ${D}<br><span style="color:#7c3aed">e = hx|nx| + hy|ny| = ${e.toFixed(1)}</span><br><span style="color:#c53030">s = n·c + D = ${s.toFixed(1)}</span><br>s − e = ${(s - e).toFixed(1)}　s + e = ${(s + e).toFixed(1)}<br>結果：<b style="color:${col}">${res}</b>`;
+}
+['pcx', 'pcy', 'phx', 'phy', 'pang', 'pD'].forEach(id => $(id).oninput = paDraw); paDraw();
+
+// ---------- Frustum culling ----------
+let fcObjs = [];
+const fcGen = () => { fcObjs = Array.from({ length: 28 }, () => ({ x: Math.random() * 380 - 190, y: Math.random() * 280 - 140, hx: 6 + Math.random() * 16, hy: 6 + Math.random() * 16 })); };
+function fcDraw() {
+  const yaw = $('fYaw').value * Math.PI / 180, fov = $('fFov').value * Math.PI / 180, far = +$('fFar').value, near = 15, cam = [0, -120];
+  const fwd = [Math.cos(yaw), Math.sin(yaw)];
+  // 四個平面（法向量朝外）：plane = {n, D}，n·p + D = 0
+  const mk = (n, p) => ({ n, D: -(n[0] * p[0] + n[1] * p[1]) });
+  const rot = (v, a) => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)];
+  const planes = [mk(rot(fwd, fov / 2 + Math.PI / 2), cam), mk(rot(fwd, -fov / 2 - Math.PI / 2), cam),
+    mk([-fwd[0], -fwd[1]], [cam[0] + fwd[0] * near, cam[1] + fwd[1] * near]), mk(fwd, [cam[0] + fwd[0] * far, cam[1] + fwd[1] * far])];
+  const test = o => { let inter = false; for (const p of planes) { const e = o.hx * Math.abs(p.n[0]) + o.hy * Math.abs(p.n[1]), s = p.n[0] * o.x + p.n[1] * o.y + p.D; if (s - e > 0) return 'OUTSIDE'; if (s + e >= 0) inter = true; } return inter ? 'INTERSECTING' : 'INSIDE'; };
+  const c = $('fcCv').getContext('2d'), X = x => 210 + x, Y = y => 160 - y; c.clearRect(0, 0, 420, 320);
+  const corner = (a, d) => { const v = rot(fwd, a); return [cam[0] + v[0] * d / Math.cos(fov / 2), cam[1] + v[1] * d / Math.cos(fov / 2)]; };
+  const q = [corner(fov / 2, near), corner(-fov / 2, near), corner(-fov / 2, far), corner(fov / 2, far)];
+  c.fillStyle = '#dbeafe'; c.strokeStyle = '#2563eb'; c.lineWidth = 1.5; c.beginPath(); q.forEach((p, i) => i ? c.lineTo(X(p[0]), Y(p[1])) : c.moveTo(X(p[0]), Y(p[1]))); c.closePath(); c.fill(); c.stroke();
+  const cnt = { INSIDE: 0, INTERSECTING: 0, OUTSIDE: 0 }, col = { OUTSIDE: '#9ca3af', INSIDE: '#2f855a', INTERSECTING: '#d69e2e' };
+  fcObjs.forEach(o => { const r = test(o); cnt[r]++; c.fillStyle = col[r] + (r === 'OUTSIDE' ? '55' : 'aa'); c.strokeStyle = col[r]; c.fillRect(X(o.x - o.hx), Y(o.y + o.hy), 2 * o.hx, 2 * o.hy); c.strokeRect(X(o.x - o.hx), Y(o.y + o.hy), 2 * o.hx, 2 * o.hy); });
+  c.fillStyle = '#111'; c.beginPath(); c.arc(X(cam[0]), Y(cam[1]), 6, 0, 7); c.fill(); c.font = '11px sans-serif'; c.fillText('camera', X(cam[0]) + 8, Y(cam[1]) + 14);
+  const draw = cnt.INSIDE + cnt.INTERSECTING;
+  $('fcTxt').innerHTML = `INSIDE ${cnt.INSIDE}、INTERSECTING ${cnt.INTERSECTING}、OUTSIDE ${cnt.OUTSIDE}<br><b>draw call：${fcObjs.length} → ${draw}</b>（省下 ${Math.round(cnt.OUTSIDE / fcObjs.length * 100)}%）`;
+}
+$('fNew').onclick = () => { fcGen(); fcDraw(); }; ['fYaw', 'fFov', 'fFar'].forEach(id => $(id).oninput = fcDraw); fcGen(); fcDraw();
+
+// ---------- 矩陣 attribute 記憶體 ----------
+$('matCells').innerHTML = ['a', 'b', 'c'].flatMap((m, k) => [0, 1, 2, 3].map(i => `<div class="${k % 2 ? 'm2' : 'm1'}" style="min-width:52px"><small>${k * 64 + i * 16}B</small>${m}col${i}</div>`)).join('') + '<div>⋯</div>';
+
+// ---------- Multi-draw ----------
+const VB = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'K'], IDX1 = [2, 0, 1, 1, 3, 2, 7, 4, 5, 5, 8, 7, 8, 5, 6], IDX2 = [2, 0, 1, 1, 3, 2, 3, 0, 1, 1, 4, 3, 4, 1, 2];
+const MD = {
+  de: { n: '2 × glDrawElements', idx: IDX1, draws: [[6, 0, 0], [9, 24, 0]], txt: 'mesh 2 的 index 已經加上 4（E 在 VBO 第 4 格），所以合併時要改寫 index。兩次 draw call。',
+    code: 'void render() {\n  glBindVertexArray(vaoHandle);\n  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (GLvoid*)0);\n  glDrawElements(GL_TRIANGLES, 9, GL_UNSIGNED_INT, (GLvoid*)24);  // 6 個 index × 4 bytes\n}' },
+  mde: { n: 'glMultiDrawElements', idx: IDX1, draws: [[6, 0, 0], [9, 24, 0]], txt: '效果等於左邊兩次 glDrawElements，但只有<b>一次</b> API 呼叫。',
+    code: 'void initialize() {\n  float mergedVertices[] = {A, B, C, D, E, F, G, H, K};\n  unsigned int mergedIndices[] = {2,0,1, 1,3,2, 7,4,5, 5,8,7, 8,5,6};\n  // VBO / IBO / VAO 設定同一般 glDrawElements\n}\nvoid render() {\n  int counts[] = {6, 9};                              // 每個物件的 index 數\n  GLvoid* indices[] = {(GLvoid*)0, (GLvoid*)24};      // index 的 byte offset\n  glBindVertexArray(vaoHandle);\n  glMultiDrawElements(GL_TRIANGLES, counts, GL_UNSIGNED_INT, indices, 2);\n}' },
+  debv: { n: '2 × glDrawElementsBaseVertex', idx: IDX2, draws: [[6, 0, 0], [9, 24, 4]], txt: 'mesh 2 的 index 保持原樣（從 0 開始），由 <b>basevertex = 4</b> 在取頂點時加上去。合併時不用改寫 index。',
+    code: 'void render() {\n  glBindVertexArray(vaoHandle);\n  glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (GLvoid*)0, 0);\n  glDrawElementsBaseVertex(GL_TRIANGLES, 9, GL_UNSIGNED_INT, (GLvoid*)24, 4);\n}' },
+  mdebv: { n: 'glMultiDrawElementsBaseVertex', idx: IDX2, draws: [[6, 0, 0], [9, 24, 4]], txt: '一次呼叫，每個物件各自的 count / offset / basevertex 放在陣列裡。',
+    code: 'void initialize() {\n  float mergedVertices[] = {A, B, C, D, E, F, G, H, K};\n  unsigned int mergedIndices[] = {2,0,1, 1,3,2, 3,0,1, 1,4,3, 4,1,2};  // 各自從 0 起算\n}\nvoid render() {\n  int counts[] = {6, 9};\n  GLvoid* indices[] = {(GLvoid*)0, (GLvoid*)24};\n  int baseVertices[] = {0, 4};                        // 每個物件 index 要加的值\n  glBindVertexArray(vaoHandle);\n  glMultiDrawElementsBaseVertex(GL_TRIANGLES, counts, GL_UNSIGNED_INT,\n                                indices, 2, baseVertices);\n}' },
+  ind: { n: 'glMultiDrawElementsIndirect', idx: IDX2, draws: [[6, 0, 0], [9, 24, 4]], txt: '參數改存在 GPU 的 indirect buffer：firstIndex 是<b>第幾個 index</b>（6），不是 byte（24）。',
+    code: 'DrawElementsIndirectCommand drawCommands[2];\ndrawCommands[0] = {6, 1, 0, 0, 0};   // count, instanceCount, firstIndex, baseVertex, baseInstance\ndrawCommands[1] = {9, 1, 6, 4, 0};   // firstIndex 6 → offset = 6 * sizeof(GLuint) = 24\n// 上傳到 GL_DRAW_INDIRECT_BUFFER ...\nglBindVertexArray(vaoHandle);\nglMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, (GLvoid*)0, 2, 0);' }
+};
+let mdK = 'mde', mdD = -1;
+function mdDraw() {
+  const M = MD[mdK];
+  $('mdBtns').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === mdK));
+  const used = new Set(), hlIdx = new Set();
+  M.draws.forEach(([cnt, off, base], d) => { if (mdD >= 0 && d !== mdD) return; const f = off / 4; for (let i = f; i < f + cnt; i++) { hlIdx.add(i); used.add(M.idx[i] + base); } });
+  $('mdVbo').innerHTML = VB.map((v, i) => `<div class="${i < 4 ? 'm1' : 'm2'} ${used.has(i) ? 'hl' : ''}"><small>${i}</small>${v}</div>`).join('');
+  $('mdIdx').innerHTML = M.idx.map((v, i) => `<div class="${i < 6 ? 'm1' : 'm2'} ${hlIdx.has(i) ? 'hl' : ''}"><small>${i * 4}B</small>${v}</div>`).join('');
+  $('mdIdxNote').textContent = M.idx === IDX1 ? '（mesh 2 的 index 已加 4）' : '（各 mesh 的 index 從 0 起算）';
+  const tri = M.draws.map(([cnt, off, base], d) => { const f = off / 4, t = []; for (let i = f; i < f + cnt; i += 3) t.push('(' + [0, 1, 2].map(k => VB[M.idx[i + k] + base]).join(',') + ')'); return `<a href="#" data-d="${d}" style="${mdD === d ? 'font-weight:700' : ''}">draw ${d}</a>：count ${cnt}、offset ${off} B（第 ${f} 個 index）、basevertex ${base} → ${t.join(' ')}`; });
+  $('mdTxt').innerHTML = `<b>${M.n}</b><br>${M.txt}<br>${tri.join('<br>')}<br><a href="#" data-d="-1">顯示全部</a>`;
+  $('mdTxt').querySelectorAll('[data-d]').forEach(a => a.onclick = e => { e.preventDefault(); mdD = +a.dataset.d; mdDraw(); });
+  $('mdCode').textContent = '// C++\n' + M.code;
+  const P = { A: [20, 95], B: [100, 95], C: [60, 25], D: [140, 25], E: [240, 95], F: [310, 95], G: [400, 95], H: [270, 25], K: [360, 25] };
+  let s = '';
+  M.draws.forEach(([cnt, off, base], d) => { const f = off / 4; for (let i = f; i < f + cnt; i += 3) { const v = [0, 1, 2].map(k => P[VB[M.idx[i + k] + base]]); const on = mdD < 0 || mdD === d; s += `<polygon points="${v.map(p => p.join(',')).join(' ')}" fill="${d ? '#c6f0d6' : '#fecaca'}" stroke="#555" opacity="${on ? 1 : .3}"/>`; } });
+  for (const [k, [x, y]] of Object.entries(P)) s += `<text x="${x}" y="${y + (y > 50 ? 14 : -6)}">${k}</text>`;
+  $('mdShape').innerHTML = s;
+}
+$('mdBtns').innerHTML = Object.entries(MD).map(([k, v]) => `<button class="b" data-k="${k}">${v.n}</button>`).join('');
+$('mdBtns').querySelectorAll('button').forEach(b => b.onclick = () => { mdK = b.dataset.k; mdD = -1; mdDraw(); }); mdDraw();
+
+// ---------- 傳統 vs GPU-driven 流程 ----------
+(() => {
+  const row = (y, title, col, boxes, owner) => {
+    let s = `<text x="10" y="${y - 8}" text-anchor="start" font-weight="600" fill="${col}">${title}</text>`;
+    boxes.forEach((b, i) => { const x = 10 + i * 238; s += `<rect x="${x}" y="${y}" width="210" height="44" rx="8" fill="${owner[i] === 'C' ? '#dbeafe' : '#c6f0d6'}" stroke="#999"/><text x="${x + 105}" y="${y + 26}">${b}</text>`; if (i < 3) s += `<path d="M${x + 210} ${y + 22}h26" stroke="#555" stroke-width="2" marker-end="url(#aX)"/>`; });
+    return s;
+  };
+  $('flowSvg').innerHTML = AR + row(26, '傳統 instance culling：CPU 每幀收集可見 instance 並更新 buffer（大量 CPU→GPU 傳輸）', '#c53030', ['初始化 VAO / VBO / IBO', 'CPU 收集可見 instance', '更新 instance buffer', 'Render'], 'CCCG') +
+    row(110, 'GPU-driven：GPU 每幀自己收集可見 instance 並畫（判斷彼此獨立 → 適合平行）', '#2f855a', ['初始化 VAO / VBO / IBO', '初始化 SSBO + indirect buffer', 'GPU（compute）收集可見', 'Render（indirect）'], 'CCGG') +
+    '<g font-size="11"><rect x="760" y="158" width="14" height="10" fill="#dbeafe" stroke="#999"/><text x="790" y="167">CPU</text><rect x="820" y="158" width="14" height="10" fill="#c6f0d6" stroke="#999"/><text x="850" y="167">GPU</text></g>';
+})();
+
+// ---------- GPU 收集可見 instance ----------
+const IC = 'ABCDEFGHIJKLMN'.split('').map((n, i) => ({ n, x: 40 + ((i * 97) % 340), y: 30 + ((i * 59) % 200) }));
+let icStep = 0, icOrder = [];
+function icVisible() {
+  const a = $('icYaw').value * Math.PI / 180, cam = [210, 245], f = [Math.cos(a), -Math.sin(a)], half = 0.45;
+  return IC.filter(o => { const d = [o.x - cam[0], o.y - cam[1]], l = Math.hypot(...d); return Math.acos((d[0] * f[0] + d[1] * f[1]) / l) < half; }).map(o => o.n);
+}
+function icDraw() {
+  const vis = icVisible(), c = $('icCv').getContext('2d'), a = $('icYaw').value * Math.PI / 180, cam = [210, 245];
+  c.clearRect(0, 0, 420, 260);
+  c.fillStyle = '#dbeafe'; c.beginPath(); c.moveTo(...cam); c.arc(cam[0], cam[1], 500, -a - 0.45, -a + 0.45); c.closePath(); c.fill();
+  IC.forEach(o => { const v = vis.includes(o.n); c.fillStyle = v ? '#2f855a' : '#c53030'; c.beginPath(); c.moveTo(o.x, o.y - 12); c.lineTo(o.x - 9, o.y + 8); c.lineTo(o.x + 9, o.y + 8); c.fill(); c.fillStyle = '#111'; c.font = '12px sans-serif'; c.fillText(o.n, o.x + 10, o.y + 4); });
+  c.fillStyle = '#111'; c.beginPath(); c.arc(cam[0], cam[1], 6, 0, 7); c.fill();
+  $('icAll').innerHTML = IC.map((o, i) => `<div class="${icStep >= 2 && vis.includes(o.n) ? 'vis' : ''}"><small>${i}</small>${o.n}</div>`).join('');
+  const filled = icStep >= 2 ? icOrder : [];
+  $('icVis').innerHTML = IC.map((_, i) => `<div class="${filled[i] ? 'vis' : 'gone'}"><small>${i}</small>${filled[i] || ''}</div>`).join('');
+  const cnt = icStep >= 2 ? icOrder.length : 0;
+  $('icCmd').innerHTML = [['count', 'numIndex'], ['instanceCount', icStep === 0 ? '?' : cnt], ['firstIndex', 0], ['baseVertex', 0], ['baseInstance', 0]].map(([k, v]) => `<div style="min-width:90px" class="${k === 'instanceCount' && icStep ? 'vis' : ''}"><small>${k}</small>${v}</div>`).join('');
+  $('icTxt').innerHTML = [
+    '<b>初始</b>：綠 = 在視野內、紅 = 看不到。CPU 只在初始化時上傳全部 instance 資料一次。按「下一步」。',
+    '<b>Compute #1 Reset</b>：<code>commands[0].instanceCount = 0;</code>，接著 <code>glMemoryBarrier</code>。',
+    `<b>Compute #2 Collect</b>：每個 instance 一個執行緒<b>平行</b>判斷可見性；可見的用 <code>atomicAdd(instanceCount, 1)</code> 搶到一個位置寫入。<b>順序不固定</b>（這次：${icOrder.join(' ')}），但沒關係。instanceCount = ${icOrder.length}。`,
+    `<b>Render</b>：<code>glDrawElementsIndirect</code> 從 indirect buffer 讀到 instanceCount = ${icOrder.length}，vertex shader 用 <code>gl_InstanceID</code> 讀 visible buffer → 只畫 ${icOrder.length} 根草。CPU 全程不知道畫了幾根。`][icStep];
+}
+$('icStep').onclick = () => { if (icStep === 1) icOrder = icVisible().sort(() => Math.random() - .5); icStep = Math.min(3, icStep + 1); icDraw(); };
+$('icReset').onclick = () => { icStep = 0; icOrder = []; icDraw(); };
+$('icYaw').oninput = () => { if (icStep >= 2) icOrder = icVisible().sort(() => Math.random() - .5); icDraw(); };
+icDraw();
+
+// ---------- Multi-thread 時間軸 ----------
+(() => {
+  let s = '<text x="10" y="16" text-anchor="start" font-weight="600" font-size="12">單執行緒（CPU、GPU 輪流閒置）</text>';
+  const bar = (x, y, w, t, c) => `<rect x="${x}" y="${y}" width="${w}" height="20" rx="3" fill="${c}"/><text x="${x + w / 2}" y="${y + 14}" fill="#fff">${t}</text>`;
+  s += '<text x="40" y="38">CPU</text><text x="40" y="64">GPU</text>';
+  for (let i = 0; i < 3; i++) { s += bar(80 + i * 280, 24, 130, 'Frame ' + (i + 1), '#c53030'); s += bar(210 + i * 280, 50, 140, 'Frame ' + (i + 1), '#2563eb'); }
+  s += '<text x="10" y="106" text-anchor="start" font-weight="600" font-size="12">多執行緒（流水線，每一刻三者都在工作）</text>';
+  [['Game', '#c53030', 0], ['Render', '#d69e2e', 1], ['GPU', '#2563eb', 2]].forEach(([n, c, k]) => {
+    const y = 118 + k * 34; s += `<text x="40" y="${y + 14}">${n}</text>`;
+    for (let i = 0; i < 6 - k; i++) s += bar(80 + (i + k) * 145, y, 138, 'Frame ' + (i + 1), c);
+  });
+  $('mtSvg').innerHTML = s;
+})();
+</script></body></html>
