@@ -114,7 +114,19 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 <details><summary>畫部位時的 scale 為什麼不能傳給子節點？</summary>
 <p>scale 只是把單位大小的 Cube / Capsule 拉成部位的形狀。若傳下去，子節點的平移量和形狀都會被父的 scale 拉伸（例如手臂被拉長兩倍，手肘的位置也被拉遠兩倍、前臂也變形）。做法：<code>M<sub>joint</sub></code> 往下傳，畫自己時另外乘 <code>scale</code>。在 <a href="#hier">5.</a> 勾「錯誤：scale 傳給子節點」可以看到效果。</p></details>
 <details><summary><code>T * R</code> 和 <code>R * T</code> 差在哪？手臂要繞肩膀轉該用哪個？</summary>
-<p>套在頂點上是<b>由右往左</b>：<code>T * R * v</code> = 先在原點旋轉，再平移到關節 → 繞關節轉。<code>R * T * v</code> = 先平移出去再繞「父的原點」轉 → 手臂繞 torso 中心公轉。繞肩膀轉：<code>M = T(肩膀位置) * R(角度)</code>，畫的時候再 <code>* T(0,-半長,0) * S(...)</code> 讓 mesh 往下長。</p></details>
+<p><b>關鍵：矩陣乘在頂點上時，是從右邊開始套用。</b>所以 <code>T * R * v</code> 是「先 R、後 T」，<code>R * T * v</code> 是「先 T、後 R」。</p>
+<p>用手臂當例子（T = 移到肩膀、R = 旋轉 30°）：</p>
+<table>
+<tr><th>寫法</th><th>實際順序</th><th>結果</th></tr>
+<tr><td><code>T * R</code></td><td>① 手臂還在原點時先轉 30°<br>② 再把轉好的手臂搬到肩膀</td><td>✓ 手臂在肩膀上，<b>以肩膀為支點</b>擺動</td></tr>
+<tr><td><code>R * T</code></td><td>① 先把手臂搬到肩膀<br>② 再繞「原點（身體中心）」轉 30°</td><td>✗ 整隻手臂繞著身體中心<b>公轉</b>，離開肩膀</td></tr>
+</table>
+<p><b>所以繞肩膀轉要用 <code>T * R</code>。</b>因為 rotate 一定是繞「目前座標系的原點」轉，要先在原點轉好再移過去。</p>
+<p>完整的手臂矩陣（對應 <code>main.cpp</code> 的 <code>jointMatrix</code> + <code>drawPart</code>）：</p>
+<pre><code>M<sub>joint</sub> = M<sub>torso</sub> * T(肩膀位置) * R(角度)        <span class="c">// 關節矩陣，會傳給前臂</span>
+M<sub>draw</sub>  = M<sub>joint</sub> * T(0, -半長, 0) * S(粗, 半長, 粗)   <span class="c">// 只用來畫上臂</span></code></pre>
+<p class="mut">最後多乘 <code>T(0, -半長, 0)</code>：Capsule 的中心在原點，往下移半個長度，手臂的頂端才會剛好接在肩膀上，旋轉時以頂端為支點。可在 <a href="#hier">5. 階層模型互動</a> 選「R·T 順序錯」看錯誤效果。</p>
+</details>
 <details><summary><code>glm::rotate</code> 的角度單位？</summary>
 <p>弧度（radian）。用角度要 <code>glm::radians(30.0f)</code>。</p></details>
 <details><summary>VAO 存了什麼？為什麼每個 mesh 一個 VAO？</summary>
