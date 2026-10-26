@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rendering Pipeline</title><link rel="stylesheet" href="style.css">
+<title>講義 03：OpenGL Rendering Pipeline</title><link rel="stylesheet" href="style.css">
 <style>
 #pipe g.st{cursor:pointer}
 #pipe g.st rect{stroke:#999;stroke-width:1.5}
@@ -8,45 +8,57 @@
 #pipe text{font-size:12px;text-anchor:middle;pointer-events:none}
 #info{min-height:150px}
 #info h3{margin-top:0}
-#demo,#cube{border:1px solid var(--line);border-radius:6px;background:#fff}
+#demo{border:1px solid var(--line);border-radius:8px;background:#fff}
 #vt td{font:12px ui-monospace,monospace}
 </style></head>
 <body><main>
-<h1>Rendering Pipeline</h1>
-<div class="toc"><a href="#concept">核心觀念</a><a href="#pipeline">Pipeline 互動圖</a><a href="#walk">一個三角形的旅程</a><a href="#space">座標空間與 MVP</a><a href="#math">必要數學</a><a href="#raster">Rasterizer</a><a href="#persample">Per-Sample</a><a href="#compute">Compute</a></div>
+<p class="kicker">講義 03 · OpenGL Rendering Pipeline</p>
+<h1>OpenGL Rendering Pipeline</h1>
+<p class="lead">一個三角形從 C++ 陣列出發、經過哪些 stage、每個 stage 做什麼、能用哪些 API 設定；以及第一支 OpenGL shader 程式（OpenGL 101：畫一個點、一個三角形）。</p>
 
-<h2 id="concept">核心觀念</h2>
+<div class="key"><b>本章重點</b>
 <ul>
-<li><b>OpenGL 是 API，不是語言</b>：由顯卡 driver（NVIDIA / AMD / Mesa）實作；不管視窗與輸入（交給 GLFW）。</li>
-<li><b>State machine</b>：先「設定狀態 / bind 物件」，再下 <b>Draw Command</b>（<code>glDrawArrays</code> / <code>glDrawElements</code>）。設定會一直保留到你改它。</li>
-<li>API 大致兩類：
-  <ul><li><b>指定物件</b>：Buffer（vertex / index）、Texture、Shader Program、Framebuffer Object</li>
-  <li><b>設定 pipeline</b>：fixed-function 的開關（depth test、culling…）、目前用哪個 program、render target</li></ul></li>
-<li><b>Object 以 <code>GLuint</code> 識別</b>：<code>glGen*</code> / <code>glCreate*</code> 拿到 ID → <code>glBind*</code> 掛上 pipeline → 操作 → <code>glDelete*</code>。</li>
-<li>典型一幀：<code>設定 Object#1 → draw → 設定 Object#2 → draw …</code>；共用設定的物件連續畫可省 API call（省 CPU）。</li>
-<li>本課用 <b>Programmable Pipeline</b>（OpenGL 3.0+ core profile；shader 用 <code>#version 410 core</code>）。舊式 fixed-function（<code>glBegin/glEnd</code>）已 deprecated，網路上舊教學別抄。</li>
-</ul>
-<div class="ex"><b>名詞小辭典</b>
-<table>
-<tr><th>名詞</th><th>白話解釋</th></tr>
-<tr><td>Vertex（頂點）</td><td>一個點加上它的屬性（位置、顏色、法向量、UV…）。一個三角形 = 3 個 vertex。</td></tr>
-<tr><td>Primitive</td><td>由頂點組成的基本圖形：點、線、三角形。GPU 只會畫這三種，所有 3D 模型都是一堆三角形。</td></tr>
-<tr><td>Fragment</td><td>「候選像素」：三角形蓋到的每個像素產生一個 fragment，帶有插值後的顏色 / 深度。通過 depth test 等檢查後才會真正寫成 <b>pixel</b>。</td></tr>
-<tr><td>Shader</td><td>跑在 GPU 上的小程式，用 GLSL 寫。Vertex shader 每頂點跑一次、Fragment shader 每 fragment 跑一次，成千上萬個同時平行執行。</td></tr>
-<tr><td>Buffer / Texture</td><td>放在 GPU 記憶體的資料。Buffer 像一維陣列（頂點資料），Texture 像圖片（可被 filter 取樣）。</td></tr>
-<tr><td>Context</td><td>OpenGL 的「執行環境」，記錄所有狀態與物件。GLFW 建視窗時順便建立。</td></tr>
-<tr><td>Draw call</td><td>一次 <code>glDraw*</code> 呼叫 = 叫 GPU 用目前的設定畫一批 primitive。</td></tr>
-</table></div>
-<div class="ex"><b>範例：State machine 是什麼意思？</b>
-<p>OpenGL 就像一台有很多開關的機器。<code>glDraw*</code> 不帶「用哪個 shader、哪份資料」的參數，而是用<b>當下開關的狀態</b>。</p>
-<pre><code>glUseProgram(redShader);      <span class="c">// 開關：目前 shader = 紅色</span>
-glBindVertexArray(cubeVAO);   <span class="c">// 開關：目前資料 = 立方體</span>
-glDrawArrays(GL_TRIANGLES, 0, 36);   <span class="c">// 畫出紅色立方體</span>
+<li>Pipeline = 一串 stage，資料流進、處理、流出。<b>Fixed-function stage</b> 只能用 API 調狀態；<b>programmable stage</b> 跑你寫的 shader。</li>
+<li>順序：Vertex Specification → <b>Vertex Shader</b> →（Tessellation）→（Geometry）→ Rasterizer → <b>Fragment Shader</b> → Per-Sample Processing → Framebuffer。</li>
+<li>Vertex / Tessellation / Geometry 合稱 <b>Vertex Processing</b>：最後一個啟用的必須輸出 <code>gl_Position</code>（clip space）。</li>
+<li>Rasterizer 依序做 culling → clipping → ÷w → viewport → 光柵化（並<b>插值</b> VS 的輸出）→ multisampling。</li>
+<li>Per-sample 做 scissor / stencil / depth test，通過後（可選）blending 再寫進 framebuffer。</li>
+<li>Shader 編譯成 shader object → attach 到 program → link → <code>glUseProgram</code>；畫圖前必須 bind 一個 VAO（即使沒有任何輸入）。</li>
+</ul></div>
 
-glBindVertexArray(sphereVAO); <span class="c">// 只換資料，shader 沒改</span>
-glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 —— 因為 shader 狀態還留著</span></code></pre>
-<p>所以 bug 常來自「狀態殘留」：上一個物件開的設定（如 blending、某張 texture）影響了下一個物件。</p>
-<p><b>為什麼用 GLuint ID？</b> 物件實際存在 driver / GPU 裡，你手上只有一個編號（像檔案的 file descriptor）。例如 <code>glGenBuffers(1, &amp;vbo)</code> 後 <code>vbo</code> 可能是 <code>1</code>，之後所有操作都用這個 1 指名。</p></div>
+<div class="toc"><a href="#overview">Pipeline 與 OpenGL Object</a><a href="#pipeline">Pipeline 互動圖</a><a href="#walk">一個三角形的旅程</a><a href="#stages">各 stage 詳解</a><a href="#raster">Rasterizer</a><a href="#persample">Per-Sample</a><a href="#compute">Compute Pipeline</a><a href="#first">OpenGL 101</a><a href="#program">Shader 與 Program</a><a href="#builtin">內建變數與 in / out</a></div>
+
+<h2 id="overview">Pipeline 與 OpenGL Object</h2>
+<p>這門課講的是 <b>rasterization rendering pipeline</b>。它由多個 stage 組成，依功能可以分成四大類：</p>
+<figure class="fig">
+<svg viewBox="0 0 900 150" width="100%" font-size="13" text-anchor="middle">
+<g><rect x="10" y="20" width="200" height="110" rx="12" fill="#eceef1" stroke="#c3c8cf"/><text x="110" y="48" font-weight="700" font-size="14">Command</text><text x="110" y="74" fill="#4b535d">C++ 呼叫 API</text><text x="110" y="94" fill="#4b535d">設定狀態、物件</text><text x="110" y="114" fill="#4b535d">發出 draw command</text></g>
+<g><rect x="230" y="20" width="200" height="110" rx="12" fill="#eaf0ff" stroke="#9fb2f0"/><text x="330" y="48" font-weight="700" font-size="14">Geometry processing</text><text x="330" y="74" fill="#4b535d">Vertex Specification</text><text x="330" y="94" fill="#4b535d">Vertex / Tess / Geometry</text><text x="330" y="114" fill="#4b535d">Rasterizer 前半</text></g>
+<g><rect x="450" y="20" width="200" height="110" rx="12" fill="#e3f4ea" stroke="#8fd1a8"/><text x="550" y="48" font-weight="700" font-size="14">Pixel processing</text><text x="550" y="74" fill="#4b535d">Rasterization</text><text x="550" y="94" fill="#4b535d">Fragment Shader</text><text x="550" y="114" fill="#4b535d">Per-Sample → Framebuffer</text></g>
+<g><rect x="690" y="20" width="200" height="110" rx="12" fill="#fff3d6" stroke="#e6c27a"/><text x="790" y="48" font-weight="700" font-size="14">Compute processing</text><text x="790" y="74" fill="#4b535d">Compute Shader</text><text x="790" y="94" fill="#4b535d">不屬於繪圖 pipeline</text><text x="790" y="114" fill="#4b535d">讀寫 buffer / texture</text></g>
+<g stroke="#888" stroke-width="2"><path d="M212 75 h14"/><path d="M432 75 h14"/></g>
+</svg>
+<figcaption>講義 03 大綱的四類 processing。前三個串成繪圖 pipeline，compute 是另一條獨立的 pipeline。</figcaption>
+</figure>
+<div class="grid2">
+<div class="card"><b>OpenGL 的物件導向資源管理</b>
+<p><b>GPU 記憶體</b>以 resource object 表示：</p>
+<ul><li><b>Buffer Object</b>：陣列或結構的資料（幾何、相機設定、查表…）</li>
+<li><b>Texture Object</b>：1D、2D、3D、cube 影像（或它們的 array）</li></ul>
+<p><b>Pipeline 設定</b>也用 object 表示：</p>
+<ul><li><b>Vertex Array Object（VAO）</b>：設定 pipeline 的輸入</li>
+<li><b>Shader Object</b>：某個 programmable stage 的一個 shader</li>
+<li><b>Shader Program Object</b>：pipeline 用到的所有 shader</li></ul>
+<p class="mut">細節見 <a href="l04-objects.html">講義 04 OpenGL Objects</a>。</p></div>
+<div class="card"><b>怎麼用這些物件</b>
+<ul><li>每個物件用一個 <code>GLuint</code>（無號整數）識別</li>
+<li>用 API + 這個 ID 操作物件</li>
+<li>把物件 <b>bind</b> 到 pipeline 來設定它，然後發出 <b>draw command</b> 開始渲染</li></ul>
+<p><b>常見的渲染流程：</b></p>
+<pre><code>設定 pipeline 給 Object#1 → draw Object#1
+設定 pipeline 給 Object#2 → draw Object#2
+...</code></pre>
+<p class="mut">兩個物件共用一些設定時，連續畫就不用重設 → 少呼叫 API → 直接省 CPU。</p></div></div>
 
 <h2 id="pipeline">Pipeline 互動圖</h2>
 <p class="mut">點任一 stage 看說明。<span class="tag t-prog">programmable</span><span class="tag t-opt">optional programmable</span><span class="tag t-fix">fixed function</span></p>
@@ -68,130 +80,230 @@ glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 �
 <canvas id="demo" width="480" height="300"></canvas>
 <div id="walkTxt" class="card"></div>
 
-<h2 id="space">座標空間與 MVP</h2>
-<svg viewBox="0 0 960 90" style="width:100%">
-<g font-size="13" text-anchor="middle">
-<g id="chain"></g></g></svg>
-<ul>
-<li><b>Model</b>：物件擺到世界（translate / rotate / scale）；<b>View</b>：把世界轉到相機座標（<code>lookAt</code>）；<b>Projection</b>：視錐 → clip space（<code>perspective</code> / <code>ortho</code>）。</li>
-<li>Vertex shader 通常只做 <code>gl_Position = P * V * M * pos;</code>，之後 <b>perspective division（÷w）與 viewport transform 由 Rasterizer 自動做</b>，你只能用 <code>glViewport</code> 設定後者。</li>
-<li>OpenGL 相機座標是 <b>right-handed</b>、相機看向 <code>-z</code>；Projection 之後 NDC 變成 left-handed（z 越大越遠，範圍 [-1, 1]）。</li>
-</ul>
-<div class="ex"><b>範例：用「拍照」理解五個步驟</b>
-<ol>
-<li><b>Model</b>：把道具擺到場景中（模型檔裡的茶壺座標以自己為中心，Model 把它移到桌上 (3,1,0) 並轉 90°）。</li>
-<li><b>View</b>：架好相機（相機在 (0,2,5) 看向原點）。數學上是「把整個世界搬動到以相機為原點」。</li>
-<li><b>Projection</b>：選鏡頭（廣角 / 望遠 = FOV），決定哪些東西在畫面內。</li>
-<li><b>÷w</b>：近大遠小在這一步發生。</li>
-<li><b>Viewport</b>：把照片印成指定大小（800×600 pixel）。</li></ol>
-<p><b>數字走一次</b>：某點在 clip space 是 <code>(2, 1, 3, 4)</code> → NDC = <code>(2/4, 1/4, 3/4) = (0.5, 0.25, 0.75)</code>，三個值都在 [-1,1] 內所以可見。視窗 800×600 時 screen x = (0.5+1)/2×800 = <b>600</b>、y = (0.25+1)/2×600 = <b>375</b>（從下往上算）。<br>
-同一個點若離相機更遠，w 會更大（perspective 的 w ≈ 到相機的距離）→ 除完 x、y 更接近 0 → 更靠近畫面中心、看起來更小。這就是「近大遠小」。</p></div>
-<div class="ctrl">
-  <label>Model tx <input type="range" id="tx" min="-3" max="3" step=".1" value="0"></label>
-  <label>rotate y <input type="range" id="ry" min="0" max="360" value="30"></label>
-  <label>scale <input type="range" id="sc" min=".3" max="2" step=".1" value="1"></label>
-  <label><input type="checkbox" id="ord"> 順序改 R·T（先平移再轉）</label>
-</div>
-<div class="ctrl">
-  <label>Camera 距離 <input type="range" id="cd" min="2" max="15" step=".1" value="6"></label>
-  <label>相機高度 <input type="range" id="cy" min="-5" max="5" step=".1" value="2"></label>
-  <label>FOV <input type="range" id="fov" min="20" max="120" value="45"></label>
-  <label><input type="checkbox" id="orth"> Orthographic</label>
-  <label>near <input type="range" id="near" min=".1" max="6" step=".1" value=".1"></label>
-</div>
-<div class="grid2">
-<canvas id="cube" width="460" height="320"></canvas>
-<div><b>紅點頂點 (1,1,1) 經過每個空間：</b>
-<table id="vt"></table>
-<p class="mut">試試：把 near 拉大 → 頂點的 NDC.z 超出 [-1,1] 就會被 clip；把 tx 拉大並勾「R·T」→ 物體繞原點公轉而不是自轉。</p></div>
-</div>
+<div class="tip">座標空間（Object → World → Eye → Clip → NDC → Screen）、MVP 矩陣與必要數學已移到 <a href="l01-transform.html">講義 01 座標轉換</a>，含互動示範。</div>
 
-<h2 id="math">必要數學（Transformation 講義重點）</h2>
+<h2 id="stages">各 stage 詳解</h2>
 <div class="grid2">
-<div class="card"><b>Homogeneous coordinate</b>
-<ul><li>點 <code>(x,y,z,1)</code>；方向 <code>(x,y,z,0)</code></li>
-<li>w=0 → translate 對方向無效（正確行為）</li>
-<li>每個 vertex 是 column vector，矩陣<b>前乘</b>：<code>v' = M v</code></li>
-<li>OpenGL / GLM 矩陣是 <b>column-major</b> 儲存</li></ul></div>
-<div class="card"><b>組合順序</b>
-<ul><li><code>M = T * R * S</code>：先 scale、再 rotate、最後 translate（從右往左讀）</li>
-<li><code>MVP = P * V * M</code></li>
-<li>逆矩陣捷徑：<code>T⁻¹(t)=T(-t)</code>、<code>R⁻¹=Rᵀ</code>、<code>S⁻¹(s)=S(1/s)</code></li></ul></div>
-<div class="card"><b>向量運算</b>
-<ul><li><code>dot(A,B)=|A||B|cosθ</code>：夾角、投影、光照 <code>max(dot(N,L),0)</code></li>
-<li><code>cross(A,B)</code>：垂直兩者，右手定則；<code>cross(A,B) = -cross(B,A)</code></li>
-<li>單位向量：<code>normalize(v)</code></li></ul></div>
-<div class="card"><b>lookAt(E, C, U)</b>
-<ul><li><code>F = normalize(C − E)</code>（前）</li>
-<li><code>S = normalize(cross(F, U))</code>（右）</li>
-<li><code>U' = cross(S, F)</code>（上）</li>
-<li>View = Rotation * Translation(−E)：移相機 = 反方向移世界</li></ul></div>
-<div class="card"><b>Projection</b>
-<ul><li>Perspective：遠小近大，<code>perspective(fovy, aspect, near, far)</code></li>
-<li>Orthographic：無透視，<code>ortho(l,r,b,t,n,f)</code></li>
-<li>near/far 比例別太懸殊（near 太小 → depth 精度差、z-fighting）</li></ul></div>
-<div class="card"><b>Rotation</b>
-<ul><li>繞 x/y/z 軸或任意軸 + 角度（GLM 用<b>弧度</b>）</li>
-<li>Euler angles 有 <b>gimbal lock</b>；需要平滑插值或任意旋轉時用 <b>quaternion</b></li>
-<li>Non-uniform scale 會改變法向量方向 → normal 要用 <code>transpose(inverse(M))</code></li></ul></div>
-</div>
-<div class="ex"><b>範例 1：為什麼要 w？點 vs 方向</b>
-<p>平移 (+5, 0, 0) 的矩陣 T，最右邊一欄放位移量。乘上去時，位移會乘以 w：</p>
-<pre><code>T = | 1 0 0 5 |      點   p = (1, 2, 3, <b>1</b>)  →  T·p = (1+5·1, 2, 3, 1) = (6, 2, 3, 1)   ✔ 點被移動
-    | 0 1 0 0 |      方向 d = (1, 0, 0, <b>0</b>)  →  T·d = (1+5·0, 0, 0, 0) = (1, 0, 0, 0)   ✔ 方向不變
-    | 0 0 1 0 |
-    | 0 0 0 1 |</code></pre>
-<p>法向量、光線方向等「方向」本來就不該因物體平移而改變，w=0 剛好自動處理。</p></div>
-<div class="ex"><b>範例 2：順序很重要</b>
-<p>把點 p = (1, 0, 0) 先「繞 y 軸轉 90°」、再「往 +x 移 5」：</p>
-<ul><li><code>T * R * p</code>（先 R 後 T）：轉完變 (0, 0, -1) → 平移得 <b>(5, 0, -1)</b>：物體在原地自轉後搬過去</li>
-<li><code>R * T * p</code>（先 T 後 R）：平移得 (6, 0, 0) → 繞原點轉得 <b>(0, 0, -6)</b>：物體跑到很遠的地方（像繞太陽公轉）</li></ul>
-<p>規則：<b>離 p 最近（最右邊）的矩陣最先作用</b>。一般物件用 <code>T * R * S</code>。上方互動圖勾「順序改 R·T」可以看到差別。</p></div>
-<div class="ex"><b>範例 3：dot / cross 實際用途</b>
-<ul><li><code>dot((1,0,0), (0,1,0)) = 0</code> → 垂直；<code>dot((1,0,0), (1,0,0)) = 1</code> → 同方向；<code>dot((1,0,0), (-1,0,0)) = -1</code> → 反向。</li>
-<li>光照：法向量 N 與指向光源的 L 都是單位向量時，<code>dot(N, L)</code> 就是亮度比例。光正對表面 = 1（最亮），光斜 60° = 0.5，光從背後 = 負數（用 <code>max(…, 0)</code> 截成 0）。</li>
-<li><code>cross((1,0,0), (0,1,0)) = (0,0,1)</code>：x 叉 y 得 z（右手定則）。三角形兩邊做 cross 就得到它的法向量。</li></ul></div>
+<div class="card"><b>Vertex Specification</b> <span class="tag t-fix">fixed</span>
+<ul><li>第一個 stage：從一或多個 buffer object 組出頂點，交給後面的 stage</li>
+<li>應用程式用一個 <b>VAO</b> 當作設定</li>
+<li>搭配不同 draw command 產生不同輸入格式</li>
+<li>設定 API：<code>glBindVertexArray(vao)</code>、<code>glDraw*</code>（draw command 也標示一次渲染的開始）</li></ul>
+<p class="mut">→ 詳見 <a href="05-vertex-draw.html">講義 05</a></p></div>
+<div class="card"><b>Vertex Shader</b> <span class="tag t-prog">programmable</span>
+<ul><li>第一個 programmable stage，<b>每個頂點執行一次</b></li>
+<li>彼此獨立、<b>不知道 primitive 的拓樸</b>（不知道自己屬於哪個三角形）</li>
+<li>常做：套用轉換矩陣、vertex skinning（骨架動畫）、per-vertex 光照、任何和形狀有關的計算</li></ul></div>
+<div class="card"><b>Tessellation Shader</b> <span class="tag t-opt">optional</span>
+<ol><li>Tessellation Control Shader（programmable）</li><li>Tessellation Engine（fixed function）</li><li>Tessellation Evaluation Shader（programmable）</li></ol>
+<p>三個子 stage 要一起用。把表示平滑曲面的高階 <b>patch</b> 細分成一般三角形。</p>
+<ul class="mut"><li>常見誤解：tessellation ≠ triangulation</li>
+<li>為什麼需要：高解析模型（一個角色 10 萬頂點）佔大量儲存與頻寬 → 存粗模型、在 GPU 上依需要細分；同一份輸入可在不同硬體上調整細節；美術不必處理三角形細節</li></ul></div>
+<div class="card"><b>Geometry Shader</b> <span class="tag t-opt">optional</span>
+<ul><li>最後一個能改幾何的 stage，<b>每個 primitive 執行一次</b></li>
+<li>可以用程式新增 / 刪除幾何、輸出和輸入不同的 primitive 類型</li>
+<li><b>Transform Feedback</b>：把幾何存回 buffer object → 重複使用昂貴的 vertex / tessellation 結果，或讓 CPU 讀回（GPU 當協同處理器）</li>
+<li>因效能問題，演算法設計中較少使用</li></ul></div></div>
+<div class="note"><b>Vertex Processing</b> = Vertex + Tessellation + Geometry shader stage，都處理頂點與幾何。<b>最後一個啟用的 stage 必須輸出 clip space 座標 <code>gl_Position</code></b> 給 Rasterizer。只有 VS + FS 時就是 VS 負責。</div>
+<div class="grid2">
+<div class="card"><b>Fragment Shader</b> <span class="tag t-prog">programmable</span>
+<ul><li>最後一個 programmable stage，rasterizer 產生的<b>每個 fragment 執行一次</b></li>
+<li>不知道相鄰的 fragment，彼此平行執行</li>
+<li>白話：<b>決定一個像素的顏色</b>；執行頻率遠高於前面（1080p ≈ 200 萬個像素）</li>
+<li>大部分細節在這裡加上：光照計算、貼圖</li></ul>
+<p class="mut">→ 詳見 <a href="06-fragment-fbo.html">講義 06</a></p></div>
+<div class="card"><b>Framebuffer</b>
+<ul><li>輸出目標：預設是視窗（back buffer）</li>
+<li>也可以是自訂的 FBO（render to texture，後製用）</li>
+<li>Double buffering：畫在 back buffer，<code>glfwSwapBuffers</code> 後顯示</li></ul></div></div>
 
-<h2 id="raster">Rasterizer（fixed function）內部</h2>
-<ol>
-<li><b>Face culling</b>：依頂點順序（預設 CCW = front）丟掉背面。<code>glEnable(GL_CULL_FACE)</code>、<code>glCullFace</code>、<code>glFrontFace</code></li>
-<li><b>Primitive culling</b>：整個在 view volume 外 → 丟掉</li>
-<li><b>Clipping</b>：部分在外 → 切成新的 primitive（在 clip space 做最有效率）</li>
-<li><b>Perspective division</b>：clip → NDC（÷w），不可控制</li>
-<li><b>Viewport transform</b>：NDC → screen。<code>glViewport</code>、<code>glDepthRange</code>（視窗 resize 時要重設 viewport）</li>
-<li><b>Rasterization</b>：三角形 → fragments；VS 的 <code>out</code> 變數在此<b>被插值</b>後送進 FS 的 <code>in</code>。相關：<code>glPolygonMode</code>（線框）、<code>glPointSize</code>、<code>glLineWidth</code></li>
-<li><b>Multisampling</b>：硬體 anti-aliasing，<code>GL_MULTISAMPLE</code></li>
-</ol>
+<h2 id="raster">Rasterizer（fixed function）</h2>
+<p>由三個子 stage 組成：<b>Vertex Post-Processing</b>、<b>Primitive Assembly</b>、<b>Rasterization</b>。它們在硬體上沒有嚴格分開、順序也可能不同，所以通常直接討論它做的事（邏輯順序）：</p>
+<figure class="fig">
+<svg viewBox="0 0 900 96" width="100%" font-size="12" text-anchor="middle" id="rsSvg"></svg>
+</figure>
+<div class="tw"><table>
+<tr><th style="width:4%">#</th><th style="width:20%">操作</th><th>做什麼</th><th style="width:30%">設定 API</th></tr>
+<tr><td>1</td><td><b>Face Culling</b></td><td>丟掉朝向（或背向）相機的 primitive。封閉的物體看不到「裡面」，所以背面永遠不會出現在畫面上 → back-face culling 省一半工作</td><td><code>glEnable(GL_CULL_FACE)</code>、<code>glFrontFace</code>、<code>glCullFace</code></td></tr>
+<tr><td>2</td><td><b>Primitive Culling</b></td><td>完全在 view volume 外 → 整個丟掉</td><td>（同上）</td></tr>
+<tr><td>3</td><td><b>Primitive Clipping</b>（Frustum Clipping）</td><td>部分在 view volume 內 → 切成數個完全在內的新 primitive；在 clip space 做非常有效率</td><td><code>glEnable(GL_CLIP_DISTANCEi)</code>（自訂裁切平面）</td></tr>
+<tr><td>4</td><td><b>Perspective Division</b>（Homogeneous Division）</td><td>clip space → NDC（÷w）</td><td>無法控制</td></tr>
+<tr><td>5</td><td><b>Viewport Transformation</b></td><td>NDC → screen space</td><td><code>glViewport</code>、<code>glDepthRange</code></td></tr>
+<tr><td>6</td><td><b>Rasterization</b></td><td>把幾何轉成規則取樣的表示（fragment），才能寫進像素影像；VS 的 <code>out</code> 在這裡<b>被插值</b>後送進 FS 的 <code>in</code></td><td><code>glPolygonMode</code>、<code>GL_POLYGON_OFFSET</code> + <code>glPolygonOffset</code>、<code>glPointSize</code>、<code>glLineWidth</code></td></tr>
+<tr><td>7</td><td><b>Multisampling</b></td><td>簡化、最佳化、硬體加速的 anti-aliasing</td><td><code>glEnable(GL_MULTISAMPLE)</code></td></tr>
+</table></div>
+<p class="mut">÷w 與 viewport 的數學見 <a href="l01-transform.html#spaces">講義 01 六個座標空間</a>；光柵化演算法本身是電腦圖學（CS5500）的內容。</p>
 <div class="ex"><b>範例：插值（interpolation）</b>
 <p>一條邊的兩端，頂點 A 顏色 <code>(1,0,0)</code> 紅、頂點 B 顏色 <code>(0,0,1)</code> 藍。VS 只在 A、B 兩點各跑一次，但中間有很多像素：</p>
 <ul><li>距 A 25% 處的 fragment 拿到 <code>0.75·紅 + 0.25·藍 = (0.75, 0, 0.25)</code></li>
 <li>正中間拿到 <code>(0.5, 0, 0.5)</code> 紫色</li></ul>
-<p>三角形內部則用三個頂點的 barycentric 權重（加總為 1）混合。<b>任何</b>從 VS <code>out</code> 出來的值（顏色、UV、法向量、世界座標）都會這樣被插值後送進 FS——這就是為什麼 FS 能拿到「每個像素自己的 UV」。上方「一個三角形的旅程」第 5 步就是這個效果。</p>
+<p>三角形內部則用三個頂點的 barycentric 權重（加總為 1）混合。<b>任何</b>從 VS <code>out</code> 出來的值（顏色、UV、法向量、世界座標）都會這樣被插值後送進 FS——這就是為什麼 FS 能拿到「每個像素自己的 UV」。下方 OpenGL 101 的 RGB 三角形就是這個效果。</p>
 <p>注意：插值後的法向量長度不再是 1 → FS 裡要再 <code>normalize</code> 一次。</p></div>
 
-<h2 id="persample">Per-Sample Processing</h2>
-<table>
-<tr><th>Test</th><th>做什麼</th><th>API</th></tr>
-<tr><td>Scissor</td><td>矩形外的 fragment 丟掉</td><td><code>GL_SCISSOR_TEST</code>, <code>glScissor</code></td></tr>
-<tr><td>Stencil</td><td>和 stencil buffer 比較，做遮罩（可動態更新）</td><td><code>GL_STENCIL_TEST</code>, <code>glStencilFunc/Op/Mask</code></td></tr>
-<tr><td>Depth</td><td>Z-buffer：比較深度決定能否覆蓋</td><td><code>GL_DEPTH_TEST</code>, <code>glDepthFunc</code>, <code>glDepthMask</code></td></tr>
-<tr><td>Blending</td><td>通過測試後與既有顏色混合（半透明）</td><td><code>GL_BLEND</code>, <code>glBlendFunc</code></td></tr>
-</table>
+<h2 id="persample">Per-Sample Processing（fixed function）</h2>
+<p>fragment 寫進 framebuffer 前的最後一個 stage。做三種測試，全部通過才寫入；若開了 blending，先混合再寫入。</p>
+<div class="tw"><table>
+<tr><th style="width:14%">操作</th><th>做什麼</th><th style="width:34%">設定 API</th></tr>
+<tr><td><b>Scissor Test</b></td><td>丟掉使用者指定矩形以外的 fragment，用來把輸出限制在某個區域</td><td><code>glEnable(GL_SCISSOR_TEST)</code>、<code>glScissor</code></td></tr>
+<tr><td><b>Stencil Test</b></td><td>拿 fragment 的參考值和 stencil buffer 的內容比較；stencil buffer 也可以動態更新。和 scissor 一樣做遮罩，但演算法設計上更有彈性</td><td><code>glEnable(GL_STENCIL_TEST)</code>、<code>glStencilFunc</code>、<code>glStencilOp</code>、<code>glStencilMask</code></td></tr>
+<tr><td><b>Depth Test</b></td><td>經典 Z-buffer 演算法（Williams, 1978）的硬體實作，用 depth buffer 讓場景前後順序正確；決定 fragment 能否覆蓋（或混合）color buffer</td><td><code>glEnable(GL_DEPTH_TEST)</code>、<code>glDepthFunc</code>、<code>glDepthMask</code></td></tr>
+<tr><td><b>Blending</b></td><td>傳統上用於半透明（alpha transparency）：用可設定的 blending function 混合兩個顏色來源</td><td><code>glEnable(GL_BLEND)</code>、<code>glBlendFunc</code></td></tr>
+</table></div>
 <div class="ex"><b>範例：Depth test 與 Blending 的數字</b>
-<ul><li><b>Depth test</b>（GL_LESS）：某像素目前 depth buffer 存 0.6（之前畫的牆）。新 fragment 深度 0.4（比牆近）→ 0.4 &lt; 0.6 通過，寫入顏色並把 depth 更新成 0.4。之後又來一個 0.7 的 fragment（牆後面的東西）→ 0.7 &lt; 0.4 不成立 → 丟掉。<b>結果和繪製順序無關</b>，這就是 Z-buffer 的價值。</li>
+<ul><li><b>Depth test</b>（GL_LESS）：某像素目前 depth buffer 存 0.6（之前畫的牆）。新 fragment 深度 0.4（比牆近）→ 0.4 &lt; 0.6 通過，寫入顏色並把 depth 更新成 0.4。之後又來一個 0.7 的 fragment（牆後面）→ 0.7 &lt; 0.4 不成立 → 丟掉。<b>結果和繪製順序無關</b>，這就是 Z-buffer 的價值。</li>
 <li>沒開 depth test：後畫的永遠蓋掉先畫的 → 牆後面的東西如果比較晚畫，會「穿透」到前面。</li>
-<li><b>Blending</b>（<code>glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)</code>）：畫面上已有藍色 (0,0,1)，新畫一個 α=0.3 的紅色玻璃 (1,0,0)：<br>
-結果 = 0.3 × (1,0,0) + 0.7 × (0,0,1) = <b>(0.3, 0, 0.7)</b>。</li></ul></div>
-<div class="warn">開了 depth test，每幀必須 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>，否則上一幀的深度會擋住新畫面。半透明物體通常要<b>先畫不透明、再由遠到近畫透明</b>。</div>
-
-<p class="mut">Blending factor、透明物件排序、framebuffer object 的詳細內容見 <a href="06-fragment-fbo.html">Fragment Shader 與 Framebuffer</a>。</p>
+<li><b>Blending</b>（<code>glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)</code>）：畫面上已有藍色 (0,0,1)，新畫一個 α=0.3 的紅色玻璃 (1,0,0)：結果 = 0.3 × (1,0,0) + 0.7 × (0,0,1) = <b>(0.3, 0, 0.7)</b>。</li></ul></div>
+<div class="warn">開了 depth test，每幀必須 <code>glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)</code>，否則上一幀的深度會擋住新畫面。半透明物體通常要<b>先畫不透明、再由遠到近畫透明</b>。Blending 的完整說明見 <a href="06-fragment-fbo.html#blend">講義 06</a>。</div>
 
 <h2 id="compute">Compute Pipeline</h2>
+<figure class="fig">
+<svg viewBox="0 0 700 160" width="100%" font-size="13" text-anchor="middle">
+<defs><marker id="cp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="20" y="50" width="150" height="60" rx="10" fill="#dbeafe" stroke="#9fb2f0"/><text x="95" y="76">Input Geometry</text><text x="95" y="94">&amp; Textures</text>
+<rect x="250" y="20" width="160" height="120" rx="10" fill="#fff" stroke="#999"/><text x="330" y="46" font-weight="700">GPU Memory</text><text x="330" y="74" fill="#666">Geometry</text><text x="330" y="94" fill="#666">Textures / Buffers</text><text x="330" y="114" fill="#666">Raw Data</text>
+<rect x="500" y="50" width="160" height="60" rx="10" fill="#c6f0d6" stroke="#8fd1a8"/><text x="580" y="85" font-weight="700">Compute Shader</text>
+<path d="M172 80 h74" stroke="#555" stroke-width="2" marker-end="url(#cp)"/>
+<path d="M412 70 h84" stroke="#555" stroke-width="2" marker-end="url(#cp)"/><path d="M498 92 h-84" stroke="#555" stroke-width="2" marker-end="url(#cp)"/>
+<text x="455" y="62" font-size="11" fill="#555">讀</text><text x="455" y="108" font-size="11" fill="#555">寫</text>
+</svg>
+<figcaption>Compute pipeline 只有一個 programmable stage，沒有固定的輸入輸出；直接讀寫 GPU 記憶體裡的 buffer 和 texture。</figcaption>
+</figure>
+<div class="grid2">
+<div class="card"><ul>
+<li>OpenGL <b>4.3</b> 起提供（macOS 只到 4.1，沒有 compute shader）</li>
+<li>只有一個 programmable stage；沒有預先定義的輸入輸出，但可以<b>非同步讀寫 buffer 和 texture</b> → 高度客製化的平行演算法</li>
+<li>概念接近 CUDA、DirectCompute</li>
+<li>和繪圖 pipeline 建立在同樣的基礎上：可以用硬體 texture filtering 和 GLSL 內建函式</li></ul></div>
+<div class="card"><b>用途（越來越重要）</b>
+<ul><li>物理模擬：水面、布料、粒子系統、音效殘響區域</li>
+<li>程序化貼圖生成</li>
+<li>影像處理：可分離的 2D 卷積（Gaussian blur…）</li>
+<li>GPGPU：當作 CPU 的協同處理器、一般平行演算法</li>
+<li>講義 07 的 GPU-driven rendering（instance culling）</li></ul></div></div>
+
+<h2 id="first">OpenGL 101：第一支 shader 程式</h2>
+<div class="note"><b>講義的程式碼區塊顏色</b>：<span style="background:#fffbcc;padding:0 4px">黃色</span> = Application（CPU）：建立 OpenGL context、建立與維護 OpenGL 物件、產生給 GPU 的工作；<span style="background:#dbeafe;padding:0 4px">藍色</span> = Shader（GPU）：某個 programmable stage 的 shader，平行處理幾何或 fragment，以 <code>#version 410 core</code> 開頭。本頁以註解標示 C++ 或 GLSL。</div>
+<p>講義用一系列由簡到繁的小範例。點選範例，右邊是模擬的執行結果（瀏覽器內用 JavaScript 照 shader 的邏輯逐像素算出來）：</p>
+<div class="tabs" id="exTabs"></div>
+<div class="grid2">
+<div><div class="card" id="exTxt"></div><div id="exCode"></div></div>
+<div><canvas id="exCv" width="320" height="320" style="border:1px solid var(--line);border-radius:10px;display:block;margin:0 auto;background:#fff"></canvas>
+<div class="ctrl" id="exCtrl" style="justify-content:center"></div></div></div>
+
+<h2 id="program">Shader 與 Shader Program</h2>
+<div class="grid2">
+<figure class="fig" style="margin:0">
+<svg viewBox="0 0 420 210" width="100%" font-size="12.5" text-anchor="middle">
+<rect x="10" y="8" width="400" height="30" rx="6" fill="#c2412d"/><text x="210" y="28" fill="#fff" font-weight="700">Client Application</text>
+<g font-weight="700"><rect x="20" y="52" width="115" height="28" rx="5" fill="#3557c9"/><text x="77" y="71" fill="#fff">Program A</text>
+<rect x="152" y="52" width="115" height="28" rx="5" fill="#3557c9"/><text x="210" y="71" fill="#fff">Program B</text>
+<rect x="285" y="52" width="115" height="28" rx="5" fill="#3557c9"/><text x="342" y="71" fill="#fff">Program C</text></g>
+<rect x="20" y="96" width="115" height="40" rx="5" fill="#fde7b6" stroke="#b7791f" stroke-width="2"/><text x="77" y="120">Vertex Shader A</text>
+<rect x="152" y="96" width="115" height="40" rx="5" fill="#fde7b6" stroke="#b7791f" stroke-width="2"/><text x="210" y="120">Vertex Shader A</text>
+<rect x="285" y="96" width="115" height="40" rx="5" fill="#fde7b6" stroke="#999"/><text x="342" y="120">Vertex Shader B</text>
+<rect x="20" y="148" width="115" height="40" rx="5" fill="#fde7b6" stroke="#999"/><text x="77" y="172">Fragment Shader A</text>
+<rect x="152" y="148" width="115" height="40" rx="5" fill="#fde7b6" stroke="#999"/><text x="210" y="172">Fragment Shader B</text>
+<rect x="285" y="148" width="115" height="40" rx="5" fill="#fde7b6" stroke="#999"/><text x="342" y="172">Fragment Shader C</text>
+<text x="143" y="204" fill="#b7791f" font-size="11">Program A、B 共用同一個 Vertex Shader A</text>
+</svg><figcaption>一個應用程式通常有多個 program；shader object 可以被多個 program 重複使用。</figcaption></figure>
+<figure class="fig" style="margin:0">
+<svg viewBox="0 0 420 210" width="100%" font-size="12.5" text-anchor="middle">
+<defs><marker id="pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="20" y="10" width="130" height="30" rx="5" fill="#3557c9"/><text x="85" y="30" fill="#fff" font-weight="700">Program</text>
+<rect x="270" y="10" width="130" height="30" rx="5" fill="#2f8a5b"/><text x="335" y="30" fill="#fff" font-weight="700">Shader</text>
+<rect x="20" y="56" width="130" height="28" rx="5" fill="#eaf0ff" stroke="#9fb2f0"/><text x="85" y="75">glCreateProgram</text>
+<rect x="270" y="56" width="130" height="28" rx="5" fill="#e3f4ea" stroke="#8fd1a8"/><text x="335" y="75">glCreateShader</text>
+<rect x="270" y="104" width="130" height="28" rx="5" fill="#e3f4ea" stroke="#8fd1a8"/><text x="335" y="123">glShaderSource</text>
+<rect x="270" y="152" width="130" height="28" rx="5" fill="#e3f4ea" stroke="#8fd1a8"/><text x="335" y="171">glCompileShader</text>
+<rect x="145" y="104" width="120" height="28" rx="5" fill="#fff3d6" stroke="#e6c27a"/><text x="205" y="123">glAttachShader</text>
+<rect x="20" y="152" width="130" height="28" rx="5" fill="#eaf0ff" stroke="#9fb2f0"/><text x="85" y="171">glLinkProgram</text>
+<g stroke="#555" stroke-width="1.6" fill="none" marker-end="url(#pa)"><path d="M335 84 v18"/><path d="M335 132 v18"/><path d="M270 166 Q240 166 225 134"/><path d="M85 84 Q85 118 143 118"/><path d="M175 132 Q150 166 152 166"/></g>
+<text x="210" y="202" font-size="11" fill="#666">要用兩個以上不同的 program，就要分別建立並 link</text>
+</svg><figcaption>GLSL 架構：shader 建立 → 放原始碼 → 編譯 → attach 到 program → link。</figcaption></figure></div>
+<div class="grid2">
+<pre><code><span class="c">// C++：講義的 setup_shaders()</span>
+GLuint setup_shaders()
+{
+    GLuint vertex_shader, fragment_shader, program;
+
+    <span class="c">// create and compile the vertex shader</span>
+    vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertex_shader, 1, vs_source, NULL);
+    glCompileShader(vertex_shader);
+
+    <span class="c">// create and compile the fragment shader</span>
+    fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragment_shader, 1, fs_source, NULL);
+    glCompileShader(fragment_shader);
+
+    <span class="c">// create a program, attach shaders to it, and link it</span>
+    program = glCreateProgram();
+    glAttachShader(program, vertex_shader);
+    glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+
+    <span class="c">// delete the shaders as the program has them now</span>
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+    return program;
+}</code></pre>
+<div>
+<div class="tw"><table>
+<tr><th>函式</th><th>說明</th></tr>
+<tr><td><a href="04-api.html#glShaderSource"><code>glShaderSource(shader, count, string, length)</code></a></td><td>把 shader 的原始碼換成 string 陣列裡的字串（count 個）。length 為 NULL 時每個字串都視為以 <code>'\0'</code> 結尾</td></tr>
+<tr><td><a href="04-api.html#glCreateProgram"><code>glCreateProgram()</code></a></td><td>建立空的 program object，回傳非 0 的 ID</td></tr>
+<tr><td><a href="04-api.html#glAttachShader"><code>glAttachShader(program, shader)</code></a></td><td>要 link 在一起的 shader 必須先 attach 到 program</td></tr>
+<tr><td><a href="04-api.html#glLinkProgram"><code>glLinkProgram(program)</code></a></td><td>連結成可在 GPU 上執行的程式</td></tr>
+<tr><td><a href="04-api.html#glUseProgram"><code>glUseProgram(program)</code></a></td><td>把 program 裝進目前的渲染狀態</td></tr>
+</table></div>
 <ul>
-<li>OpenGL 4.3+，只有一個 programmable stage，沒有固定輸入輸出，可任意讀寫 buffer / texture（概念近 CUDA）。</li>
-<li>用途：粒子 / 布料 / 水面模擬、程序化貼圖、影像處理（blur）、GPU-driven rendering。期末與後段作業會用到。</li>
-<li>注意：macOS 只支援到 OpenGL 4.1，沒有 compute shader。</li>
+<li>編譯 shader 很吃 CPU：現代遊戲引擎常有上百上千個 shader</li>
+<li>shader object 只要 input / output / global 在各 stage 間相符，就能在不同 program 間<b>重複使用</b></li>
+<li>除非必要，所有 shader 和 program 都應在<b>啟動時</b>載入</li>
 </ul>
+<p class="mut">讀檔、錯誤檢查的完整版本見 <a href="02-project-syntax.html#shader">Shader Program 建立流程</a>。</p></div></div>
+
+<h3>Vertex Array Object（VAO）與 glDrawArrays</h3>
+<div class="grid2">
+<div class="card"><ul>
+<li>VAO 代表 Vertex Specification stage 的<b>輸入設定</b>：定義 attribute layout，讓這個 stage 從 buffer 組出 VS 的輸入</li>
+<li>每種輸入設定應事先建立一個 VAO，draw 之前 bind</li>
+<li><b>即使完全沒有輸入，渲染也必須 bind 一個 VAO</b>（下面 OpenGL 101 的例子就是空的 VAO）</li>
+<li><code>glGenVertexArrays(n, arrays)</code> 產生 n 個 VAO 名字；<code>glBindVertexArray(array)</code> 綁定，傳 0 解除</li></ul></div>
+<div class="card"><b><code>glDrawArrays(mode, first, count)</code></b>
+<ul><li>mode：<code>GL_POINTS</code>、<code>GL_LINES</code>、<code>GL_LINE_STRIP</code>、<code>GL_LINE_LOOP</code>、<code>GL_TRIANGLES</code>、<code>GL_TRIANGLE_STRIP</code>、<code>GL_TRIANGLE_FAN</code>、各種 <code>_ADJACENCY</code>、<code>GL_PATCHES</code></li>
+<li>用 enabled array 中第 <code>first</code> 到 <code>first + count − 1</code> 個元素組成 primitive</li>
+<li><b>沒有 <code>GL_QUADS</code></b>（core profile 已移除）→ 四邊形要拆成兩個三角形</li></ul>
+<p class="mut">各 mode 的互動圖見 <a href="05-vertex-draw.html#modes">講義 05</a>。</p></div></div>
+
+<h2 id="builtin">內建變數與 in / out</h2>
+<div class="tw"><table>
+<tr><th style="width:24%">變數</th><th style="width:14%">哪個 stage</th><th>說明</th></tr>
+<tr><td><code>out vec4 gl_Position</code></td><td>Vertex Processing 的輸出</td><td>目前頂點的位置（clip space 齊次座標）。屬於 <code>gl_PerVertex</code> block（另有 <code>gl_PointSize</code>、<code>gl_ClipDistance[]</code>）。只有在最後一個啟用的 vertex processing stage 才有這個意義；shader 執行中任何時候都可以寫</td></tr>
+<tr><td><code>in int gl_VertexID</code></td><td>Vertex shader 輸入</td><td>目前頂點的整數 index，由 <code>glDrawArrays</code> 等指令自動產生。OpenGL 101 用它從 shader 內的常數陣列挑座標</td></tr>
+<tr><td><code>in vec4 gl_FragCoord</code></td><td>Fragment shader 輸入</td><td>目前 fragment 的<b>視窗座標</b> (x, y, z, 1/w)。例：(0.5, 0.5) 是左下角第一個像素的中心</td></tr>
+</table></div>
+<div class="grid2">
+<div class="card"><b>in / out storage qualifier</b>
+<ul><li>GLSL 用 <code>in</code>、<code>out</code> 修飾的全域變數讓資料進出 shader</li>
+<li>在 stage 之間，<code>out</code> 和 <code>in</code> 形成管道傳遞資料</li>
+<li><b>Vertex attribute</b>：VS 中的 <code>in</code> 變數，值由 vertex specification stage 自動填入；可用 <code>glVertexAttrib*</code> 設成常數</li>
+<li><b>User-defined attribute</b>：stage s1 宣告 <code>out</code> 變數 s1_v、下一個 stage s2 宣告<b>同名</b>的 <code>in</code> 變數 → s1 寫的值傳到 s2</li>
+<li>FS 的輸入和其他 stage 不同：rasterizer 會在 primitive 上<b>插值</b> user-defined attribute</li></ul></div>
+<div class="card"><b>Interface block</b>
+<p>一個一個宣告介面變數最簡單，但要傳很多資料時，可以用像 struct 的 interface block 把變數包在一起：</p>
+<pre><code><span class="c">// GLSL：vertex shader</span>
+out VS_OUT
+{
+    vec4 color;
+} vs_out;          <span class="c">// instance 名稱可以不同</span>
+
+<span class="c">// GLSL：fragment shader</span>
+in VS_OUT          <span class="c">// block 名稱要相同</span>
+{
+    vec4 color;
+} fs_in;</code></pre></div></div>
+
 </main>
 <script src="common.js"></script>
 <script>
@@ -278,54 +390,83 @@ document.getElementById('next').onclick=()=>{step=Math.min(step+1,STEPS.length-1
 document.getElementById('prev').onclick=()=>{step=Math.max(step-1,0);drawWalk();};
 ['oDepth','oCull','oCW','oBlend'].forEach(id=>document.getElementById(id).onchange=drawWalk);
 drawWalk(); pick(0);
+// ---------- Rasterizer 步驟條 ----------
+(() => {
+  const S = [['Face', 'Culling'], ['Primitive', 'Culling'], ['Primitive', 'Clipping'], ['Perspective', 'Division ÷w'], ['Viewport', 'Transform'], ['Rasteri-', 'zation'], ['Multi-', 'sampling']];
+  const grp = [[0, 2, 'Primitive Assembly / Vertex Post-Processing', '#eaf0ff'], [3, 4, 'Vertex Post-Processing', '#f3e8ff'], [5, 6, 'Rasterization', '#e3f4ea']];
+  let s = '<defs><marker id="rr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#666"/></marker></defs>';
+  S.forEach(([a, b], i) => {
+    const x = 8 + i * 127;
+    s += `<rect x="${x}" y="30" width="112" height="50" rx="8" fill="${i === 3 ? '#eceef1' : '#fff'}" stroke="#999"/><text x="${x + 56}" y="51" font-weight="700">${a}</text><text x="${x + 56}" y="68">${b}</text>`;
+    s += `<text x="${x + 12}" y="44" font-size="10" fill="#999" text-anchor="start">${i + 1}</text>`;
+    if (i < S.length - 1) s += `<path d="M${x + 113} 55 h11" stroke="#666" stroke-width="1.6" marker-end="url(#rr)"/>`;
+  });
+  s += '<text x="450" y="18" fill="#666" font-size="12">clip space（gl_Position）進 → fragments 出；第 4 步無法控制</text>';
+  document.getElementById('rsSvg').innerHTML = s;
+})();
 
-// ---------- 座標空間 ----------
-const CH=[['Object','local'],['World',''],['Eye / View',''],['Clip','(x,y,z,w)'],['NDC','[-1,1]³'],['Screen','pixels']],
- OP=['Model','View','Projection','÷ w','Viewport'];
-document.getElementById('chain').innerHTML=CH.map((c,i)=>{const x=70+i*164;return `<rect x="${x-58}" y="20" width="116" height="46" rx="8" fill="${i===3?'#fde7b6':'#dbeafe'}" stroke="#999"/><text x="${x}" y="40">${c[0]}</text><text x="${x}" y="57" fill="#666" font-size="11">${c[1]}</text>`+
- (i<5?`<path d="M${x+60} 43 h42" stroke="#555" stroke-width="2" marker-end="url(#ar)"/><text x="${x+82}" y="${i<3?14:86}" fill="${i<3?'#2f855a':'#6b7280'}">${OP[i]}</text>`:'');}).join('')+
- '<text x="300" y="86" fill="#2f855a" font-size="12">↑ 你在 vertex shader 做（綠）</text><text x="700" y="14" fill="#6b7280" font-size="12">Rasterizer 自動做（灰）↓</text>';
-const mul=(a,b)=>a.map((r,i)=>b[0].map((_,j)=>r.reduce((s,_,k)=>s+a[i][k]*b[k][j],0)));
-const ap=(m,v)=>m.map(r=>r.reduce((s,x,k)=>s+x*v[k],0));
-const I=()=>[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
-const T=(x,y,z)=>[[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]];
-const Sc=s=>[[s,0,0,0],[0,s,0,0],[0,0,s,0],[0,0,0,1]];
-const Ry=a=>{const c=Math.cos(a),s=Math.sin(a);return [[c,0,s,0],[0,1,0,0],[-s,0,c,0],[0,0,0,1]];};
-const sub=(a,b)=>a.map((v,i)=>v-b[i]), dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),
- crs=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]], nrm=a=>{const l=Math.hypot(...a);return a.map(v=>v/l);};
-function lookAt(E,C,U){const F=nrm(sub(C,E)),S=nrm(crs(F,U)),U2=crs(S,F);
- return [[...S,-dot(S,E)],[...U2,-dot(U2,E)],[...F.map(v=>-v),dot(F,E)],[0,0,0,1]];}
-function persp(fy,a,n,f){const t=1/Math.tan(fy/2);return [[t/a,0,0,0],[0,t,0,0],[0,0,(f+n)/(n-f),2*f*n/(n-f)],[0,0,-1,0]];}
-function ortho(l,r,b,t,n,f){return [[2/(r-l),0,0,-(r+l)/(r-l)],[0,2/(t-b),0,-(t+b)/(t-b)],[0,0,-2/(f-n),-(f+n)/(f-n)],[0,0,0,1]];}
-const cc=document.getElementById('cube').getContext('2d'), CW=460, CHh=320;
-const CV=[];for(let i=0;i<8;i++)CV.push([i&1?1:-1,i&2?1:-1,i&4?1:-1,1]);
-const CE=[];for(let i=0;i<8;i++)for(let b of[1,2,4])if(!(i&b))CE.push([i,i|b]);
-const g=id=>+document.getElementById(id).value, f2=v=>v.map(x=>x.toFixed(2)).join(', ');
-function drawCube(){
- const R=Ry(g('ry')*Math.PI/180), Tm=T(g('tx'),0,0), S=Sc(g('sc'));
- const M=opt('ord')?mul(R,mul(Tm,S)):mul(Tm,mul(R,S));
- const Vw=lookAt([0,g('cy'),g('cd')],[0,0,0],[0,1,0]), a=CW/CHh, n=g('near'), f=30;
- const P=opt('orth')?ortho(-3*a,3*a,-3,3,n,f):persp(g('fov')*Math.PI/180,a,n,f);
- const MVP=mul(P,mul(Vw,M));
- const clip=CV.map(v=>ap(MVP,v)), scr=clip.map(c=>c[3]>1e-4?[(c[0]/c[3]+1)/2*CW,(1-c[1]/c[3])/2*CHh,c[2]/c[3]]:null);
- cc.fillStyle='#fff';cc.fillRect(0,0,CW,CHh);
- // 地面格線 y=-1
- cc.strokeStyle='#eee';const PV=mul(P,Vw);
- for(let k=-5;k<=5;k++)for(const [a1,b1] of [[[k,-1,-5,1],[k,-1,5,1]],[[-5,-1,k,1],[5,-1,k,1]]]){
-  const A=ap(PV,a1),B=ap(PV,b1);if(A[3]<=0.05||B[3]<=0.05)continue;
-  cc.beginPath();cc.moveTo((A[0]/A[3]+1)/2*CW,(1-A[1]/A[3])/2*CHh);cc.lineTo((B[0]/B[3]+1)/2*CW,(1-B[1]/B[3])/2*CHh);cc.stroke();}
- CE.forEach(([i,j])=>{const A=scr[i],B=scr[j];if(!A||!B)return;
-  const out=Math.abs(A[2])>1||Math.abs(B[2])>1;cc.strokeStyle=out?'#f3a0a0':'#2563eb';cc.lineWidth=2;
-  cc.beginPath();cc.moveTo(A[0],A[1]);cc.lineTo(B[0],B[1]);cc.stroke();});
- cc.lineWidth=1;
- if(scr[7]){cc.fillStyle='#c53030';cc.beginPath();cc.arc(scr[7][0],scr[7][1],5,0,7);cc.fill();}
- const w=ap(M,CV[7]), e=ap(Vw,w), c=ap(P,e), nd=c.slice(0,3).map(v=>v/c[3]);
- const out=nd.some(v=>Math.abs(v)>1);
- document.getElementById('vt').innerHTML=[['Object',f2(CV[7])],['World = M·v',f2(w)],['Eye = V·world',f2(e)],['Clip = P·eye',f2(c)],
-  ['NDC = clip.xyz / w',f2(nd)+(out?' ← 超出 → clipped':'')],['Screen',scr[7]?`(${scr[7][0].toFixed(0)}, ${scr[7][1].toFixed(0)}) px`:'—']]
-  .map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('');
+// ---------- OpenGL 101 ----------
+const EX = [
+  { n: '單一點', d: '最簡單的 shader：VS 把唯一的頂點放在原點 (0,0,0,1)，FS 輸出固定顏色。C++ 端建立一個<b>空的 VAO</b>（沒有任何頂點資料也必須 bind），<code>glPointSize(40)</code> 讓點畫成 40×40 像素的方塊，<code>glDrawArrays(GL_POINTS, 0, 1)</code> 畫 1 個點。',
+    vs: '// tell shader compiler to use version 4.1 of GLSL\n// and use only features from the core profile.\n#version 410 core\n\nvoid main()\n{\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}',
+    fs: '#version 410 core\n\n// color is the output value of this fragment shader\nout vec4 color;\n\nvoid main()\n{\n    color = vec4(0.0, 0.8, 1.0, 1.0);\n}',
+    cpp: 'GLuint rendering_program;\nGLuint vertex_array_object;\n\nvoid startup() {\n    rendering_program = setup_shaders();\n    glGenVertexArrays(1, &vertex_array_object);\n    glBindVertexArray(vertex_array_object);\n}\n\nvoid render() {\n    static const GLfloat white[] = { 1.0f, 1.0f, 1.0f, 1.0f };\n    glClearBufferfv(GL_COLOR, 0, white);   // 清成白色\n    glUseProgram(rendering_program);\n    glBindVertexArray(vertex_array_object);\n    glPointSize(40.0f);\n    glDrawArrays(GL_POINTS, 0, 1);\n}\n\nvoid shutdown() {\n    glDeleteVertexArrays(1, &vertex_array_object);\n    glDeleteProgram(rendering_program);\n}' },
+  { n: '單一三角形', d: '三個頂點的座標寫死在 VS 的常數陣列裡，用內建變數 <code>gl_VertexID</code>（0、1、2）挑出這次要處理的頂點。<code>glDrawArrays(GL_TRIANGLES, 0, 3)</code> 讓 VS 執行 3 次。',
+    vs: '#version 410 core\n\nvoid main()\n{\n    const vec4 vertices[3] = vec4[3](\n        vec4( 0.25, -0.25, 0.5, 1.0),\n        vec4(-0.25, -0.25, 0.5, 1.0),\n        vec4( 0.25,  0.25, 0.5, 1.0));\n    gl_Position = vertices[gl_VertexID];   // 0, 1, 2\n}',
+    fs: '#version 410 core\n\nout vec4 color;\n\nvoid main()\n{\n    color = vec4(0.0, 0.8, 1.0, 1.0);\n}',
+    cpp: 'void render() {\n    static const GLfloat white[] = { 1.0f, 1.0f, 1.0f, 1.0f };\n    glClearBufferfv(GL_COLOR, 0, white);\n    glUseProgram(rendering_program);\n    glBindVertexArray(vertex_array_object);\n    glDrawArrays(GL_TRIANGLES, 0, 3);   // VS 跑 3 次\n}' },
+  { n: 'sin 上色', d: 'VS 不變，FS 改用內建變數 <code>gl_FragCoord</code>（fragment 的視窗座標）算顏色：每個像素顏色不同。這說明 FS 是<b>每個像素各跑一次</b>。',
+    vs: '// 同「單一三角形」', fs: '#version 410 core\n\nout vec4 color;\n\nvoid main()\n{\n    // compute color based on the fragment\'s screen coordinate\n    color = vec4(\n        sin(gl_FragCoord.x * 0.25) * 0.5 + 0.5,\n        cos(gl_FragCoord.y * 0.25) * 0.5 + 0.5,\n        sin(gl_FragCoord.x * 0.15) * cos(gl_FragCoord.y * 0.15),\n        1.0);\n}', cpp: '// 同「單一三角形」' },
+  { n: 'Vertex attribute', d: 'VS 宣告一個輸入 attribute <code>layout(location = 0) in vec4 offset;</code>。C++ 每幀用 <code>glVertexAttrib4fv(0, attrib)</code> 把 attribute 0 設成<b>常數</b>（沒有 enable array，所有頂點讀到同一個值）→ 整個三角形隨時間移動。',
+    vs: '#version 410 core\n\n// \'offset\' is an input vertex attribute\nlayout (location = 0) in vec4 offset;\n\nvoid main(void)\n{\n    const vec4 vertices[3] = vec4[3](\n        vec4( 0.25, -0.25, 0.5, 1.0),\n        vec4(-0.25, -0.25, 0.5, 1.0),\n        vec4( 0.25,  0.25, 0.5, 1.0));\n    // Add \'offset\' to our hard-coded vertex position\n    gl_Position = vertices[gl_VertexID] + offset;\n}',
+    fs: '// 同「單一三角形」（固定顏色）', cpp: 'void render(double currentTime) {\n    static const GLfloat color[] = { 1.0f, 1.0f, 1.0f, 1.0f };\n    glClearBufferfv(GL_COLOR, 0, color);\n    glUseProgram(rendering_program);\n    glBindVertexArray(vertex_array_object);\n\n    GLfloat attrib[] = { (float)sin(currentTime) * 0.5f,\n                         (float)cos(currentTime) * 0.6f,\n                         0.0f, 0.0f };\n    // Update the value of input attribute 0\n    glVertexAttrib4fv(0, attrib);\n\n    glDrawArrays(GL_TRIANGLES, 0, 3);\n}', anim: true },
+  { n: '傳資料給下一個 stage', d: '再加一個輸入 attribute <code>color</code>（location 1），VS 用<b>同名</b>的 <code>out vec4 vs_color</code> / <code>in vec4 vs_color</code> 傳給 FS（user-defined attribute）。也可以把它們包成 interface block（下方另一個寫法），效果相同。',
+    vs: '#version 410 core\n\n// "offset" and "color" are two input vertex attributes\nlayout (location = 0) in vec4 offset;\nlayout (location = 1) in vec4 color;\n\n// "vs_color" is an output that will be sent to the next shader stage\nout vec4 vs_color;\n\nvoid main()\n{\n    const vec4 vertices[3] = vec4[3](\n        vec4( 0.25, -0.25, 0.5, 1.0),\n        vec4(-0.25, -0.25, 0.5, 1.0),\n        vec4( 0.25,  0.25, 0.5, 1.0));\n    gl_Position = vertices[gl_VertexID] + offset;\n    vs_color = color;      // output the input "color" attribute\n}\n\n// ----- interface block 寫法 -----\nout VS_OUT\n{\n    vec4 color;   // send color to the next stage\n} vs_out;\n// main 裡：vs_out.color = color;',
+    fs: '#version 410 core\n\n// interpolated input from the rasterizer\nin vec4 vs_color;\n\nout vec4 color;\n\nvoid main()\n{\n    color = vs_color;   // simply output the interpolated value\n}\n\n// ----- interface block 寫法 -----\nin VS_OUT\n{\n    vec4 color;\n} fs_in;\n// main 裡：color = fs_in.color;',
+    cpp: '// render() 裡多設定 attribute 1（顏色）\nGLfloat col[] = { 1.0f, 0.5f, 0.0f, 1.0f };\nglVertexAttrib4fv(1, col);\nglVertexAttrib4fv(0, attrib);   // offset\nglDrawArrays(GL_TRIANGLES, 0, 3);', anim: true, pick: true },
+  { n: 'RGB 三角形', d: 'VS 為三個頂點分別輸出紅、綠、藍。FS 拿到的 <code>vs_color</code> 是 rasterizer 依像素位置<b>插值</b>後的結果 → 三角形內部漸層混色。',
+    vs: '#version 410 core\n\n// vs_color is an output user-defined attribute\nout vec4 vs_color;\n\nvoid main()\n{\n    const vec4 vertices[3] = vec4[3](\n        vec4( 0.25, -0.25, 0.5, 1.0),\n        vec4(-0.25, -0.25, 0.5, 1.0),\n        vec4( 0.25,  0.25, 0.5, 1.0));\n    const vec4 colors[3] = vec4[3](\n        vec4(1.0, 0.0, 0.0, 1.0),\n        vec4(0.0, 1.0, 0.0, 1.0),\n        vec4(0.0, 0.0, 1.0, 1.0));\n\n    // output vertex data with gl_VertexID = 0,1,2\n    gl_Position = vertices[gl_VertexID];\n    vs_color = colors[gl_VertexID];\n}',
+    fs: '#version 410 core\n\n// vs_color is the user-defined attribute\n// interpolated by the rasterizer\nin vec4 vs_color;\n\nout vec4 color;\n\nvoid main()\n{\n    color = vs_color;\n}', cpp: '// 同「單一三角形」' }];
+let exK = 0, exT0 = performance.now(), exRaf = 0, exCol = [1, 0.5, 0];
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const cmt = s => esc(s).replace(/(\/\/[^\n]*)/g, '<span class="c">$1</span>');
+function exRender() {
+  const E = EX[exK], cv = document.getElementById('exCv'), W = cv.width, H = cv.height, c = cv.getContext('2d');
+  const t = (performance.now() - exT0) / 1000, off = E.anim ? [Math.sin(t) * 0.5, Math.cos(t) * 0.6] : [0, 0];
+  const img = c.createImageData(W, H); img.data.fill(255);
+  const toS = v => [(v[0] + off[0] + 1) / 2 * W, (1 - (v[1] + off[1] + 1) / 2) * H];
+  const put = (x, y, col) => { const i = (y * W + x) * 4; img.data[i] = col[0] * 255; img.data[i + 1] = col[1] * 255; img.data[i + 2] = col[2] * 255; };
+  if (exK === 0) { for (let y = H / 2 - 20; y < H / 2 + 20; y++) for (let x = W / 2 - 20; x < W / 2 + 20; x++) put(x, y, [0, 0.8, 1]); }
+  else {
+    const P = [[0.25, -0.25], [-0.25, -0.25], [0.25, 0.25]].map(toS), RGB = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const A = (P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[1][1] - P[0][1]) * (P[2][0] - P[0][0]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const px = x + .5, py = y + .5;
+      const w0 = ((P[1][0] - px) * (P[2][1] - py) - (P[1][1] - py) * (P[2][0] - px)) / A, w1 = ((P[2][0] - px) * (P[0][1] - py) - (P[2][1] - py) * (P[0][0] - px)) / A, w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      let col = [0, 0.8, 1];
+      if (exK === 2) { const fx = px, fy = H - py; col = [Math.sin(fx * .25) * .5 + .5, Math.cos(fy * .25) * .5 + .5, Math.max(0, Math.sin(fx * .15) * Math.cos(fy * .15))]; }
+      if (exK === 4) col = exCol;
+      if (exK === 5) col = [0, 1, 2].map(k => RGB[0][k] * w0 + RGB[1][k] * w1 + RGB[2][k] * w2);
+      put(x, y, col);
+    }
+  }
+  c.putImageData(img, 0, 0);
+  c.fillStyle = '#888'; c.font = '11px sans-serif'; c.fillText('視窗 320×320，NDC [−1,1]²', 6, H - 8);
+  if (E.anim) exRaf = requestAnimationFrame(exRender);
 }
-['tx','ry','sc','cd','cy','fov','near'].forEach(id=>document.getElementById(id).oninput=drawCube);
-['ord','orth'].forEach(id=>document.getElementById(id).onchange=drawCube);
-drawCube();
+function exPick(k) {
+  cancelAnimationFrame(exRaf); exK = k; exT0 = performance.now(); const E = EX[k];
+  document.querySelectorAll('#exTabs button').forEach((b, i) => b.classList.toggle('on', i === k));
+  document.getElementById('exTxt').innerHTML = `<b>${k + 1}. ${E.n}</b><br>${E.d}`;
+  document.getElementById('exCode').innerHTML = `<div class="tabs"><button class="b on" data-x="vs">Vertex Shader</button><button class="b" data-x="fs">Fragment Shader</button><button class="b" data-x="cpp">C++</button></div><pre><code id="exPre"></code></pre>`;
+  const show = x => { document.getElementById('exPre').innerHTML = cmt((x === 'cpp' ? '// C++（CPU）\n' : '// GLSL（GPU）\n') + E[x]); document.querySelectorAll('#exCode [data-x]').forEach(b => b.classList.toggle('on', b.dataset.x === x)); };
+  document.querySelectorAll('#exCode [data-x]').forEach(b => b.onclick = () => show(b.dataset.x)); show('vs');
+  document.getElementById('exCtrl').innerHTML = E.pick ? '顏色 attribute（location 1）<input type="color" id="exColor" value="#ff8000">' : (E.anim ? '<span class="mut">offset = (sin t · 0.5, cos t · 0.6)</span>' : '');
+  if (E.pick) document.getElementById('exColor').oninput = e => { const h = e.target.value; exCol = [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255); };
+  exRender();
+}
+document.getElementById('exTabs').innerHTML = EX.map((e, i) => `<button class="b">${i + 1}. ${e.n}</button>`).join('');
+document.querySelectorAll('#exTabs button').forEach((b, i) => b.onclick = () => exPick(i));
+exPick(0);
 </script></body></html>

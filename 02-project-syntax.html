@@ -13,7 +13,9 @@
 #wrapCv,#magA,#magB{border:1px solid var(--line);image-rendering:auto}
 </style></head>
 <body><main>
+<p class="kicker">Appendix · Project Configuration、GLFW and GLAD、GLSL、GLM、Image Loading</p>
 <h1>專案結構與語法</h1>
+<p class="lead">寫作業時的速查頁：template 專案結構、CMake、GLFW + GLAD 程式骨架、callback、shader 建立流程、OpenGL 物件與貼圖的精簡版、GLSL / GLM 速查與常見坑。各主題的完整講解在對應講義頁。</p>
 <div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a></div>
 
 <h2 id="tree">專案結構（Template）</h2>
@@ -410,6 +412,7 @@ glDrawArrays(GL_TRIANGLES, 0, mesh.count);            <span class="c">// GPU 開
 </ul>
 
 <h2 id="obj">OpenGL Objects：資料怎麼進 Shader</h2>
+<div class="tip">這裡是寫程式時的精簡對照。Buffer 建立步驟、binding point、uniform location、UBO 與 std140、texture image unit 的完整講解與互動圖見 <a href="l04-objects.html">講義 04 OpenGL Objects</a>。</div>
 <p class="mut">四種最常用的資料通道。黃色 = 「binding point / unit」這個中介編號，最容易搞混。</p>
 <div class="tabs"><button class="b" data-pane="pVao">VAO + VBO</button><button class="b" data-pane="pUni">Uniform</button><button class="b" data-pane="pUbo">UBO</button><button class="b" data-pane="pTex">Texture</button></div>
 
@@ -494,6 +497,7 @@ glUniform1i(glGetUniformLocation(program, "tex"), 0);   <span class="c">// sampl
 </div>
 
 <h2 id="tex">Texture 要點</h2>
+<div class="tip">Filtering、mipmap、wrapping、array texture 的完整講解（含隧道過濾比較、mipmap 金字塔）見 <a href="l04-objects.html#texops">講義 04 Texture 操作</a>。</div>
 <div class="ex"><b>UV 座標是什麼？</b>
 <p>貼圖不管實際多少 pixel，都用 <b>(u, v) ∈ [0, 1]</b> 表示位置：(0,0) 左下、(1,1) 右上、(0.5,0.5) 正中央。每個頂點帶一組 UV（從模型檔來），rasterizer 插值後，FS 用 <code>texture(tex, uv)</code> 取色。</p>
 <pre><code><span class="c">// 一個貼滿整張圖的正方形：位置 (x,y) + UV (u,v)</span>

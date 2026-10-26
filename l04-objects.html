@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>講義 04：OpenGL Objects</title><link rel="stylesheet" href="style.css">
+<style>
+canvas.pl{border:1px solid var(--line);border-radius:8px;background:#fff;display:block;margin:0 auto;max-width:100%}
+.mem{display:flex;flex-wrap:wrap;gap:2px;margin:6px 0}
+.mem div{min-width:46px;padding:2px 4px;text-align:center;font:11.5px var(--mono);border-radius:4px;border:1px solid #d6d3cb;background:#fff;position:relative}
+.mem div small{display:block;font-size:9.5px;color:#8a919a}
+.mem .p{background:#dbeafe}.mem .c{background:#fde7b6}.mem .pad{background:repeating-linear-gradient(45deg,#f1efe8 0 4px,#e6e3da 4px 8px);color:#8a919a}
+.mem .on{outline:2px solid #c2412d;outline-offset:-1px}
+.st140 td{font:12.5px var(--mono)}
+.uni span{display:inline-block;margin:2px;padding:1px 8px;border-radius:6px;background:#eef0f4;cursor:pointer;font:13px var(--mono)}
+.uni span.on{background:#c2412d;color:#fff}
+.bstate td{font:12.5px var(--mono);text-align:center}
+.bstate td.y{background:#e3f4ea}.bstate td.n{color:#aaa}
+</style></head>
+<body><main>
+<p class="kicker">講義 04 · OpenGL Objects</p>
+<h1>OpenGL Objects：資料怎麼送進 GPU</h1>
+<p class="lead">OpenGL 把資料傳給 GPU 的三種管道：<b>Buffer</b>（大量的頂點 / index / 結構資料）、<b>Uniform</b>（一次 draw call 內不變的參數）、<b>Texture</b>（可以被過濾取樣的影像）。</p>
+
+<div class="key"><b>本章重點</b>
+<ul>
+<li>Buffer 是一段線性記憶體；用途由它<b>綁到哪個 binding point</b>決定（<code>GL_ARRAY_BUFFER</code>、<code>GL_ELEMENT_ARRAY_BUFFER</code>、<code>GL_UNIFORM_BUFFER</code>…）。<code>glGenBuffers</code> 只產生名字，<b>第一次 bind 才真正建立物件</b>。</li>
+<li><code>glBufferData</code> 配置（並可初始化）、<code>glBufferSubData</code> 更新部分、<code>glMapBuffer</code> 直接寫記憶體；它們都作用在<b>目前綁在那個 binding point 上的 buffer</b>。</li>
+<li>Uniform 在一次 draw 中對所有 shader 呼叫都相同。Default block uniform 存在 program 裡：<code>glGetUniformLocation</code> → <code>glUseProgram</code> → <code>glUniform*</code>。</li>
+<li>Uniform block（UBO）把 uniform 存在 buffer 裡：block ↔ <b>uniform binding point</b> ↔ buffer；記憶體要照 <b>std140</b> 對齊。</li>
+<li>Texture 透過 <b>texture image unit</b> 接到 shader：<code>glActiveTexture(GL_TEXTUREn)</code> + <code>glBindTexture</code>，sampler uniform 存的是 <b>unit 編號 n</b>，不是 texture ID。</li>
+<li>Texture 和 buffer 最大的差別：texture 可以被<b>過濾</b>（nearest、bilinear、mipmap、anisotropic）和<b>包裹</b>（wrap）。</li>
+</ul></div>
+
+<div class="toc"><a href="#overview">總覽</a><a href="#buffers">Buffer</a><a href="#bufdata">Buffer 資料</a><a href="#triangle">範例：用 buffer 畫三角形</a><a href="#uniforms">Uniform</a><a href="#cube">範例：Spinning Cube</a><a href="#uloc">Uniform location</a><a href="#ubo">Uniform Block（UBO）</a><a href="#std140">std140 記憶體排列</a><a href="#tex">Texture</a><a href="#unit">Texture Image Unit</a><a href="#texinit">建立 texture</a><a href="#texops">Texture 操作</a><a href="#array">Array texture</a></div>
+
+<!-- ================================================================ -->
+<h2 id="overview">總覽：從 CPU 到 shader 的三條路</h2>
+<figure class="fig">
+<svg viewBox="0 0 900 200" width="100%" font-size="13" text-anchor="middle">
+<defs><marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="10" y="40" width="170" height="120" rx="12" fill="#fffbcc" stroke="#e0d36a"/><text x="95" y="70" font-weight="700">Application（CPU）</text><text x="95" y="96" fill="#555">頂點陣列、矩陣</text><text x="95" y="116" fill="#555">光源參數、圖片</text><text x="95" y="136" fill="#555">C++ / main.cpp</text>
+<rect x="290" y="14" width="250" height="46" rx="10" fill="#dbeafe" stroke="#9fb2f0"/><text x="415" y="34" font-weight="700">Buffer Object</text><text x="415" y="51" font-size="11.5" fill="#555">頂點、index、uniform block、SSBO</text>
+<rect x="290" y="77" width="250" height="46" rx="10" fill="#e3f4ea" stroke="#8fd1a8"/><text x="415" y="97" font-weight="700">Uniform</text><text x="415" y="114" font-size="11.5" fill="#555">一次 draw 內不變：矩陣、光源、時間</text>
+<rect x="290" y="140" width="250" height="46" rx="10" fill="#fff3d6" stroke="#e6c27a"/><text x="415" y="160" font-weight="700">Texture Object</text><text x="415" y="177" font-size="11.5" fill="#555">影像、查表；可過濾取樣</text>
+<rect x="660" y="40" width="220" height="120" rx="12" fill="#dbeafe" stroke="#7f9be6"/><text x="770" y="70" font-weight="700">Shader（GPU）</text><text x="770" y="96" fill="#555"><tspan font-family="monospace">in</tspan> attribute ← buffer</text><text x="770" y="116" fill="#555"><tspan font-family="monospace">uniform</tspan> ← glUniform / UBO</text><text x="770" y="136" fill="#555"><tspan font-family="monospace">sampler2D</tspan> ← texture</text>
+<g stroke="#555" stroke-width="2" fill="none" marker-end="url(#o)"><path d="M182 80 L286 40"/><path d="M182 100 h104"/><path d="M182 120 L286 160"/><path d="M542 37 L656 80"/><path d="M542 100 h114"/><path d="M542 163 L656 120"/></g>
+</svg>
+<figcaption>Buffer 和 texture 是 GPU 上的記憶體區塊（resource object），可以綁到 pipeline 當作輸入或輸出；uniform 是 program 的參數。</figcaption>
+</figure>
+<div class="note">回顧講義 02：OpenGL 是 state machine，API 分成「建立物件」與「設定 pipeline」兩類。本章講的就是第一類中的 buffer、uniform、texture。Resource object（buffer、texture）存的可能是幾何資料、貼圖、查表或中間的渲染結果。</div>
+
+<!-- ================================================================ -->
+<h2 id="buffers">Buffer</h2>
+<div class="grid2">
+<div class="card"><b>Buffer 是什麼</b>
+<ul><li>一段<b>線性配置</b>的記憶體，可能在主記憶體或顯示卡記憶體</li>
+<li>依用途分類：vertex buffer、index buffer、uniform buffer、shader storage buffer…</li>
+<li>所有種類的建立和上傳方式<b>都一樣</b>，差別只在綁到哪個 binding point</li></ul></div>
+<div class="tw"><table>
+<tr><th>種類</th><th>內容與用途</th></tr>
+<tr><td><b>Vertex / Index</b></td><td>每個頂點的輸入（位置 XYZ、UV…），像陣列；由 Vertex Specification stage 讀取，組成 VS 的輸入</td></tr>
+<tr><td><b>Uniform</b></td><td>一次 draw 內<b>不變</b>、GPU 唯讀最佳化；每個 shader 呼叫看到同樣內容。比較像 struct：相機設定、光源位置</td></tr>
+<tr><td><b>Shader Storage</b>（SSBO）</td><td>像 uniform buffer，但 shader <b>可讀寫</b>的自訂型別陣列；4.3+，講義 07 用到</td></tr>
+</table></div></div>
+
+<h3>建立 buffer object 的四步驟（互動）</h3>
+<div class="grid2">
+<div>
+<div class="ctrl" id="bsBtns"></div>
+<pre><code id="bsCode"></code></pre>
+<div class="card" id="bsTxt"></div></div>
+<div>
+<table class="bstate" id="bsTbl"></table>
+<p class="mut">重點：<code>glGenBuffers</code> 只拿到一個<b>名字</b>（unsigned int），buffer object 還不存在；第一次 <code>glBindBuffer</code> 才建立物件；<code>glBufferData</code> 才配置記憶體。</p></div></div>
+
+<h3>Binding point（binding target）</h3>
+<p>OpenGL 用 buffer 的方式由它<b>綁在哪裡</b>決定。要把 buffer 接到 pipeline、或對它做任何操作，都必須先綁到一個 binding point。<b>（講義：Please pay attention to this!）</b></p>
+<div class="tw"><table>
+<tr><th>Buffer Binding Target</th><th>用途</th></tr>
+<tr><td><code>GL_ARRAY_BUFFER</code></td><td>Vertex buffer（VBO）</td></tr>
+<tr><td><code>GL_ELEMENT_ARRAY_BUFFER</code></td><td>Index buffer（EBO / IBO）</td></tr>
+<tr><td><code>GL_COPY_READ_BUFFER</code></td><td>Buffer 複製的來源</td></tr>
+<tr><td><code>GL_COPY_WRITE_BUFFER</code></td><td>Buffer 複製的目的地</td></tr>
+<tr><td><code>GL_TEXTURE_BUFFER</code></td><td>Texture 資料的 buffer</td></tr>
+<tr><td><code>GL_UNIFORM_BUFFER</code></td><td>Uniform block 的儲存空間（UBO）</td></tr>
+<tr><td><code>GL_SHADER_STORAGE_BUFFER</code></td><td>Shader storage buffer（SSBO）</td></tr>
+<tr><td><code>GL_TRANSFORM_FEEDBACK_BUFFER</code></td><td>Transform feedback 的輸出</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="bufdata">Buffer 資料：配置、更新、映射</h2>
+<div class="tw"><table>
+<tr><th style="width:22%">函式</th><th>做什麼</th><th style="width:28%">特性</th></tr>
+<tr><td><a href="04-api.html#glBufferData"><code>glBufferData</code></a>(target, size, data, usage)</td><td>建立新的資料儲存空間，size bytes；data 不是 NULL 就拿它初始化</td><td><b>舊的空間會被釋放</b>；可以只配置（data = NULL）</td></tr>
+<tr><td><a href="04-api.html#glBufferSubData"><code>glBufferSubData</code></a>(target, offset, size, data)</td><td>從 byte offset 開始，把 size bytes 換成 data 的內容</td><td>更新部分或全部，<b>比 glBufferData 快</b></td></tr>
+<tr><td><a href="04-api.html#glMapBuffer"><code>glMapBuffer</code></a>(target, access) / <code>glUnmapBuffer</code></td><td>把整個 buffer 映射到 CPU 位址空間，直接讀寫；unmap 時改動才生效</td><td>access：<code>GL_READ_ONLY</code> / <code>GL_WRITE_ONLY</code> / <code>GL_READ_WRITE</code></td></tr>
+</table></div>
+<div class="grid2">
+<pre><code><span class="c">// C++：三個函式都作用在「目前綁在該 binding point 上的 buffer」</span>
+<span class="c">// bind Buffer Object "buffer" to the "GL_ARRAY_BUFFER" Binding Point</span>
+glBindBuffer(GL_ARRAY_BUFFER, buffer);
+<span class="c">// manipulate the buffer bound to "GL_ARRAY_BUFFER", which is "buffer"</span>
+glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW);
+
+<span class="c">// 先配置 1 MB 空的，之後再填</span>
+glBufferData(GL_ARRAY_BUFFER, 1024 * 1024, NULL, GL_STATIC_DRAW);
+glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(data), data);
+
+<span class="c">// 或用 map：拿到指標直接寫</span>
+void* ptr = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+memcpy(ptr, data, sizeof(data));
+glUnmapBuffer(GL_ARRAY_BUFFER);   <span class="c">// 告訴 OpenGL 寫完了</span></code></pre>
+<div class="card"><b>glMapBuffer 一定比較快嗎？</b>
+<p>可能比 <code>glBufferSubData</code> 快：例如載入模型檔時，不用先自己配置一塊記憶體再呼叫 glBufferSubData，可以<b>直接把檔案內容讀進 glMapBuffer 回傳的記憶體</b>（少一次複製）。</p>
+<p class="warn" style="margin:8px 0 0">不一定！要看顯示卡 driver 怎麼實作這個函式（講義：Not always True）。</p></div></div>
+
+<h3>Buffer usage（提示 driver 怎麼放資料）</h3>
+<p>Usage 是 <code>glBufferData</code> 必填的旗標，只是<b>提示</b>，不影響正確性。例如 <code>GL_STATIC_DRAW</code> 表示資料可以整份放在 GPU 記憶體，不必在主記憶體留副本。</p>
+<div class="tw"><table style="text-align:center">
+<tr><th></th><th>DRAW<br><span class="mut">App 寫 → 拿來畫</span></th><th>READ<br><span class="mut">GPU 寫 → App 讀回</span></th><th>COPY<br><span class="mut">GPU 寫 → 拿來畫或複製</span></th></tr>
+<tr><th>STREAM<br><span class="mut">設一次，用幾次</span></th><td><code>GL_STREAM_DRAW</code></td><td><code>GL_STREAM_READ</code></td><td><code>GL_STREAM_COPY</code></td></tr>
+<tr><th>STATIC<br><span class="mut">設一次，用很多次</span></th><td><code style="background:#e3f4ea">GL_STATIC_DRAW</code><br><span class="mut">模型資料（最常用）</span></td><td><code>GL_STATIC_READ</code></td><td><code>GL_STATIC_COPY</code></td></tr>
+<tr><th>DYNAMIC<br><span class="mut">常常改、常常用</span></th><td><code>GL_DYNAMIC_DRAW</code><br><span class="mut">每幀更新的資料（UBO、粒子）</span></td><td><code>GL_DYNAMIC_READ</code></td><td><code>GL_DYNAMIC_COPY</code></td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="triangle">範例：用 buffer 畫三角形</h2>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Vertex Shader</span>
+#version 410
+layout(location = 0) in vec3 iv3vertex;
+layout(location = 1) in vec3 iv3color;
+out vec3 vv3color;
+void main()
+{
+    gl_Position = vec4(iv3vertex, 1.0);
+    vv3color = iv3color;
+}
+
+<span class="c">// GLSL：Fragment Shader</span>
+#version 410
+in vec3 vv3color;
+layout(location = 0) out vec4 fragColor;
+void main()
+{
+    fragColor = vec4(vv3color, 1.0);
+}</code></pre>
+<pre><code><span class="c">// C++：資料（stacked：先 3 個位置、再 3 個顏色）</span>
+float data[18] = {
+    -0.5f, -0.4f, 0.0f,   <span class="c">// Position</span>
+     0.5f, -0.4f, 0.0f,
+     0.0f,  0.6f, 0.0f,
+     1.0f,  0.0f, 0.0f,   <span class="c">// Color</span>
+     0.0f,  1.0f, 0.0f,
+     0.0f,  0.0f, 1.0f };
+
+GLuint buffer;
+glGenBuffers(1, &amp;buffer);                      <span class="c">// 產生名字</span>
+glBindBuffer(GL_ARRAY_BUFFER, buffer);         <span class="c">// 綁到 GL_ARRAY_BUFFER</span>
+glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW);
+
+GLuint vao;
+glGenVertexArrays(1, &amp;vao);
+glBindVertexArray(vao);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0,
+                      (void*)(sizeof(float) * 9));   <span class="c">// offset</span>
+glEnableVertexAttribArray(0);
+glEnableVertexAttribArray(1);
+
+<span class="c">// display：</span>
+glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+glDrawArrays(GL_TRIANGLES, 0, 3);</code></pre></div>
+<h3>Buffer、資料、attribute 的關係</h3>
+<figure class="fig">
+<svg viewBox="0 0 900 250" width="100%" font-size="12.5" text-anchor="middle">
+<defs><marker id="bd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="640" y="10" width="240" height="40" rx="8" fill="#fffbcc" stroke="#e0d36a"/><text x="760" y="35" font-weight="700">Main Application：float data[ ]</text>
+<rect x="640" y="100" width="240" height="40" rx="8" fill="#dbeafe" stroke="#9fb2f0"/><text x="760" y="125" font-weight="700">Buffer A（GPU memory）</text>
+<rect x="640" y="190" width="240" height="40" rx="8" fill="#dbeafe" stroke="#9fb2f0" stroke-dasharray="5 3"/><text x="760" y="215">Buffer B（另一個 buffer 也可以）</text>
+<path d="M760 52 v44" stroke="#555" stroke-width="2" marker-end="url(#bd)"/><text x="800" y="80" fill="#3557c9" font-family="monospace" font-size="11.5">glBufferData</text>
+<rect x="20" y="40" width="200" height="190" rx="10" fill="#fff" stroke="#999"/><text x="120" y="62" font-weight="700">Shader Program（GPU）</text>
+<rect x="40" y="80" width="160" height="34" rx="6" fill="#e3f4ea" stroke="#8fd1a8"/><text x="120" y="102">location = 0（位置）</text>
+<rect x="40" y="128" width="160" height="34" rx="6" fill="#e3f4ea" stroke="#8fd1a8"/><text x="120" y="150">location = 1（顏色）</text>
+<rect x="40" y="176" width="160" height="34" rx="6" fill="#f3f2ed" stroke="#ccc"/><text x="120" y="198" fill="#999">location = 2（未使用）</text>
+<rect x="280" y="80" width="240" height="130" rx="10" fill="#fff3d6" stroke="#e6c27a"/><text x="400" y="104" font-weight="700">Attribute（VAO 裡的狀態）</text>
+<text x="400" y="132" font-size="11.5">attrib 0 ← Buffer A, offset 0</text><text x="400" y="154" font-size="11.5">attrib 1 ← Buffer A, offset 36 bytes</text><text x="400" y="182" font-size="11" fill="#3557c9" font-family="monospace">glVertexAttribPointer</text><text x="400" y="198" font-size="11" fill="#3557c9" font-family="monospace">glEnableVertexAttribArray</text>
+<g stroke="#555" stroke-width="2" fill="none" marker-end="url(#bd)"><path d="M636 120 L524 130"/><path d="M276 120 L204 97"/><path d="M276 160 L204 145"/></g>
+</svg>
+<figcaption>glBufferData 把 CPU 的資料複製到 GPU 的 buffer；VAO 記錄「每個 location 從哪個 buffer、哪個 offset 讀」；shader 的 <code>layout(location = N) in</code> 接收。</figcaption>
+</figure>
+<p class="mut">點 attribute 看它在 buffer 中讀哪些 bytes（stride = 0 代表緊密排列，每個頂點跳 3 個 float）：</p>
+<div class="ctrl"><button class="b on" data-at="0">attrib 0：位置</button><button class="b" data-at="1">attrib 1：顏色</button><span class="mut" id="atTxt"></span></div>
+<div class="mem" id="memA"></div>
+<p class="mut">位置和顏色分開放叫 <b>stacked</b>（也可以交錯放 = interleaved）。兩種排法的 stride / offset 對照見 <a href="05-vertex-draw.html#layout">講義 05</a>。</p>
+
+<!-- ================================================================ -->
+<h2 id="uniforms">Uniform</h2>
+<div class="grid2">
+<div class="card"><b>什麼是 uniform</b>
+<ul><li>宣告在 shader 裡、讓應用程式<b>直接把資料傳給 shader</b>的變數</li>
+<li>叫 uniform 是因為在<b>一次 draw command</b> 中保持不變：不能被修改、每個 shader 呼叫讀到相同內容</li>
+<li>常放：相機 projection 矩陣、光源設定、texture sampler</li>
+<li>存在針對「同步唯讀存取」最佳化的特殊硬體記憶體</li></ul></div>
+<div class="tw"><table>
+<tr><th>兩種機制</th><th>Default block uniform</th><th>Buffer-backed uniform block</th></tr>
+<tr><td>出現</td><td>OpenGL 2.0（舊）</td><td>OpenGL 3.1</td></tr>
+<tr><td>資料存在</td><td>shader <b>program object</b></td><td><b>buffer object</b>（UBO）</td></tr>
+<tr><td>更新</td><td>一個一個 <code>glUniform*</code></td><td>一次 <code>glBufferSubData</code> 更新全部</td></tr>
+<tr><td>多個 program 共用</td><td>不行，每個 program 各自設定</td><td>綁到同一個 binding point 就共用</td></tr>
+</table></div></div>
+
+<h3>Default block uniform</h3>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：支援內建型別與自訂 struct</span>
+struct MyType
+{
+    float var1;
+    int   var2;
+};
+uniform float  float_uniform;
+uniform int    int_uniform;
+uniform vec4   vec4_uniform;
+uniform mat4   mat4_uniform;
+uniform MyType type_uniform;</code></pre>
+<div class="card"><b>同名宣告 = 同一個變數</b>
+<p>Uniform 宣告在所有 programmable stage 間共用；同樣的宣告指向同一份資料。只需要在用到它的 stage 宣告。點 uniform 名稱看哪些是同一個：</p>
+<div class="grid3 uni" id="uniG" style="gap:6px"></div>
+<p class="mut" id="uniTxt"></p></div></div>
+<div class="grid2">
+<div class="card"><b>存在 program 裡的狀態</b>
+<ul><li>Default block uniform 是 <b>shader program object 的狀態</b></li>
+<li>更新 uniform 值<b>之前要先 bind（glUseProgram）program</b></li>
+<li>值會一直存在 program 裡 → <b>沒變的值不用每幀重設</b></li>
+<li>每個 uniform 在 program 中用一個 <b>uniform location</b>（整數）識別</li></ul></div>
+<div class="card"><b>使用步驟</b>
+<ol><li>在 shader 程式碼宣告 uniform</li><li>編譯、attach、link shader program</li>
+<li>用 <code>glGetUniformLocation()</code> 取得每個 uniform 的 location</li>
+<li>用 <code>glUseProgram()</code> bind program</li><li>用 <code>glUniform*()</code> 更新某個 location 的值</li><li>發出 draw command</li></ol></div></div>
+<h3>glUniform* 的命名規則</h3>
+<div class="tw"><table>
+<tr><th>寫法</th><th>意思</th><th>例子</th></tr>
+<tr><td><code>glUniform{1|2|3|4}{f|i|ui}(loc, v0, v1, …)</code></td><td>數字 = 幾個分量；f / i / ui = float / int / unsigned int；直接傳值</td><td><code>glUniform3f(loc, 1, 0.5, 0)</code> → <code>vec3</code></td></tr>
+<tr><td><code>glUniform{1|2|3|4}{f|i|ui}v(loc, count, ptr)</code></td><td>結尾 v = 傳指標；count = 陣列元素數（非陣列填 1）</td><td><code>glUniform3fv(loc, 1, &amp;color[0])</code></td></tr>
+<tr><td><code>glUniformMatrix{2|3|4|2x3|…}fv(loc, count, transpose, ptr)</code></td><td>矩陣；transpose = 是否轉置（GLM 是 column-major → <code>GL_FALSE</code>）</td><td><code>glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(M))</code></td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="cube">範例：Spinning Cube 與 Many Spinning Cubes</h2>
+<div class="grid2">
+<div>
+<pre><code><span class="c">// GLSL：Vertex Shader</span>
+#version 410 core
+in vec4 position;
+out VS_OUT { vec4 color; } vs_out;
+uniform mat4 mv_matrix;
+uniform mat4 proj_matrix;
+void main(void)
+{
+    gl_Position = proj_matrix * mv_matrix * position;
+    vs_out.color = position * 2.0 + vec4(0.5, 0.5, 0.5, 0.0);
+}</code></pre>
+<pre><code><span class="c">// C++：初始化</span>
+GLuint vao, program, buffer;
+GLint  mv_location, proj_location;      <span class="c">// 全域：location 存起來</span>
+glm::mat4 proj_matrix;
+
+glGenBuffers(1, &amp;buffer);
+glBindBuffer(GL_ARRAY_BUFFER, buffer);
+glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_positions), vertex_positions, GL_STATIC_DRAW);
+glGenVertexArrays(1, &amp;vao);
+glBindVertexArray(vao);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+glEnableVertexAttribArray(0);
+program = my_compile_and_link_program();
+mv_location   = glGetUniformLocation(program, "mv_matrix");
+proj_location = glGetUniformLocation(program, "proj_matrix");
+
+<span class="c">// C++：視窗大小改變時才更新 projection</span>
+void OnReshape(int w, int h) {
+    float aspect = (float)w / (float)h;
+    proj_matrix = glm::perspective(glm::radians(50.0f), aspect, 0.1f, 1000.0f);
+}</code></pre></div>
+<div>
+<canvas id="cubeCv" class="pl" width="420" height="300" style="background:#0d2b0d"></canvas>
+<div class="ctrl">立方體數量 <input type="range" id="ncube" min="1" max="24" value="1"> <span id="ncubeV"></span></div>
+<pre><code><span class="c">// C++：render（Many Spinning Cubes）</span>
+glUseProgram(program);
+<span class="c">// proj_matrix 在 reshape 時更新就好，不用每幀設</span>
+glUniformMatrix4fv(proj_location, 1, GL_FALSE, glm::value_ptr(proj_matrix));
+for (int i = 0; i &lt; 24; ++i)
+{
+    <span class="c">// 每個立方體用不同的時間偏移算 model-view</span>
+    float f = (float)i + (float)currentTime * 0.3f;
+    glm::mat4 mv_matrix = my_compute_mv_matrix(f);
+    glUniformMatrix4fv(mv_location, 1, GL_FALSE, glm::value_ptr(mv_matrix));
+    glDrawArrays(GL_TRIANGLES, 0, 36);   <span class="c">// 6 面 × 2 三角形 × 3 頂點</span>
+}</code></pre>
+<p class="mut">同一個 VAO、同一個 program，只換 uniform 再 draw。24 個立方體 = 24 次 draw call（減少 draw call 的方法見 <a href="07-mesh-rendering.html#overhead">講義 07</a>）。</p></div></div>
+
+<!-- ================================================================ -->
+<h2 id="uloc">Uniform location 的排列</h2>
+<div class="tabs"><button class="b" data-pane="ul1">uniform 陣列</button><button class="b" data-pane="ul2">矩陣陣列</button><button class="b" data-pane="ul3">struct</button></div>
+<div class="pane" id="ul1">
+<p>一般來說，uniform 陣列佔用<b>連續的 location</b>。下面三種寫法效果相同：</p>
+<div class="grid3">
+<pre><code><span class="c">// GLSL</span>
+uniform float array[3];
+
+<span class="c">// C++ 寫法 1：location 遞增</span>
+GLint loc = glGetUniformLocation(myShader, "array[0]");
+glUseProgram(myShader);
+glUniform1f(loc,     1.0f);
+glUniform1f(loc + 1, 2.0f);
+glUniform1f(loc + 2, 3.0f);</code></pre>
+<pre><code><span class="c">// C++ 寫法 2：一次傳整個陣列</span>
+GLint loc = glGetUniformLocation(myShader, "array[0]");
+glUseProgram(myShader);
+float data[] = { 1.0f, 2.0f, 3.0f };
+glUniform1fv(loc, 3, data);   <span class="c">// count = 3</span></code></pre>
+<pre><code><span class="c">// C++ 寫法 3：每個元素各查一次</span>
+GLint loc[3];
+loc[0] = glGetUniformLocation(myShader, "array[0]");
+loc[1] = glGetUniformLocation(myShader, "array[1]");
+loc[2] = glGetUniformLocation(myShader, "array[2]");
+glUseProgram(myShader);
+glUniform1f(loc[0], 1.0f);
+glUniform1f(loc[1], 2.0f);
+glUniform1f(loc[2], 3.0f);</code></pre></div></div>
+<div class="pane" id="ul2">
+<p><b>矩陣會佔更多 location！</b>一個 <code>mat4</code> 佔 4 個（每個 column 一個）：</p>
+<pre><code><span class="c">// GLSL</span>
+uniform mat4 array[3];
+<span class="c">// C++</span>
+GLint loc = glGetUniformLocation(myShader, "array");
+glUseProgram(myShader);
+glUniformMatrix4fv(loc,     1, GL_FALSE, mat1);
+glUniformMatrix4fv(loc + 4, 1, GL_FALSE, mat2);   <span class="c">// 不是 loc + 1！</span>
+glUniformMatrix4fv(loc + 8, 1, GL_FALSE, mat3);</code></pre></div>
+<div class="pane" id="ul3">
+<p>Struct 的成員用 <code>"變數名.成員名"</code> 查詢：</p>
+<pre><code><span class="c">// GLSL</span>
+struct MyStruct { float var1; mat4 var2; };
+uniform MyStruct myStruct;
+<span class="c">// C++</span>
+GLint loc_var1 = glGetUniformLocation(myShader, "myStruct.var1");
+GLint loc_var2 = glGetUniformLocation(myShader, "myStruct.var2");
+glUseProgram(myShader);
+glUniform1f(loc_var1, 1.0f);
+glUniformMatrix4fv(loc_var2, 1, GL_FALSE, mat);</code></pre>
+<p class="mut">講義範例把變數取名為 <code>struct</code>，但 <code>struct</code> 是 GLSL 關鍵字，實際會編譯失敗，這裡改成 <code>myStruct</code>。</p></div>
+<div class="tip">為了避免 location 算錯：<b>每個 uniform 都用 <code>glGetUniformLocation()</code> 查</b>，或改用 buffer-backed uniform block。</div>
+
+<!-- ================================================================ -->
+<h2 id="ubo">Buffer-backed Uniform Block（UBO）</h2>
+<div class="grid2">
+<div class="card">
+<ul><li>把一組 uniform 組成一個 <b>uniform block</b>，整個 block 存在一個 buffer object 裡（buffer-backed）</li>
+<li>宣告方式像 interface block，但用 <code>uniform</code> 修飾</li>
+<li>各 stage 的 block 對應規則和 default block 一樣：同樣的宣告指向同一份資料（同一個 buffer）</li>
+<li>Program 中的 block 用 <b>uniform block index</b> 識別（<code>glGetUniformBlockIndex</code>）</li>
+<li>Block 和 buffer 透過綁到<b>同一個 uniform binding point</b> 連起來</li></ul></div>
+<pre><code><span class="c">// GLSL：宣告名為 TransformBlock 的 uniform block</span>
+uniform TransformBlock
+{
+    float scale;
+    vec3  translation;
+    float rotation[3];
+    mat4  projection_matrix;
+} transform;
+
+void main()
+{
+    <span class="c">// 用 instance 名稱存取</span>
+    float s = transform.scale;
+}</code></pre></div>
+<h3>互動：Uniform binding point</h3>
+<figure class="fig">
+<svg id="ubSvg" viewBox="0 0 900 230" width="100%" font-size="13" text-anchor="middle"></svg>
+<figcaption>講義的例子：Uniform Block X 用 Buffer C、Y 用 A、Z 用 B。Binding point 不必連續（2 沒用到）。點右邊的 block 看路徑。</figcaption>
+</figure>
+<div class="grid2">
+<pre><code><span class="c">// GLSL</span>
+uniform X { float a; mat4 b; };
+uniform Y { int c; ivec4 d; };
+uniform Z { mat4 e[10]; };</code></pre>
+<pre><code><span class="c">// C++：block → binding point</span>
+GLuint X_index = glGetUniformBlockIndex(program, "X");
+GLuint Y_index = glGetUniformBlockIndex(program, "Y");
+GLuint Z_index = glGetUniformBlockIndex(program, "Z");
+glUniformBlockBinding(program, X_index, 1);
+glUniformBlockBinding(program, Y_index, 3);
+glUniformBlockBinding(program, Z_index, 0);
+<span class="c">// C++：buffer → binding point</span>
+glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer_b);   <span class="c">// Z 的資料</span>
+glBindBufferBase(GL_UNIFORM_BUFFER, 1, buffer_c);   <span class="c">// X 的資料</span>
+glBindBufferBase(GL_UNIFORM_BUFFER, 3, buffer_a);   <span class="c">// Y 的資料</span></code></pre></div>
+<div class="tw"><table>
+<tr><th>函式</th><th>做什麼</th></tr>
+<tr><td><a href="04-api.html#glGetUniformBlockIndex"><code>glGetUniformBlockIndex(program, name)</code></a></td><td>查 uniform block 在 program 中的 index</td></tr>
+<tr><td><a href="04-api.html#glUniformBlockBinding"><code>glUniformBlockBinding(program, blockIndex, binding)</code></a></td><td>指定這個 block 讀哪個 uniform binding point</td></tr>
+<tr><td><a href="04-api.html#glBindBufferBase"><code>glBindBufferBase(target, index, buffer)</code></a></td><td>把 buffer 綁到 indexed binding point（<code>GL_UNIFORM_BUFFER</code> 或 <code>GL_TRANSFORM_FEEDBACK_BUFFER</code>）的第 index 個；同時也綁到該 target 的一般 binding point，之後 glBufferSubData / glMapBuffer 會作用在它上面</td></tr>
+</table></div>
+<div class="note"><b>為什麼用 UBO</b>：更新所有 uniform 只要<b>一次 <code>glBufferSubData()</code></b>；多個 program 共用同一份資料（例如相機矩陣）時，綁到同一個 binding point 就好。</div>
+
+<!-- ================================================================ -->
+<h2 id="std140">Uniform buffer 的記憶體排列：std140</h2>
+<p>Buffer 裡的資料必須和 uniform block 的排列一致，資料才會被正確讀到。Uniform block 的記憶體排列<b>和 C / C++ 不同</b>，常需要補 <b>padding</b>。建議用 <code>std140</code> 這個標準排列（或用 API 查詢實際的排列）。</p>
+<div class="tw"><table>
+<tr><th>Layout qualifier</th><th>說明</th></tr>
+<tr><td><code>shared</code></td><td>這個 block 在多個 program 間共用（<b>預設</b>）；實際 offset 要用 API 查</td></tr>
+<tr><td><code>packed</code></td><td>盡量省記憶體，但通常就不能在 program 間共用</td></tr>
+<tr><td><code>std140</code></td><td><b>標準排列</b>：規則固定，C++ 端可以照規則自己排</td></tr>
+<tr><td><code>row_major</code></td><td>block 裡的矩陣以 row-major 存放</td></tr>
+<tr><td><code>column_major</code></td><td>矩陣以 column-major 存放（<b>預設</b>）</td></tr>
+</table></div>
+<div class="grid2">
+<div class="card"><b>std140 主要規則</b>
+<table>
+<tr><th>型別</th><th>對齊（offset 須是幾的倍數）</th><th>大小</th></tr>
+<tr><td><code>float</code> / <code>int</code> / <code>bool</code></td><td>4</td><td>4</td></tr>
+<tr><td><code>vec2</code></td><td>8</td><td>8</td></tr>
+<tr><td><code>vec3</code></td><td><b>16</b></td><td>12（後面可接一個 float）</td></tr>
+<tr><td><code>vec4</code></td><td>16</td><td>16</td></tr>
+<tr><td>陣列（任何元素）</td><td>16</td><td>每個元素佔 <b>16 的倍數</b></td></tr>
+<tr><td><code>mat4</code>（column-major）</td><td>16</td><td>4 個 vec4 column = 64</td></tr>
+<tr><td><code>mat3</code></td><td>16</td><td>3 個 column，每個補到 16 = 48</td></tr>
+<tr><td>struct</td><td>16</td><td>成員依規則排，總大小補到 16 的倍數</td></tr>
+</table></div>
+<div class="card"><b>互動：std140 offset 計算器</b>
+<p class="mut">一行一個成員（<code>型別 名稱</code>，陣列寫 <code>float r[3]</code>）。預設是講義的 block X。</p>
+<textarea id="stIn" rows="6" style="width:100%;font:13px var(--mono);border:1px solid var(--line);border-radius:6px;padding:6px">float a;
+float a2;
+mat4 b;
+vec3 c;
+float d;</textarea>
+<div class="ctrl"><button class="b" data-sp="x">講義 block X</button><button class="b" data-sp="v3">vec3 陷阱</button><button class="b" data-sp="arr">float 陣列</button></div></div></div>
+<div class="mem" id="stMem"></div>
+<div class="grid2">
+<div class="tw"><table class="st140" id="stTbl"></table></div>
+<pre><code id="stCpp"></code></pre></div>
+
+<!-- ================================================================ -->
+<h2 id="tex">Texture</h2>
+<div class="grid2">
+<div class="card"><b>幾何建模的極限</b>
+<p>現代顯卡每秒能畫超過 100 億個三角形，但只靠幾何，很多擬真的場景還是不夠細。</p>
+<p><b>例：做一顆橘子</b></p>
+<ol><li>橘色的球 → 太簡單</li><li>換更複雜的形狀 → 抓不到表面特徵</li><li>加上小凹洞 → 要建模所有凹洞太貴（一顆橘子 100 萬個三角形？）</li>
+<li><b>拍一張真橘子的照片「貼」到簡單模型上</b> → 這就是 <b>texture mapping</b></li>
+<li>還是太光滑？要改變局部形狀 → 用 <b>bump mapping</b></li></ol></div>
+<div>
+<div class="tw"><table>
+<tr><th>Texture mapping 種類</th><th>做法</th></tr>
+<tr><td><b>Texture mapping</b></td><td>用影像填滿多邊形內部</td></tr>
+<tr><td><b>Environment mapping</b></td><td>用環境的照片當貼圖，模擬高度反光（鏡面）的表面</td></tr>
+<tr><td><b>Bump mapping</b></td><td>渲染時改變表面的法向量，產生凹凸感</td></tr>
+</table></div>
+<figure class="fig" style="margin-top:12px">
+<svg viewBox="0 0 420 170" width="100%" font-size="12" text-anchor="middle">
+<defs><marker id="tm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="10" y="30" width="100" height="100" fill="url(#chk)" stroke="#999"/><text x="60" y="150">2D image（s, t）</text>
+<pattern id="chk" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#f6dfa8"/><rect width="10" height="10" fill="#e6a23c"/><rect x="10" y="10" width="10" height="10" fill="#e6a23c"/></pattern>
+<path d="M170 60 L250 40 L270 110 L190 130 Z" fill="url(#chk)" stroke="#999"/><text x="220" y="150">3D surface（x, y, z）</text>
+<rect x="310" y="30" width="100" height="100" rx="4" fill="#fff" stroke="#999"/><path d="M335 70 L385 58 L395 100 L345 112 Z" fill="url(#chk)" stroke="#999"/><text x="360" y="150">display（螢幕）</text>
+<g stroke="#555" stroke-width="2" marker-end="url(#tm)"><path d="M112 80 h52"/><path d="M272 80 h34"/></g>
+</svg><figcaption>概念簡單，但牽涉 3、4 個座標系：影像 → 3D 表面 → 螢幕</figcaption></figure></div></div>
+<div class="note"><b>Texture</b>：像影像一樣的一塊記憶體，最小元素叫 <b>texel</b>；常用來提供表面細節；GPU 有額外的專用硬體處理某些 texture 運算（過濾、取樣）。</div>
+
+<!-- ================================================================ -->
+<h2 id="unit">Texture Image Unit：texture 怎麼接到 shader</h2>
+<div class="grid2">
+<div class="card"><b>Texture object 的使用步驟（和 buffer 很像）</b>
+<ol><li><code>glGenTextures()</code> 產生名字</li><li><code>glBindTexture()</code> 綁到 texture binding target</li>
+<li><code>glTexStorage*()</code> 配置儲存空間</li><li><code>glTexParameter*()</code> 設定參數</li><li><code>glTexSubImage*()</code> 上傳內容</li></ol></div>
+<div class="card"><b>Sampler uniform</b>
+<pre><code>uniform sampler2D      texture1;
+uniform sampler3D      texture2;
+uniform sampler1DArray texture3;</code></pre>
+<p>Sampler uniform 本質是 <b>int</b>，它的值表示用哪一個 <b>texture image unit</b>。</p></div></div>
+<figure class="fig">
+<svg id="tuSvg" viewBox="0 0 900 260" width="100%" font-size="13" text-anchor="middle"></svg>
+<figcaption>上：講義例子——Sampler X 用 texture C（unit 0）、Y 用 A（unit 1）、Z 用 B（unit 3）。點 sampler 看路徑。<br>每個 unit 可以同時在不同 target（2D、3D、1D_ARRAY…）各綁一個 texture，由 sampler 的型別決定用哪個。</figcaption>
+</figure>
+<pre><code><span class="c">// C++：render 時把 texture 接到 unit 0，sampler 設成 0</span>
+glUseProgram(program);
+glBindVertexArray(vao);
+glActiveTexture(GL_TEXTURE0);                <span class="c">// 選 texture image unit 0</span>
+glBindTexture(GL_TEXTURE_2D, texture);       <span class="c">// glBindTexture 把 texture object 綁到「目前的 unit」！</span>
+GLint texture_location = glGetUniformLocation(program, "texture");
+glUniform1i(texture_location, 0);            <span class="c">// sampler2D 的值 = unit 編號 0（不是 texture ID）</span>
+glDrawArrays(GL_TRIANGLES, 0, 3);
+
+<span class="c">// 多張 texture：每張一個 unit</span>
+glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, texture1);
+glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, texture2);
+glUniform1i(glGetUniformLocation(program, "texture1"), 0);
+glUniform1i(glGetUniformLocation(program, "texture2"), 1);</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="texinit">建立與初始化 texture</h2>
+<div class="grid2">
+<pre><code><span class="c">// C++：講義的 Simple Texture</span>
+GLuint texture;
+glGenTextures(1, &amp;texture);
+glBindTexture(GL_TEXTURE_2D, texture);
+glTexStorage2D(GL_TEXTURE_2D,   <span class="c">// 2D texture</span>
+               1,               <span class="c">// 1 mipmap level</span>
+               GL_RGBA32F,      <span class="c">// 32-bit floating-point RGBA</span>
+               256, 256);       <span class="c">// 256 × 256 texels</span>
+
+float* data = new float[256 * 256 * 4];
+generate_texture(data, 256, 256);
+glTexSubImage2D(GL_TEXTURE_2D,
+                0,              <span class="c">// level 0</span>
+                0, 0,           <span class="c">// offset 0, 0</span>
+                256, 256,       <span class="c">// 換掉整張</span>
+                GL_RGBA,        <span class="c">// 4 個 channel</span>
+                GL_FLOAT,       <span class="c">// 浮點資料</span>
+                data);
+delete[] data;                  <span class="c">// OpenGL 已經有自己的副本</span>
+
+void generate_texture(float* data, int width, int height) {
+    for (int y = 0; y &lt; height; y++)
+        for (int x = 0; x &lt; width; x++) {
+            data[(y * width + x) * 4 + 0] = (float)((x &amp; y) &amp; 0xFF) / 255.0f;
+            data[(y * width + x) * 4 + 1] = (float)((x | y) &amp; 0xFF) / 255.0f;
+            data[(y * width + x) * 4 + 2] = (float)((x ^ y) &amp; 0xFF) / 255.0f;
+            data[(y * width + x) * 4 + 3] = 1.0f;
+        }
+}</code></pre>
+<div>
+<canvas id="xorCv" class="pl" width="256" height="256"></canvas>
+<p class="cap mut" style="text-align:center">generate_texture 產生的 256×256 影像（R = x AND y、G = x OR y、B = x XOR y）</p>
+<pre><code><span class="c">// GLSL：Fragment Shader——直接用像素座標取 texel</span>
+#version 410 core
+uniform sampler2D texture;
+out vec4 color;
+void main(void)
+{
+    color = texelFetch(texture, ivec2(gl_FragCoord.xy), 0);
+}</code></pre></div></div>
+<div class="tw"><table>
+<tr><th>Texture target（<code>GL_TEXTURE_*</code>）</th><th>說明</th><th>Sampler 型別</th></tr>
+<tr><td><code>1D</code> / <code>2D</code> / <code>3D</code></td><td>一、二、三維 texture</td><td><code>sampler1D</code> / <code>sampler2D</code> / <code>sampler3D</code></td></tr>
+<tr><td><code>RECTANGLE</code></td><td>矩形 texture</td><td><code>sampler2DRect</code></td></tr>
+<tr><td><code>1D_ARRAY</code> / <code>2D_ARRAY</code></td><td>一維 / 二維 array texture</td><td><code>sampler1DArray</code> / <code>sampler2DArray</code></td></tr>
+<tr><td><code>CUBE_MAP</code> / <code>CUBE_MAP_ARRAY</code></td><td>cube map（skybox、環境貼圖）</td><td><code>samplerCube</code> / <code>samplerCubeArray</code></td></tr>
+<tr><td><code>BUFFER</code></td><td>buffer texture</td><td><code>samplerBuffer</code></td></tr>
+<tr><td><code>2D_MULTISAMPLE</code>（<code>_ARRAY</code>）</td><td>二維 multisample texture</td><td><code>sampler2DMS</code>（<code>Array</code>）</td></tr>
+</table></div>
+<div class="grid2">
+<div class="card"><b><code>texture</code> vs <code>texelFetch</code></b>
+<table>
+<tr><th></th><th><code>texture(sampler, P)</code></th><th><code>texelFetch(sampler, P, lod)</code></th></tr>
+<tr><td>座標</td><td>正規化 [0, 1]</td><td>整數 texel 座標</td></tr>
+<tr><td>過濾</td><td>依 filter 設定</td><td>不過濾，直接拿一個 texel</td></tr>
+<tr><td>例：128×128 的中間</td><td><code>(0.5, 0.5)</code></td><td><code>ivec2(64, 64)</code></td></tr>
+</table></div>
+<div class="card"><b>小心影像大小：pixel alignment</b>
+<p>上傳影像時，若 <b>寬度 × channel 數 mod 4 ≠ 0</b>，必須先設：</p>
+<pre><code>glPixelStorei(GL_UNPACK_ALIGNMENT, 1);</code></pre>
+<p class="mut">OpenGL 預設每一列從 4 的倍數 byte 開始讀；RGB（3 bytes）且寬度不是 4 的倍數時，每列結尾會錯位 → 影像歪斜。</p>
+<div class="ctrl">寬度 <input type="number" id="alW" value="301" style="width:70px"> channel <select id="alC"><option>1</option><option selected>3</option><option>4</option></select></div>
+<div id="alTxt" style="font-size:13.5px"></div></div></div>
+<div class="ex"><b>從檔案載入貼圖的模型（Simple Textured Model）</b>
+<div class="grid2"><pre><code><span class="c">// GLSL：Vertex Shader</span>
+#version 410 core
+layout (location = 0) in vec4 position;
+layout (location = 4) in vec2 tc;
+uniform mat4 mv_matrix;
+uniform mat4 proj_matrix;
+out VS_OUT { vec2 tc; } vs_out;
+void main(void)
+{
+    vec4 pos_vs = mv_matrix * position;
+    vs_out.tc = tc;          <span class="c">// 貼圖座標原封傳下去</span>
+    gl_Position = proj_matrix * pos_vs;
+}</code></pre>
+<pre><code><span class="c">// GLSL：Fragment Shader</span>
+#version 410 core
+uniform sampler2D tex_object;
+in VS_OUT { vec2 tc; } fs_in;
+out vec4 color;
+void main(void)
+{
+    <span class="c">// u 乘 3 → 橫向重複 3 次（要配合 GL_REPEAT）</span>
+    color = texture(tex_object, fs_in.tc * vec2(3.0, 1.0));
+}</code></pre></div>
+<p class="mut">講義 FS 寫成 <code>layout uniform sampler2D</code> 且漏了 <code>out vec4 color;</code>，這裡已修正。讀圖檔用 stb_image，見 <a href="02-project-syntax.html#stb">Appendix - Image Loading</a>。</p></div>
+
+<!-- ================================================================ -->
+<h2 id="texops">Texture 操作：filtering、mipmap、wrapping、comparison</h2>
+<p>GPU 有專用硬體做這些 texture 操作；尤其 filtering 對畫質非常重要。這也是 texture 和 buffer 的主要差別：<b>texture 可以被過濾，buffer 不行</b>。</p>
+<div class="grid2">
+<div class="card"><b>Filtering 的目標</b>
+<p>算出一個 fragment 蓋到的<b>所有 texel 的總貢獻</b>。把 fragment 想成房間的一扇窗，你只能用<b>一個顏色</b>描述窗外的景色——理論上最好的答案是所有射入光線的平均色。</p>
+<p>正確算平均要用 Monte Carlo 等方法 → 即時渲染太貴。OpenGL 提供簡化、硬體加速的版本：nearest、bilinear、mipmapping、anisotropic。</p></div>
+<div class="card"><b>Magnification vs Minification</b>
+<ul><li><b>放大</b>（一個 texel 蓋好幾個 fragment）：要<b>內插</b>顏色，避免一格一格的方塊感</li>
+<li><b>縮小</b>（一個 fragment 蓋好幾個 texel）：希望一次讀取就拿到所有 texel 的平均 → <b>mipmap</b></li></ul>
+<table><tr><th>方法</th><th>做法</th><th>品質 / 速度</th></tr>
+<tr><td>Nearest</td><td>取最近的 texel</td><td>最便宜、最差（Minecraft 故意用）</td></tr>
+<tr><td>Bilinear</td><td>2×2 鄰近 texel 內插</td><td>較慢、較好</td></tr>
+<tr><td>Anisotropic</td><td>依相機投影的形狀取更多樣本</td><td>可能很慢、最好；<b>看硬體是否支援</b></td></tr></table></div></div>
+<h3>互動：隧道地板（同一張貼圖、四種過濾）</h3>
+<div class="grid2">
+<canvas id="tunCv" class="pl" width="420" height="260"></canvas>
+<div><div class="ctrl" id="tunBtns"></div><div class="card" id="tunTxt"></div>
+<p class="mut">講義的 Tunnel 範例：遠處的 texel 比像素小很多（縮小），nearest / bilinear 會產生閃爍的雜訊（aliasing）；mipmap 讀預先縮小的版本，遠處變平滑。</p></div></div>
+<h3>Mipmapping</h3>
+<div class="grid2">
+<div><canvas id="mipCv" class="pl" width="420" height="230"></canvas></div>
+<div class="card">
+<ul><li>每一層是上一層 <b>2×2 預先平均</b>的結果，從原尺寸一路到 1×1</li>
+<li>縮小時從較小的層取樣：在 level 1 讀 1 個 texel = 在 level 0 讀 4 個</li>
+<li>相鄰兩層的結果還可以再內插 → 層與層之間平滑過渡（<code>GL_LINEAR_MIPMAP_LINEAR</code> = trilinear）</li>
+<li>所有層總共只多用約 <b>1/3</b> 的記憶體</li>
+<li>層數在 <code>glTexStorage2D</code> 的 levels 參數指定；每層可以用 <code>glTexSubImage2D(level, …)</code> 自己上傳，或上傳 level 0 後呼叫 <b><code>glGenerateMipmap()</code></b> 自動產生</li></ul></div></div>
+<h3>Wrapping：UV 超出 [0, 1] 時</h3>
+<div class="grid2">
+<canvas id="wrapCv2" class="pl" width="420" height="200"></canvas>
+<div><div class="ctrl" id="wrapBtns"></div>
+<p>設定 <code>GL_TEXTURE_WRAP_S</code> 和 <code>GL_TEXTURE_WRAP_T</code>（S、T 就是 U、V）。示意 UV 範圍 [−1, 2]，中間框是 [0, 1]。</p>
+<p class="mut"><code>GL_CLAMP_TO_BORDER</code> 用 <code>GL_TEXTURE_BORDER_COLOR</code> 設定的顏色（這裡是黑色）。</p></div></div>
+<div class="grid2">
+<div class="card"><b>Texture comparison</b>
+<p>取值前先做一次比較：通過回傳 1.0、失敗回傳 0.0，再和 filter 結合後回傳。設定 <code>GL_TEXTURE_COMPARE_MODE</code>、<code>GL_TEXTURE_COMPARE_FUNC</code>。用來加速 <b>shadow mapping</b>。</p></div>
+<pre><code><span class="c">// C++：用 texture parameter 設定這些操作</span>
+glBindTexture(GL_TEXTURE_2D, texture);
+<span class="c">// (1) nearest-neighbor filtering</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+<span class="c">// (2) bilinear filtering</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+<span class="c">// (3) bilinear filtering with mipmapping</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+glGenerateMipmap(GL_TEXTURE_2D);
+<span class="c">// wrapping</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);</code></pre></div>
+<div class="warn"><b>常見黑畫面原因</b>：<code>GL_TEXTURE_MIN_FILTER</code> 的預設值是 <code>GL_NEAREST_MIPMAP_LINEAR</code>（需要 mipmap）。沒產生 mipmap 又沒改 filter → texture incomplete → 取樣得到黑色。</div>
+<p class="mut">參數完整說明：<a href="https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/glTexParameter.xhtml">glTexParameter</a>、<a href="https://www.khronos.org/opengl/wiki/Sampler_Object">Sampler Object</a>。</p>
+
+<!-- ================================================================ -->
+<h2 id="array">Array texture（範例：Alien Rain）</h2>
+<div class="grid2">
+<div class="card">
+<ul><li>一個 texture object 裡放<b>很多層</b>貼圖</li>
+<li>除了 3D texture，每種 texture 都有 array 版（<code>GL_TEXTURE_2D_ARRAY</code> 等）</li>
+<li>可以自訂 texture 資料結構；同時用很多張貼圖時減少 bind 次數</li>
+<li>2D array 用 <code>glTexStorage3D</code> / <code>glTexSubImage3D</code> 指定（第三維 = 第幾層）</li>
+<li>Shader 用 <code>sampler2DArray</code>，<code>texture(tex, vec3(uv, layer))</code></li></ul>
+<p><b>Alien Rain</b>：256 個外星人往下掉，64 種外星人貼圖放在一個 array texture；每個外星人的位置與旋轉放在 UBO。</p></div>
+<pre><code><span class="c">// C++：初始化</span>
+glGenBuffers(1, &amp;rain_buffer);                       <span class="c">// UBO：256 個 vec4</span>
+glBindBuffer(GL_UNIFORM_BUFFER, rain_buffer);
+glBufferData(GL_UNIFORM_BUFFER, 256 * sizeof(glm::vec4), NULL, GL_DYNAMIC_DRAW);
+
+glGenTextures(1, &amp;tex_alien_array);
+glBindTexture(GL_TEXTURE_2D_ARRAY, tex_alien_array);
+glTexStorage3D(GL_TEXTURE_2D_ARRAY, 8, GL_RGBA8, 256, 256, 64);   <span class="c">// depth = 64 層</span>
+for (int i = 0; i &lt; 64; i++)
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i,   <span class="c">// z offset = 第 i 層</span>
+                    256, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, image_data[i]);
+
+<span class="c">// C++：render</span>
+glBindBufferBase(GL_UNIFORM_BUFFER, 0, rain_buffer);
+glm::vec4* droplet = (glm::vec4*)glMapBufferRange(GL_UNIFORM_BUFFER, 0,
+    256 * sizeof(glm::vec4), GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+for (int i = 0; i &lt; 256; i++) {
+    droplet[i][0] = droplet_x_offset[i];
+    droplet[i][1] = 2.0f - fmodf((t + float(i)) * droplet_fall_speed[i], 4.31f);
+    droplet[i][2] = t * droplet_rot_speed[i];
+    droplet[i][3] = 0.0f;
+}
+glUnmapBuffer(GL_UNIFORM_BUFFER);
+for (int alien_index = 0; alien_index &lt; 256; alien_index++) {
+    glVertexAttribI1i(0, alien_index);       <span class="c">// 整數 attribute 常數</span>
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);   <span class="c">// 一個四邊形</span>
+}</code></pre></div>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Vertex Shader</span>
+#version 410 core
+layout (location = 0) in int alien_index;
+out VS_OUT { flat int alien; vec2 tc; } vs_out;
+struct droplet_t { float x_offset; float y_offset; float orientation; float unused; };
+layout(std140) uniform droplets { droplet_t droplet[256]; };
+void main(void)
+{
+    const vec2[4] position = vec2[4](vec2(-0.5, -0.5), vec2(0.5, -0.5),
+                                     vec2(-0.5,  0.5), vec2(0.5,  0.5));
+    vs_out.tc = position[gl_VertexID].xy + vec2(0.5);
+    float co = cos(droplet[alien_index].orientation);
+    float so = sin(droplet[alien_index].orientation);
+    mat2 rot = mat2(vec2(co, so), vec2(-so, co));
+    vec2 pos = 0.25 * rot * position[gl_VertexID];
+    gl_Position = vec4(pos.x + droplet[alien_index].x_offset,
+                       pos.y + droplet[alien_index].y_offset, 0.5, 1.0);
+    vs_out.alien = alien_index % 64;   <span class="c">// 第幾層貼圖</span>
+}</code></pre>
+<div>
+<pre><code><span class="c">// GLSL：Fragment Shader</span>
+#version 410 core
+layout (location = 0) out vec4 color;
+uniform sampler2DArray tex_aliens;
+in VS_OUT { flat int alien; vec2 tc; } fs_in;
+void main(void)
+{
+    color = texture(tex_aliens, vec3(fs_in.tc, float(fs_in.alien)));
+}</code></pre>
+<div class="card"><b><code>flat</code> qualifier</b>
+<p>一般情況頂點和 fragment 不是 1:1，每個頂點的資料會在 primitive 上<b>插值</b>給每個 fragment。加上 <code>flat</code> 就<b>不插值</b>：這個 primitive 產生的所有 fragment 都拿到同一個值。整數（如 layer index）不能插值，所以必須 flat。</p>
+<p class="mut">插值修飾詞的互動示範見 <a href="05-vertex-draw.html#interp">講義 05</a>。</p></div></div></div>
+</main>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// ---------- buffer 建立步驟 ----------
+const BS = [
+  ['GLuint buffer;', '宣告一個變數放名字。還什麼都沒有。', { name: '—', obj: false, bind: '—', store: '—' }],
+  ['glGenBuffers(1, &buffer);', '產生 1 個名字，例如 buffer = 1。<b>buffer object 還沒建立！</b>只是保留了一個編號。', { name: '1', obj: false, bind: '—', store: '—' }],
+  ['glBindBuffer(GL_ARRAY_BUFFER, buffer);', '把名字綁到 <code>GL_ARRAY_BUFFER</code> binding point。<b>第一次 bind 才真正建立 buffer object</b>（大小 0）。之後對 GL_ARRAY_BUFFER 的操作都作用在它身上。', { name: '1', obj: true, bind: 'GL_ARRAY_BUFFER → 1', store: '0 bytes' }],
+  ['glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW);', '配置 72 bytes 的儲存空間並複製 data 進去（18 個 float）。之前若有舊空間會被釋放。', { name: '1', obj: true, bind: 'GL_ARRAY_BUFFER → 1', store: '72 bytes（data）' }],
+  ['glBufferSubData(GL_ARRAY_BUFFER, 36, 12, newColor);', '（需要更新時）從 byte 36 開始換掉 12 bytes：只改第一個頂點的顏色，不重新配置。', { name: '1', obj: true, bind: 'GL_ARRAY_BUFFER → 1', store: '72 bytes（部分更新）' }]];
+$('bsBtns').innerHTML = BS.map((b, i) => `<button class="b">步驟 ${i}</button>`).join('');
+function bsShow(k) {
+  $('bsBtns').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === k));
+  $('bsCode').textContent = '// C++\n' + BS.slice(0, k + 1).map(b => b[0]).join('\n');
+  $('bsTxt').innerHTML = BS[k][1];
+  const s = BS[k][2];
+  $('bsTbl').innerHTML = `<tr><th>狀態</th><th>值</th></tr><tr><td>名字（GLuint）</td><td class="${s.name === '—' ? 'n' : 'y'}">${s.name}</td></tr><tr><td>buffer object 存在？</td><td class="${s.obj ? 'y' : 'n'}">${s.obj ? '是' : '否'}</td></tr><tr><td>binding point</td><td class="${s.bind === '—' ? 'n' : 'y'}">${s.bind}</td></tr><tr><td>儲存空間</td><td class="${s.store === '—' ? 'n' : 'y'}">${s.store}</td></tr>`;
+}
+$('bsBtns').querySelectorAll('button').forEach((b, i) => b.onclick = () => bsShow(i)); bsShow(1);
+
+// ---------- 三角形 buffer 記憶體 ----------
+const DATA = [-0.5, -0.4, 0, 0.5, -0.4, 0, 0, 0.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
+function memShow(at) {
+  $('memA').innerHTML = DATA.map((v, i) => `<div class="${i < 9 ? 'p' : 'c'} ${(at === 0 ? i < 9 : i >= 9) ? 'on' : ''}"><small>${i * 4}B</small>${v}</div>`).join('');
+  $('atTxt').textContent = at === 0 ? 'size 3、stride 0（= 12 bytes）、offset 0 → 讀 byte 0–35' : 'size 3、stride 0（= 12 bytes）、offset sizeof(float)·9 = 36 → 讀 byte 36–71';
+  document.querySelectorAll('[data-at]').forEach(b => b.classList.toggle('on', +b.dataset.at === at));
+}
+document.querySelectorAll('[data-at]').forEach(b => b.onclick = () => memShow(+b.dataset.at)); memShow(0);
+
+// ---------- uniform 共用 ----------
+const UG = [['Vertex Shader', ['A', 'B', 'C', 'D']], ['Geometry Shader', ['A', 'D', 'E']], ['Fragment Shader', ['D', 'E', 'F']]];
+$('uniG').innerHTML = UG.map(([n, us]) => `<div class="card" style="margin:0;padding:8px 10px"><b style="font-size:12.5px">${n}</b><br>${us.map(u => `<span data-u="${u}">uniform float ${u};</span>`).join('<br>')}</div>`).join('');
+const uniPick = u => { document.querySelectorAll('[data-u]').forEach(s => s.classList.toggle('on', s.dataset.u === u)); const n = UG.filter(([, us]) => us.includes(u)).map(([x]) => x); $('uniTxt').innerHTML = `<b>${u}</b> 出現在 ${n.join('、')}，${n.length > 1 ? '都指向<b>同一個</b>值' : '只有這個 stage 用到'}。整個 program 共有 6 個不同的 uniform：A、B、C、D、E、F。`; };
+document.querySelectorAll('[data-u]').forEach(s => s.onclick = () => uniPick(s.dataset.u)); uniPick('D');
+
+// ---------- many spinning cubes ----------
+(() => {
+  const c = $('cubeCv').getContext('2d'), W = 420, H = 300;
+  const V = []; for (let i = 0; i < 8; i++) V.push([i & 1 ? .25 : -.25, i & 2 ? .25 : -.25, i & 4 ? .25 : -.25]);
+  const F = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
+  const rot = (p, ax, a) => { const [x, y, z] = p, cs = Math.cos(a), s = Math.sin(a); return ax === 'y' ? [x * cs + z * s, y, -x * s + z * cs] : [x, y * cs - z * s, y * s + z * cs]; };
+  function frame(now) {
+    const t = now / 1000, n = +$('ncube').value; $('ncubeV').textContent = `${n} 個 → ${n} 次 glDrawArrays`;
+    c.fillStyle = '#0d400d'; c.fillRect(0, 0, W, H);
+    const polys = [];
+    for (let i = 0; i < n; i++) {
+      const f = (n === 1 ? 0 : i) + t * 0.3;
+      const off = n === 1 ? [0, 0, -4] : [Math.sin(2.1 * f) * 2.0, Math.cos(1.7 * f) * 2.0, Math.sin(1.3 * f) * Math.cos(1.5 * f) * 2.0 - 8];
+      const P = V.map(v => { let p = rot(v, 'y', t * 0.785 + i); p = rot(p, 'x', t * 1.414 + i); p = [p[0] + off[0], p[1] + off[1], p[2] + off[2]]; return { p, s: [W / 2 + p[0] / -p[2] * 330, H / 2 - p[1] / -p[2] * 330], col: v.map(x => x * 2 + .5) }; });
+      F.forEach(q => { const pts = q.map(k => P[k]); const z = pts.reduce((s, p) => s + p.p[2], 0) / 4; const col = [0, 1, 2].map(k => pts.reduce((s, p) => s + p.col[k], 0) / 4); polys.push({ pts, z, col }); });
+    }
+    polys.sort((a, b) => a.z - b.z);
+    polys.forEach(({ pts, col }) => {
+      const s = pts.map(p => p.s), area = (s[1][0] - s[0][0]) * (s[2][1] - s[0][1]) - (s[1][1] - s[0][1]) * (s[2][0] - s[0][0]);
+      if (area > 0) return;
+      c.fillStyle = `rgb(${col.map(v => Math.max(0, Math.min(255, v * 255)))})`; c.beginPath(); s.forEach((p, i) => c[i ? 'lineTo' : 'moveTo'](...p)); c.closePath(); c.fill();
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+// ---------- UBO binding ----------
+const UB = { X: ['C', 1], Y: ['A', 3], Z: ['B', 0] };
+function ubDraw(sel) {
+  const bufY = { A: 50, B: 115, C: 180 }, bpY = [30, 80, 130, 180], blkY = { X: 50, Y: 115, Z: 180 };
+  let s = '<defs><marker id="ua" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>';
+  s += '<text x="110" y="16" font-weight="700">Buffer Object</text><text x="450" y="16" font-weight="700">Uniform Binding Point</text><text x="790" y="16" font-weight="700">Shader Program</text>';
+  Object.entries(UB).forEach(([b, [buf, bp]]) => {
+    const on = b === sel, col = on ? '#c2412d' : '#c3c8cf', w = on ? 3 : 1.5;
+    s += `<path d="M190 ${bufY[buf]} C300 ${bufY[buf]},300 ${bpY[bp]},372 ${bpY[bp]}" stroke="${col}" stroke-width="${w}" fill="none" marker-end="url(#ua)"/>`;
+    s += `<path d="M528 ${bpY[bp]} C620 ${bpY[bp]},620 ${blkY[b]},706 ${blkY[b]}" stroke="${col}" stroke-width="${w}" fill="none" marker-end="url(#ua)"/>`;
+  });
+  ['A', 'B', 'C'].forEach(b => s += `<rect x="30" y="${bufY[b] - 18}" width="160" height="36" rx="7" fill="#dbeafe" stroke="#9fb2f0"/><text x="110" y="${bufY[b] + 5}">Buffer ${b}</text>`);
+  bpY.forEach((y, i) => s += `<rect x="375" y="${y - 16}" width="150" height="32" rx="7" fill="${i === 2 ? '#f3f2ed' : '#fff3d6'}" stroke="#e6c27a"/><text x="450" y="${y + 5}" fill="${i === 2 ? '#aaa' : '#111'}">Binding Point ${i}${i === 2 ? '（未用）' : ''}</text>`);
+  Object.keys(UB).forEach(b => s += `<rect data-b="${b}" x="710" y="${blkY[b] - 18}" width="160" height="36" rx="7" fill="${b === sel ? '#fde2dc' : '#e3f4ea'}" stroke="${b === sel ? '#c2412d' : '#8fd1a8'}" style="cursor:pointer"/><text x="790" y="${blkY[b] + 5}" style="pointer-events:none">Uniform Block ${b}</text>`);
+  const [buf, bp] = UB[sel];
+  s += `<text x="450" y="222" fill="#c2412d" font-size="12">Block ${sel} ← binding point ${bp}（glUniformBlockBinding）← Buffer ${buf}（glBindBufferBase）</text>`;
+  $('ubSvg').innerHTML = s;
+  $('ubSvg').querySelectorAll('[data-b]').forEach(r => r.onclick = () => ubDraw(r.dataset.b));
+}
+ubDraw('X');
+
+// ---------- std140 計算器 ----------
+const STD = { float: [4, 4, 1], int: [4, 4, 1], uint: [4, 4, 1], bool: [4, 4, 1], vec2: [8, 8, 2], ivec2: [8, 8, 2], vec3: [16, 12, 3], ivec3: [16, 12, 3], vec4: [16, 16, 4], ivec4: [16, 16, 4], mat2: [16, 32, 0], mat3: [16, 48, 0], mat4: [16, 64, 0] };
+function stCalc() {
+  const lines = $('stIn').value.split('\n').map(l => l.trim().replace(/;$/, '')).filter(Boolean);
+  let off = 0; const rows = [], cells = []; let cpp = 'struct MyBlock   // 對應的 C++ struct（手動補 padding）\n{\n', pc = 0;
+  for (const l of lines) {
+    const m = l.match(/^(\w+)\s+(\w+)(?:\[(\d+)\])?$/); if (!m || !STD[m[1]]) { rows.push(`<tr><td colspan="4" style="color:#c2412d">無法解析：${l}</td></tr>`); continue; }
+    const [, ty, nm, arr] = m; let [al, sz] = STD[ty]; const n = arr ? +arr : 0;
+    let stride = 0; if (n) { al = 16; stride = Math.ceil(sz / 16) * 16; sz = stride * n; }
+    const aligned = Math.ceil(off / al) * al;
+    if (aligned > off) { const p = (aligned - off) / 4; cpp += `    float padding_${pc++}[${p}];   // ${aligned - off} bytes padding\n`; for (let k = 0; k < p; k++) cells.push(['pad', off + k * 4, '—']); }
+    rows.push(`<tr><td>${l}</td><td>${al}</td><td>${aligned}</td><td>${sz}${n ? `（stride ${stride}）` : ''}</td></tr>`);
+    const words = sz / 4;
+    for (let k = 0; k < words; k++) {
+      let lab = nm;
+      if (ty.startsWith('mat')) { const cn = +ty[3], col = Math.floor(k / 4), r = k % 4; lab = r < cn ? `${nm}[${col}][${r}]` : '—'; if (r >= cn) { cells.push(['pad', aligned + k * 4, '—']); continue; } }
+      else if (n) { const e = Math.floor(k * 4 / stride), w = (k * 4 % stride) / 4; if (w >= STD[ty][2]) { cells.push(['pad', aligned + k * 4, '—']); continue; } lab = `${nm}[${e}]${STD[ty][2] > 1 ? '.' + 'xyzw'[w] : ''}`; }
+      else if (STD[ty][2] > 1) lab = `${nm}.${'xyzw'[k]}`;
+      cells.push(['p', aligned + k * 4, lab]);
+    }
+    if (ty.startsWith('mat')) { const cn = +ty[3]; for (let col = 0; col < cn; col++) cpp += `    float ${nm}_column_${col + 1}[4];${cn < 4 ? '   // 每個 column 補到 16 bytes' : ''}\n`; }
+    else if (n) cpp += `    float ${nm}[${n * stride / 4}];   // ${n} 個元素，每個佔 ${stride} bytes\n`;
+    else if (STD[ty][2] > 1) cpp += `    float ${nm}[${STD[ty][2]}];\n`;
+    else cpp += `    float ${nm};\n`;
+    off = aligned + sz;
+  }
+  cpp += '};';
+  $('stTbl').innerHTML = '<tr><th>成員</th><th>對齊</th><th>offset</th><th>大小</th></tr>' + rows.join('') + `<tr><th colspan="2">block 大小</th><th colspan="2">${Math.ceil(off / 16) * 16} bytes</th></tr>`;
+  $('stMem').innerHTML = cells.map(([k, o, lab]) => `<div class="${k}"><small>0x${o.toString(16).padStart(2, '0')}</small>${lab}</div>`).join('');
+  $('stCpp').textContent = '// C++\n' + cpp;
+}
+const SP = { x: 'float a;\nfloat a2;\nmat4 b;\nvec3 c;\nfloat d;', v3: 'vec3 position;\nvec3 color;\nfloat intensity;', arr: 'float weights[4];\nvec2 uv;' };
+document.querySelectorAll('[data-sp]').forEach(b => b.onclick = () => { $('stIn').value = SP[b.dataset.sp]; stCalc(); });
+$('stIn').oninput = stCalc; stCalc();
+
+// ---------- texture unit 圖 ----------
+const TU = { X: ['C', 0], Y: ['A', 1], Z: ['B', 3] };
+function tuDraw(sel) {
+  const tY = { A: 45, B: 100, C: 155 }, uY = [30, 75, 120, 165], sY = { X: 45, Y: 100, Z: 155 };
+  let s = '<defs><marker id="tu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>';
+  s += '<text x="110" y="16" font-weight="700">Texture Object</text><text x="450" y="16" font-weight="700">Texture Image Unit</text><text x="790" y="16" font-weight="700">Shader Program</text>';
+  Object.entries(TU).forEach(([k, [t, u]]) => { const on = k === sel, col = on ? '#c2412d' : '#c3c8cf', w = on ? 3 : 1.5;
+    s += `<path d="M190 ${tY[t]} C300 ${tY[t]},300 ${uY[u]},372 ${uY[u]}" stroke="${col}" stroke-width="${w}" fill="none" marker-end="url(#tu)"/><path d="M528 ${uY[u]} C620 ${uY[u]},620 ${sY[k]},706 ${sY[k]}" stroke="${col}" stroke-width="${w}" fill="none" marker-end="url(#tu)"/>`; });
+  ['A', 'B', 'C'].forEach(t => s += `<rect x="30" y="${tY[t] - 18}" width="160" height="36" rx="7" fill="#fff3d6" stroke="#e6c27a"/><text x="110" y="${tY[t] + 5}">Texture ${t}</text>`);
+  uY.forEach((y, i) => s += `<rect x="375" y="${y - 16}" width="150" height="32" rx="7" fill="${i === 2 ? '#f3f2ed' : '#eaf0ff'}" stroke="#9fb2f0"/><text x="450" y="${y + 5}" fill="${i === 2 ? '#aaa' : '#111'}">GL_TEXTURE${i}</text>`);
+  Object.entries(TU).forEach(([k, [, u]]) => s += `<rect data-s="${k}" x="710" y="${sY[k] - 18}" width="160" height="36" rx="7" fill="${k === sel ? '#fde2dc' : '#e3f4ea'}" stroke="${k === sel ? '#c2412d' : '#8fd1a8'}" style="cursor:pointer"/><text x="790" y="${sY[k] + 5}" style="pointer-events:none">sampler ${k} = ${u}</text>`);
+  const [t, u] = TU[sel];
+  s += `<text x="450" y="205" fill="#c2412d" font-size="12.5">glActiveTexture(GL_TEXTURE${u}); glBindTexture(GL_TEXTURE_2D, texture${t}); glUniform1i(loc_${sel}, ${u});</text>`;
+  s += '<text x="450" y="240" fill="#666" font-size="12">同一個 unit 可以在 GL_TEXTURE_2D、GL_TEXTURE_3D、GL_TEXTURE_1D_ARRAY… 各綁一個 → sampler2D / sampler3D / sampler1DArray 各取各的</text>';
+  $('tuSvg').innerHTML = s; $('tuSvg').querySelectorAll('[data-s]').forEach(r => r.onclick = () => tuDraw(r.dataset.s));
+}
+tuDraw('X');
+
+// ---------- XOR texture、mipmap、tunnel、wrap ----------
+const TW = 256, XOR = new Float32Array(TW * TW * 3);
+for (let y = 0; y < TW; y++) for (let x = 0; x < TW; x++) { const i = (y * TW + x) * 3; XOR[i] = ((x & y) & 255) / 255; XOR[i + 1] = ((x | y) & 255) / 255; XOR[i + 2] = ((x ^ y) & 255) / 255; }
+(() => { const c = $('xorCv').getContext('2d'), img = c.createImageData(TW, TW); for (let i = 0; i < TW * TW; i++) { img.data[i * 4] = XOR[i * 3] * 255; img.data[i * 4 + 1] = XOR[i * 3 + 1] * 255; img.data[i * 4 + 2] = XOR[i * 3 + 2] * 255; img.data[i * 4 + 3] = 255; } c.putImageData(img, 0, 0); })();
+// mip chain
+const MIPS = [{ w: TW, d: XOR }];
+while (MIPS[MIPS.length - 1].w > 1) { const p = MIPS[MIPS.length - 1], w = p.w / 2, d = new Float32Array(w * w * 3); for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) for (let k = 0; k < 3; k++) d[(y * w + x) * 3 + k] = (p.d[((2 * y) * p.w + 2 * x) * 3 + k] + p.d[((2 * y) * p.w + 2 * x + 1) * 3 + k] + p.d[((2 * y + 1) * p.w + 2 * x) * 3 + k] + p.d[((2 * y + 1) * p.w + 2 * x + 1) * 3 + k]) / 4; MIPS.push({ w, d }); }
+(() => { const c = $('mipCv').getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, 420, 230); let x = 6; c.font = '11px sans-serif';
+  MIPS.slice(0, 7).forEach((m, l) => { const sz = Math.max(4, 200 / Math.pow(2, l)), cv = document.createElement('canvas'); cv.width = cv.height = m.w; const g = cv.getContext('2d'), img = g.createImageData(m.w, m.w); for (let i = 0; i < m.w * m.w; i++) { img.data[i * 4] = m.d[i * 3] * 255; img.data[i * 4 + 1] = m.d[i * 3 + 1] * 255; img.data[i * 4 + 2] = m.d[i * 3 + 2] * 255; img.data[i * 4 + 3] = 255; } g.putImageData(img, 0, 0);
+    c.imageSmoothingEnabled = false; c.drawImage(cv, x, 10, sz, sz); c.fillStyle = '#333'; c.fillText(`L${l}`, x, 226); c.fillText(`${m.w}²`, x, 214); x += sz + 8; }); })();
+const fetchL = (l, u, v, lin) => { const m = MIPS[Math.min(l, MIPS.length - 1)], w = m.w; u = u - Math.floor(u); v = v - Math.floor(v);
+  if (!lin) { const x = Math.min(w - 1, Math.floor(u * w)), y = Math.min(w - 1, Math.floor(v * w)), i = (y * w + x) * 3; return [m.d[i], m.d[i + 1], m.d[i + 2]]; }
+  const fx = u * w - .5, fy = v * w - .5, x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0, at = (x, y) => { x = ((x % w) + w) % w; y = ((y % w) + w) % w; const i = (y * w + x) * 3; return [m.d[i], m.d[i + 1], m.d[i + 2]]; };
+  const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1); return [0, 1, 2].map(k => (a[k] * (1 - ax) + b[k] * ax) * (1 - ay) + (c[k] * (1 - ax) + d[k] * ax) * ay); };
+const TUN = [['nearest', 'GL_NEAREST', '最近的 texel：近處一格一格、遠處嚴重閃爍雜訊。'], ['bilinear', 'GL_LINEAR', '2×2 內插：近處平滑，但遠處仍有雜訊（一個像素蓋了很多 texel，只取 4 個不夠）。'],
+  ['mipmap', 'GL_LINEAR_MIPMAP_LINEAR', '依每個像素蓋到的 texel 數挑 mipmap 層並在兩層間內插（trilinear）：遠處平滑；但地板斜著看時會過度模糊。'], ['aniso', 'trilinear + anisotropic', '沿著被拉長的方向多取幾個樣本：遠處平滑又保留細節（實際需要 GL_TEXTURE_MAX_ANISOTROPY 擴充）。']];
+let tunK = 2;
+$('tunBtns').innerHTML = TUN.map((t, i) => `<button class="b">${t[0]}</button>`).join('');
+$('tunBtns').querySelectorAll('button').forEach((b, i) => b.onclick = () => { tunK = i; tunDraw(); });
+function tunDraw() {
+  const c = $('tunCv').getContext('2d'), W = 420, H = 260, img = c.createImageData(W, H), hz = 40;
+  $('tunBtns').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === tunK));
+  $('tunTxt').innerHTML = `<b><code>${TUN[tunK][1]}</code></b><br>${TUN[tunK][2]}`;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4; let col = [0.08, 0.09, 0.12];
+    if (y > hz) { const dist = 60 / (y - hz), u = (x - W / 2) / W * dist * 1.2, v = dist * 0.35;
+      const du = 1.2 * dist / W * TW, dv = 60 / Math.pow(y - hz, 2) * 0.35 * TW;   // 每像素跨幾個 texel
+      if (tunK === 0) col = fetchL(0, u, v, false); else if (tunK === 1) col = fetchL(0, u, v, true);
+      else if (tunK === 2) { const lod = Math.max(0, Math.log2(Math.max(du, dv))), l0 = Math.floor(lod), f = lod - l0, a = fetchL(l0, u, v, true), b = fetchL(l0 + 1, u, v, true); col = a.map((x2, k) => x2 * (1 - f) + b[k] * f); }
+      else { const mn = Math.min(du, dv), mx = Math.max(du, dv), N = Math.min(8, Math.ceil(mx / Math.max(mn, 1e-3))), lod = Math.max(0, Math.log2(mx / N)), l0 = Math.floor(lod); col = [0, 0, 0];
+        for (let s = 0; s < N; s++) { const t = (s + 0.5) / N - 0.5, vv = v + t * dv / TW; const a = fetchL(l0, u, vv, true); for (let k = 0; k < 3; k++) col[k] += a[k] / N; } }
+      const fade = Math.min(1, (y - hz) / 20); col = col.map(v2 => v2 * fade + 0.08 * (1 - fade)); }
+    img.data[i] = col[0] * 255; img.data[i + 1] = col[1] * 255; img.data[i + 2] = col[2] * 255; img.data[i + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+}
+tunDraw();
+const WR = [['GL_REPEAT', u => u - Math.floor(u)], ['GL_MIRRORED_REPEAT', u => { const f = u - 2 * Math.floor(u / 2); return f > 1 ? 2 - f : f; }], ['GL_CLAMP_TO_EDGE', u => Math.min(Math.max(u, 0), 0.9999)], ['GL_CLAMP_TO_BORDER', u => u]];
+let wrK = 0;
+$('wrapBtns').innerHTML = WR.map(w => `<button class="b">${w[0]}</button>`).join('');
+$('wrapBtns').querySelectorAll('button').forEach((b, i) => b.onclick = () => { wrK = i; wrDraw(); });
+function wrDraw() {
+  const c = $('wrapCv2').getContext('2d'), W = 420, H = 200, img = c.createImageData(W, H), m = MIPS[2];
+  $('wrapBtns').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === wrK));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let u = x / W * 3 - 1, v = (H - y) / H * 3 - 1, col; const fn = WR[wrK][1];
+    if (wrK === 3 && (u < 0 || u >= 1 || v < 0 || v >= 1)) col = [0, 0, 0];
+    else { u = fn(u); v = fn(v); const xx = Math.min(m.w - 1, Math.floor(u * m.w)), yy = Math.min(m.w - 1, Math.floor(v * m.w)), i = (yy * m.w + xx) * 3; col = [m.d[i], m.d[i + 1], m.d[i + 2]]; }
+    const o = (y * W + x) * 4; img.data[o] = col[0] * 255; img.data[o + 1] = col[1] * 255; img.data[o + 2] = col[2] * 255; img.data[o + 3] = 255;
+  }
+  c.putImageData(img, 0, 0); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(W / 3, H / 3, W / 3, H / 3);
+}
+wrDraw();
+
+// ---------- pixel alignment ----------
+function alCalc() {
+  const w = +$('alW').value, ch = +$('alC').value, row = w * ch, need = row % 4 !== 0;
+  $('alTxt').innerHTML = `每列 ${w} × ${ch} = <b>${row} bytes</b>，${row} mod 4 = ${row % 4} → ${need ? `<span style="color:#c2412d"><b>要</b>設 GL_UNPACK_ALIGNMENT = 1</span>（否則 OpenGL 以為每列 ${Math.ceil(row / 4) * 4} bytes，每列多讀 ${Math.ceil(row / 4) * 4 - row} byte，影像越往下越歪）` : '<span style="color:#2f8a5b">不用改</span>'}`;
+}
+['alW', 'alC'].forEach(id => $(id).oninput = alCalc); alCalc();
+</script></body></html>

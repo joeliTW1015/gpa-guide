@@ -14,6 +14,7 @@
 #idx a{margin-right:8px;font-family:ui-monospace,monospace}
 </style></head>
 <body><main>
+<p class="kicker">參考 · API Reference</p>
 <h1>常用 API 參考</h1>
 <p class="mut">整理本課（講義 03–07、Appendix 與作業 template）會用到的函式。每項有：簽名、回傳型別、參數說明、範例、官方文件連結。OpenGL 文件連到 <a href="https://registry.khronos.org/OpenGL-Refpages/gl4/">Khronos OpenGL 4 Reference Pages</a>（也可用 <a href="https://docs.gl/">docs.gl</a>，可切換版本）。</p>
 <div class="note"><b>怎麼讀簽名</b>：<code>GLuint glCreateShader(GLenum shaderType)</code> → 最前面 <code>GLuint</code> 是<b>回傳型別</b>，括號內是<b>參數型別 + 名稱</b>。<code>void</code> = 不回傳。參數型別是 <code>T*</code>（指標）通常代表「你給一塊記憶體，函式把結果寫進去」，例如 <code>glGenBuffers(1, &amp;vbo)</code>。<br>

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>講義 02：OpenGL 概觀（OpenGL Overview）</title><link rel="stylesheet" href="style.css">
+<style>
+.quiz{display:grid;gap:8px}
+.quiz .q{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 14px;box-shadow:var(--shadow)}
+.quiz .q span{flex:1}
+.quiz .q .ans{flex:0 0 auto;font-weight:700;min-width:64px;text-align:center}
+.quiz .ok{color:var(--prog)}.quiz .no{color:var(--warn)}
+.quiz .why{display:block;font-size:13px;color:var(--mut);flex-basis:100%}
+.quiz .q{flex-wrap:wrap}
+#rcv{border:1px solid var(--line);border-radius:10px;background:#fff;display:block;margin:0 auto;max-width:100%}
+.stepbar{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tl text{font-family:var(--font)}
+</style></head>
+<body><main>
+<p class="kicker">講義 02 · OpenGL Overview</p>
+<h1>OpenGL 概觀</h1>
+<p class="lead">OpenGL 是什麼、從哪裡來、它在乎什麼、不在乎什麼；以及寫一支 OpenGL 程式時，周邊有哪些函式庫（GLU、GLUT、GLFW）負責視窗與輸入。</p>
+
+<div class="key"><b>本章重點</b>
+<ul>
+<li><b>OpenGL = Open Graphics Library</b>，是一套跨平台的<b>繪圖 API</b>（不是語言、不是作業系統功能），由顯卡廠商在 driver 裡實作。</li>
+<li>它只管「畫圖」：<b>不管視窗、不管輸入</b>。視窗與鍵盤滑鼠交給 GLUT / GLFW（本課用 GLFW）。</li>
+<li>OpenGL 是一台 <b>state machine</b>：API 分兩類——「建立物件」（buffer、texture、shader、FBO）與「設定 pipeline」（fixed-function 開關、目前用哪個 program、畫到哪裡）。</li>
+<li>OpenGL 3.0 起 fixed-function pipeline 被淘汰，改用 <b>programmable pipeline</b>：用 GLSL 寫 shader 自訂某些 stage。</li>
+</ul></div>
+
+<div class="toc"><a href="#what">OpenGL 是什麼</a><a href="#history">歷史與版本</a><a href="#platforms">各平台版本</a><a href="#world">3D 世界的基本元素</a><a href="#spirit">OpenGL 的精神</a><a href="#pipeline">Fixed vs Programmable</a><a href="#libs">周邊函式庫</a><a href="#structure">程式的基本結構</a><a href="#steps">逐步變真實</a><a href="#resources">資源</a></div>
+
+<!-- ================================================================ -->
+<h2 id="what">OpenGL 是什麼？</h2>
+<h3>小測驗：Yes or No？（點一下看答案）</h3>
+<div class="quiz" id="quiz"></div>
+
+<div class="grid2" style="margin-top:14px">
+<div class="card"><b>About OpenGL</b>
+<ul><li>Open <b>Graphics</b> Library 的縮寫</li>
+<li>一套<b>繪圖渲染 API</b>，用來存取顯示卡的硬體功能</li>
+<li>超過 <b>500 個指令</b>，用來指定影像、貼圖、物件與 shader program</li>
+<li>用來製作<b>互動式 3D 電腦圖學</b>應用程式</li></ul></div>
+<div class="card"><b>設計理念與實作者</b>
+<ul><li>設計成：精簡、<b>與硬體無關</b>的 API；以 <b>primitive</b>（點、線、三角形）為基礎的 rendering pipeline；<b>client-server</b> 架構（你的程式是 client，GPU / driver 是 server）</li>
+<li>誰實作：<b>顯卡廠商</b>為每種硬體 / 作業系統實作（NVIDIA、AMD）；<b>作業系統</b>提供軟體渲染版本（如 Mesa）；甚至<b>你自己</b>（電腦圖學 CS5500 會寫一個）</li></ul></div></div>
+
+<figure class="fig">
+<svg viewBox="0 0 900 200" width="100%" font-size="13" text-anchor="middle">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<g><rect x="20" y="16" width="190" height="40" rx="8" fill="#eaf0ff" stroke="#9fb2f0"/><text x="115" y="41">3D Model（頂點、三角形）</text>
+<rect x="20" y="66" width="190" height="40" rx="8" fill="#eaf0ff" stroke="#9fb2f0"/><text x="115" y="91">Texture（貼圖影像）</text>
+<rect x="20" y="116" width="190" height="40" rx="8" fill="#eaf0ff" stroke="#9fb2f0"/><text x="115" y="141">Light = (1.5, 0.6, 0.2)</text>
+<rect x="20" y="166" width="190" height="30" rx="8" fill="#eaf0ff" stroke="#9fb2f0"/><text x="115" y="186">Material = …</text></g>
+<g stroke="#555" stroke-width="2" marker-end="url(#a)" fill="none"><path d="M212 36 L345 92"/><path d="M212 86 L345 98"/><path d="M212 136 L345 106"/><path d="M212 181 L345 112"/></g>
+<rect x="350" y="62" width="200" height="80" rx="12" fill="#3557c9"/><text x="450" y="98" fill="#fff" font-weight="700" font-size="15">Your OpenGL</text><text x="450" y="118" fill="#fff" font-weight="700" font-size="15">application</text>
+<path d="M552 102 h90" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+<rect x="650" y="40" width="220" height="124" rx="8" fill="#fff" stroke="#999"/><rect x="662" y="52" width="196" height="100" fill="#f3f2ed"/>
+<circle cx="740" cy="104" r="28" fill="#e9b949"/><rect x="780" y="88" width="50" height="40" fill="#c2412d" transform="rotate(-12 805 108)"/><text x="760" y="184" fill="#555">Rendered image</text>
+</svg>
+<figcaption>你的程式提供模型、貼圖、光源、材質等資料，透過 OpenGL 交給 GPU，產生一張影像。</figcaption>
+</figure>
+
+<!-- ================================================================ -->
+<h2 id="history">歷史與版本</h2>
+<figure class="fig">
+<svg class="tl" viewBox="0 0 960 190" width="100%" font-size="12" text-anchor="middle" id="tlSvg"></svg>
+<figcaption>點時間軸上的節點看說明。重點：shader 在 2.0 加入、3.0 起淘汰 fixed-function、macOS 停在 4.1、目前最新是 4.6。</figcaption>
+</figure>
+<div class="card" id="tlTxt"></div>
+<div class="grid2">
+<div class="card"><b>SGI 與 GL</b>
+<p>Silicon Graphics（SGI）在 1982 年把 graphics pipeline <b>做進硬體</b>，徹底改變了繪圖工作站。工程師為它寫了一套叫 <b>GL</b> 的函式庫，大幅簡化 3D 互動程式的開發。</p></div>
+<div class="card"><b>OpenGL 的誕生（1992）</b>
+<p>GL 的成功促成了跨平台的 OpenGL：</p>
+<ul><li>容易使用</li><li><b>專注在渲染</b></li><li>夠貼近硬體，效能好</li><li><b>不包含視窗與輸入</b>，避免依賴特定視窗系統</li></ul></div>
+<div class="card"><b>演進方式</b>
+<ul><li>原本由 <b>ARB</b>（Architecture Review Board：SGI、Microsoft、NVIDIA、HP、3DLabs、IBM 等）維護，後來由 <b>Khronos Group</b> 接手</li>
+<li>版本演進反映新的硬體能力（3D texture、texture object、vertex program…）</li>
+<li>透過 <b>extension</b> 讓廠商提供平台特有的新功能</li>
+<li>目前穩定版本：<b>4.6</b></li></ul></div>
+<div class="card"><b>本課用的版本</b>
+<ul><li>Context：<b>OpenGL 4.1 core profile</b>（macOS 最高支援 4.1）</li>
+<li>Shader 開頭：<code>#version 410 core</code></li>
+<li>需要 4.3+ 的功能（compute shader、SSBO、multi-draw indirect）會特別標註</li></ul></div></div>
+
+<!-- ================================================================ -->
+<h2 id="platforms">OpenGL 家族</h2>
+<div class="tw"><table>
+<tr><th style="width:18%">API</th><th>定位</th><th>特色</th></tr>
+<tr><td><b>OpenGL</b></td><td>桌機高效能繪圖的基礎</td><td>Windows / Linux / macOS；本課使用</td></tr>
+<tr><td><b>OpenGL ES</b></td><td>嵌入式裝置（手機、遊戲機）的 3D 加速標準</td><td>OpenGL 的精簡子集</td></tr>
+<tr><td><b>WebGL</b></td><td>瀏覽器裡的 3D</td><td>WebGL 1.0 ≈ OpenGL ES 2.0；WebGL 2.0 ≈ OpenGL ES 3.0</td></tr>
+<tr><td><b>Vulkan</b></td><td>又稱「OpenGL Next」</td><td>理念類似 AMD Mantle、Direct3D 12：更底層、開發者自己管理記憶體與同步；完全跨平台（Windows、Linux、Android…）；支援 ray tracing pipeline</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="world">進入 3D 世界前要準備的東西</h2>
+<div class="grid3">
+<div class="card"><b>座標系（Cartesian）</b><p>畫東西的空間：3D 的 world / local 座標，以及 2D 的螢幕座標。OpenGL 用右手系、y 朝上。詳見 <a href="l01-transform.html#hand">講義 01</a>。</p></div>
+<div class="card"><b>3D Primitives</b><p>有「三個維度」量測的物體。GPU 最終只畫點、線、三角形；所有模型都是一堆三角形。</p></div>
+<div class="card"><b>相機（Viewing Camera）</b><p><b>正交</b>：線段投影後長度與距離無關。<b>透視</b>：越遠越小。詳見 <a href="l01-transform.html#proj">Projection</a>。</p></div>
+<div class="card"><b>3D Transformations</b><p>Translation、rotation、scaling，把物體擺到正確的位置。詳見 <a href="l01-transform.html#model">Model 矩陣</a>。</p></div>
+<div class="card"><b>Material &amp; Lighting</b><p>顏色、貼圖、shading 等，讓表面看起來像真的材質。</p></div>
+<div class="card"><b>Render to Frame-Buffer</b><p>最後把結果畫進 framebuffer，顯示在螢幕上（或畫進 texture 做後製，見 <a href="06-fragment-fbo.html#offscreen">講義 06</a>）。</p></div></div>
+
+<!-- ================================================================ -->
+<h2 id="spirit">OpenGL 在乎什麼：State Machine</h2>
+<p>OpenGL 像一台有很多開關和插槽的機器。你先<b>設定狀態</b>（插上資料、扳好開關），再下 <b>draw command</b>；機器就用<b>當下的狀態</b>畫圖。API 大致分成兩類：</p>
+<div class="grid2">
+<div class="card" style="border-top:4px solid #7c5cff"><b>APIs to Specify Objects（建立物件）</b>
+<ul><li>Vertex / Index Buffers</li><li>1D、2D、3D Textures</li><li>Shader Programs</li><li>Framebuffer Objects</li></ul>
+<p class="mut">→ 詳見 <a href="l04-objects.html">講義 04 OpenGL Objects</a></p></div>
+<div class="card" style="border-top:4px solid #3557c9"><b>APIs to Configure the Pipeline（設定 pipeline）</b>
+<ul><li>Fixed-function stage 的狀態（depth test、culling、blending…）</li><li>目前使用哪個 shader program</li><li>目前畫到哪個 render target</li></ul>
+<p class="mut">→ 詳見 <a href="01-pipeline.html">講義 03 Rendering Pipeline</a></p></div></div>
+<ul>
+<li><b>OpenGL 物件以 <code>GLuint</code> 識別</b>：<code>glGen*</code> / <code>glCreate*</code> 拿到 ID → <code>glBind*</code> 掛上 pipeline → 操作 → <code>glDelete*</code>。</li>
+<li>典型一幀：<code>設定 Object#1 → draw → 設定 Object#2 → draw …</code>；共用設定的物件連續畫可以少呼叫幾次 API（省 CPU）。</li>
+</ul>
+<div class="ex"><b>範例：State machine 是什麼意思？</b>
+<p><code>glDraw*</code> 不帶「用哪個 shader、哪份資料」的參數，而是用<b>當下開關的狀態</b>：</p>
+<pre><code>glUseProgram(redShader);      <span class="c">// 開關：目前 shader = 紅色</span>
+glBindVertexArray(cubeVAO);   <span class="c">// 開關：目前資料 = 立方體</span>
+glDrawArrays(GL_TRIANGLES, 0, 36);   <span class="c">// 畫出紅色立方體</span>
+
+glBindVertexArray(sphereVAO); <span class="c">// 只換資料，shader 沒改</span>
+glDrawArrays(GL_TRIANGLES, 0, 960);  <span class="c">// 畫出「紅色」球 —— 因為 shader 狀態還留著</span></code></pre>
+<p>所以 bug 常來自「狀態殘留」：上一個物件開的設定（blending、某張 texture）影響了下一個物件。</p>
+<p><b>為什麼用 GLuint ID？</b>物件實際存在 driver / GPU 裡，你手上只有一個編號（像檔案的 file descriptor）。例如 <code>glGenBuffers(1, &amp;vbo)</code> 後 <code>vbo</code> 可能是 <code>1</code>，之後所有操作都用這個 1 指名。</p></div>
+<div class="ex"><b>名詞小辭典</b>
+<table>
+<tr><th style="width:22%">名詞</th><th>白話解釋</th></tr>
+<tr><td>Vertex（頂點）</td><td>一個點加上它的屬性（位置、顏色、法向量、UV…）。一個三角形 = 3 個 vertex。</td></tr>
+<tr><td>Primitive</td><td>由頂點組成的基本圖形：點、線、三角形。GPU 只會畫這三種。</td></tr>
+<tr><td>Fragment</td><td>「候選像素」：三角形蓋到的每個像素產生一個 fragment，帶有插值後的顏色 / 深度。通過 depth test 等檢查後才會真正寫成 <b>pixel</b>。</td></tr>
+<tr><td>Shader</td><td>跑在 GPU 上的小程式，用 GLSL 寫。Vertex shader 每頂點跑一次、Fragment shader 每 fragment 跑一次，成千上萬個同時平行執行。</td></tr>
+<tr><td>Buffer / Texture</td><td>放在 GPU 記憶體的資料。Buffer 像一維陣列（頂點資料），Texture 像圖片（可被 filter 取樣）。</td></tr>
+<tr><td>Context</td><td>OpenGL 的「執行環境」，記錄所有狀態與物件。GLFW 建視窗時順便建立。</td></tr>
+<tr><td>Draw call</td><td>一次 <code>glDraw*</code> 呼叫 = 叫 GPU 用目前的設定畫一批 primitive。</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="pipeline">Fixed-Function vs Programmable Pipeline</h2>
+<p><b>Pipeline</b>：由多個 stage 組成，資料流進來、在每個 stage 被處理、再流出去。<b>Fixed-function stage</b> 只能調整有限的狀態；<b>programmable stage</b> 可以放自己寫的 shader，自由度高很多。</p>
+<figure class="fig">
+<svg id="fpSvg" viewBox="0 0 900 330" width="100%" font-size="12.5" text-anchor="middle"></svg>
+<figcaption>左：OpenGL 3.0 以前的 fixed-function pipeline，每個 stage 都是固定功能。右：現代的 programmable pipeline，綠色可自訂、橘色可選、灰色固定。</figcaption>
+</figure>
+<div class="grid2">
+<div class="card"><b>Fixed-function（legacy）：一台很多按鈕的機器</b>
+<p>OpenGL 3.0 以前的做法。可以設定很多開關與數值，但<b>無法改變功能怎麼實作、也無法改變執行順序</b>。</p>
+<p class="mut">比喻：面對一台按鈕超多的機器——「要按哪些按鈕才能得到我要的效果？」</p></div>
+<div class="card"><b>Programmable：自己寫程式產生效果</b>
+<p>Shader 在 OpenGL 2.0 引入，3.0 納入 core profile；fixed-function 從 3.0 起被淘汰。用 <b>GLSL</b>（OpenGL Shading Language）自訂 pipeline 中的某些 stage。</p>
+<p class="mut">比喻：「來寫個程式做出這個效果吧！」</p></div></div>
+<div class="tw"><table>
+<tr><th></th><th>Programmable Pipeline</th><th>Fixed-Function Pipeline</th></tr>
+<tr><td><b>彈性</b></td><td class="ok">＋ 可以在 shader 裡實作各種演算法</td><td>－ 客製化能力有限</td></tr>
+<tr><td><b>簡單的應用</b></td><td>－ 必須設定整條 pipeline</td><td>＋ 設定少就能完成簡單任務</td></tr>
+<tr><td><b>複雜的應用</b></td><td>＋ 可以做出各種效果</td><td>－ 多數進階效果做不到</td></tr>
+<tr><td><b>學習曲線</b></td><td>－ 要先完整了解 pipeline 和 GLSL 才能寫</td><td>＋ 不太懂也能寫出簡單程式</td></tr>
+<tr><td><b>部署</b></td><td>－ 要考慮各種顯卡 driver 環境</td><td>＋ 幾乎所有 driver 都能跑</td></tr>
+</table></div>
+<div class="warn">網路上很多舊教學用 <code>glBegin / glEnd</code>、<code>glVertex3f</code>、<code>glTranslatef</code>、<code>glPushMatrix</code>——那是 fixed-function，本課（和作業）<b>禁止使用</b>，用了直接 0 分。</div>
+
+<!-- ================================================================ -->
+<h2 id="libs">周邊函式庫：誰負責什麼</h2>
+<figure class="fig">
+<svg viewBox="0 0 900 270" width="100%" font-size="13" text-anchor="middle">
+<rect x="150" y="12" width="600" height="40" rx="8" fill="#3557c9"/><text x="450" y="37" fill="#fff" font-weight="700">Application program（你的程式）</text>
+<rect x="150" y="66" width="150" height="40" rx="8" fill="#eaf0ff" stroke="#9fb2f0"/><text x="225" y="84">Motif widget</text><text x="225" y="99" font-size="11" fill="#666">或類似 GUI 工具</text>
+<rect x="315" y="66" width="185" height="40" rx="8" fill="#e3f4ea" stroke="#8fd1a8"/><text x="407" y="84" font-weight="700">GLUT / GLFW</text><text x="407" y="99" font-size="11" fill="#666">視窗、輸入、主迴圈</text>
+<rect x="515" y="66" width="235" height="40" rx="8" fill="#fff3d6" stroke="#e6c27a"/><text x="632" y="84" font-weight="700">GLU</text><text x="632" y="99" font-size="11" fill="#666">工具函式（NURBS、quadric…）</text>
+<rect x="150" y="120" width="350" height="40" rx="8" fill="#f3e8ff" stroke="#c6a7f2"/><text x="325" y="138" font-weight="700">GLX / WGL / AGL</text><text x="325" y="153" font-size="11" fill="#666">把 OpenGL 接到視窗系統</text>
+<rect x="515" y="120" width="235" height="40" rx="8" fill="#ffe4dc" stroke="#f0a58f"/><text x="632" y="145" font-weight="700">GL（OpenGL core）</text>
+<rect x="150" y="174" width="350" height="40" rx="8" fill="#eceef1" stroke="#c3c8cf"/><text x="325" y="199">X Window、Win32、Mac OS</text>
+<rect x="515" y="174" width="235" height="40" rx="8" fill="#eceef1" stroke="#c3c8cf"/><text x="632" y="199">（driver）</text>
+<rect x="150" y="228" width="600" height="36" rx="8" fill="#4b535d"/><text x="450" y="251" fill="#fff" font-weight="700">Software and / or hardware（GPU）</text>
+</svg>
+<figcaption>Software architecture：你的程式同時用到視窗工具（GLUT / GLFW）、GLU、GL；GL 透過 GLX（Linux）/ WGL（Windows）/ AGL（macOS）和作業系統的視窗系統接在一起。</figcaption>
+</figure>
+<div class="tw"><table>
+<tr><th style="width:20%">函式庫</th><th>功能</th><th>本課</th></tr>
+<tr><td><b>GL</b>（OpenGL core）</td><td>繪圖本身。Windows 是 <code>OpenGL32</code>、Unix / Linux 多是 <code>libGL</code></td><td>使用（core profile）</td></tr>
+<tr><td><b>GLU</b>（OpenGL Utility Library）</td><td>用 GL 實作的常用工具，免得重寫：NURBS、tessellator、quadric 形狀（球、圓柱）等</td><td>不用（大多是 fixed-function 時代的東西；矩陣改用 GLM）</td></tr>
+<tr><td><b>GLX / WGL / AGL</b></td><td>把 OpenGL 接到 X Window / Windows / Macintosh 的視窗系統</td><td>由 GLFW 幫你處理</td></tr>
+<tr><td><b>GLUT</b>（OpenGL Utility Toolkit，現在用 freeglut）</td><td>建立視窗、註冊 callback（render、resize、鍵盤滑鼠）、進入事件迴圈</td><td>不用</td></tr>
+<tr><td><b>GLFW</b>（Graphics Library Framework）</td><td>GLUT 的替代品，支援 macOS；同樣負責視窗、context、輸入</td><td><b>使用</b>（見 <a href="02-project-syntax.html#skel">程式骨架</a>）</td></tr>
+<tr><td><b>GLAD</b></td><td>在執行時載入 OpenGL 函式指標（講義 Appendix）</td><td><b>使用</b></td></tr>
+</table></div>
+<div class="grid2">
+<div class="card"><b>GLUT 的 callback</b>
+<p>「發生某件事時要呼叫的函式」，先註冊給 GLUT：</p>
+<pre><code>glutDisplayFunc(display);    <span class="c">// 需要重畫時</span>
+glutIdleFunc(idle);          <span class="c">// 沒事做時（做動畫）</span>
+glutKeyboardFunc(keyboard);  <span class="c">// 按鍵時</span></code></pre></div>
+<div class="card"><b>GLFW 的對應寫法（本課）</b>
+<pre><code>glfwSetKeyCallback(window, key_callback);
+glfwSetCursorPosCallback(window, cursor_callback);
+glfwSetFramebufferSizeCallback(window, resize_callback);
+<span class="c">// 重畫和動畫：自己寫 while 迴圈，每圈畫一次</span></code></pre></div></div>
+
+<!-- ================================================================ -->
+<h2 id="structure">OpenGL 程式的基本結構</h2>
+<figure class="fig">
+<svg viewBox="0 0 900 220" width="100%" font-size="13" text-anchor="middle">
+<defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+<rect x="20" y="80" width="160" height="56" rx="10" fill="#e3f4ea" stroke="#8fd1a8"/><text x="100" y="104" font-weight="700">① 設定視窗</text><text x="100" y="122" font-size="11" fill="#666">glfwInit、glfwCreateWindow</text>
+<rect x="220" y="80" width="170" height="56" rx="10" fill="#eaf0ff" stroke="#9fb2f0"/><text x="305" y="104" font-weight="700">② 初始化 OpenGL 狀態</text><text x="305" y="122" font-size="11" fill="#666">GLAD、shader、buffer、texture</text>
+<rect x="470" y="20" width="170" height="56" rx="10" fill="#fff3d6" stroke="#e6c27a"/><text x="555" y="44" font-weight="700">③ 處理使用者事件</text><text x="555" y="62" font-size="11" fill="#666">glfwPollEvents → callbacks</text>
+<rect x="470" y="140" width="170" height="56" rx="10" fill="#ffe4dc" stroke="#f0a58f"/><text x="555" y="164" font-weight="700">④ 繪圖</text><text x="555" y="182" font-size="11" fill="#666">glClear、glDraw*、swap</text>
+<rect x="720" y="80" width="160" height="56" rx="10" fill="#eceef1" stroke="#c3c8cf"/><text x="800" y="104" font-weight="700">⑤ 結束清理</text><text x="800" y="122" font-size="11" fill="#666">glDelete*、glfwTerminate</text>
+<g stroke="#555" stroke-width="2" fill="none" marker-end="url(#b)"><path d="M182 108 h34"/><path d="M392 100 Q430 60 466 50"/>
+<path d="M640 48 Q700 100 640 166"/><path d="M470 168 Q410 108 470 50"/><path d="M642 108 h74" stroke-dasharray="5 4"/></g>
+<text x="690" y="88" font-size="11" fill="#555">每一幀</text><text x="680" y="126" font-size="11" fill="#555">視窗關閉</text>
+</svg>
+<figcaption>不論用 GLUT 還是 GLFW，結構都一樣：先建視窗、初始化狀態，然後進入「處理事件 → 畫一幀」的迴圈。對應的 GLFW 程式碼見 <a href="02-project-syntax.html#skel">程式骨架</a>。</figcaption>
+</figure>
+
+<!-- ================================================================ -->
+<h2 id="steps">逐步變真實（A step-wise illustration）</h2>
+<p>講義用同一個場景，示範從線框到複雜光照，每多一個技術畫面就更真實一點。下面是用 JavaScript 寫的迷你軟體 rasterizer（每個像素算一次，和 GPU 做的事一樣），可以逐步切換：</p>
+<div class="stepbar" id="stepBtns"></div>
+<div class="grid2">
+<canvas id="rcv" width="420" height="300"></canvas>
+<div class="card" id="stepTxt"></div></div>
+<div class="ctrl">轉動場景 <input type="range" id="rrot" min="-180" max="180" value="-30"> 光源角度 <input type="range" id="rlit" min="0" max="360" value="45"></div>
+<p class="mut">後續講義對應：shading、材質、貼圖在 fragment shader 實作（<a href="06-fragment-fbo.html">講義 06</a>）；貼圖物件在 <a href="l04-objects.html#tex">講義 04</a>。</p>
+
+<!-- ================================================================ -->
+<h2 id="resources">資源</h2>
+<div class="grid2">
+<div class="card"><b>網站</b>
+<ul><li><a href="https://www.opengl.org">opengl.org</a>、<a href="https://www.khronos.org/">khronos.org</a>、<a href="http://openglinsights.com/">openglinsights.com</a></li>
+<li><a href="https://www.shadertoy.com">Shadertoy</a>：線上寫 fragment shader</li>
+<li><a href="https://www.glfw.org/">GLFW</a>、<a href="http://freeglut.sourceforge.net/">freeglut</a></li></ul></div>
+<div class="card"><b>參考書</b>
+<ul><li><i>The OpenGL Programming Guide</i>（紅皮書）</li>
+<li>本課許多範例（Spinning cube、Alien rain、Star field…）來自 <i>OpenGL SuperBible</i> 系列</li></ul></div></div>
+</main>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// ---------- 小測驗 ----------
+const QZ = [['OpenGL = Open Game Library', 0, 'G 是 Graphics，不是 Game。'], ['OpenGL 是一種程式語言', 0, '它是 API（一組函式）。shader 用的 GLSL 才是語言。'],
+  ['OpenGL 是用來寫 MS Windows 程式的', 0, '它跨平台，和 Windows 程式設計無關（那是 Win32 / DirectX）。'], ['OpenGL 與作業系統無關', 1, '同一套 API 在不同 OS 上都能用。'], ['OpenGL 是跨平台的', 1, 'Windows、Linux、macOS（到 4.1）都支援。']];
+$('quiz').innerHTML = QZ.map(([q, a, w], i) => `<div class="q" data-i="${i}"><span>${q}</span><button class="b ans">?</button><span class="why" hidden>${w}</span></div>`).join('');
+$('quiz').querySelectorAll('.q').forEach(el => el.querySelector('button').onclick = () => {
+  const [, a] = QZ[el.dataset.i], b = el.querySelector('button');
+  b.textContent = a ? '✓ Yes' : '✗ No'; b.className = 'b ans ' + (a ? 'ok' : 'no'); el.querySelector('.why').hidden = false;
+});
+
+// ---------- 時間軸 ----------
+const TL = [[1982, 'SGI 硬體 pipeline + GL', 'Silicon Graphics 把 graphics pipeline 實作在硬體上，並提供 GL 函式庫讓程式存取。'],
+  [1992, 'OpenGL 1.0', '以 GL 為基礎的跨平台版本誕生，由 ARB 維護。只有 fixed-function pipeline。'],
+  [2004, 'OpenGL 2.0', '<b>加入 shader 與 GLSL</b>（programmable pipeline 登場，但和 fixed-function 並存）。'],
+  [2006, 'Khronos 接手', 'ARB 併入 Khronos Group，之後 OpenGL、OpenGL ES、WebGL、Vulkan 都由 Khronos 制定。'],
+  [2008, 'OpenGL 3.0', '<b>淘汰 fixed-function</b>（deprecation model）；3.2 起分成 core profile 與 compatibility profile。'],
+  [2010, 'OpenGL 4.1', '<b>本課使用的版本</b>，也是 macOS 支援的最高版本。'],
+  [2012, 'OpenGL 4.3', 'Compute shader、SSBO、multi-draw indirect（講義 07 的 GPU-driven rendering 需要）。'],
+  [2016, 'Vulkan 1.0', '新一代低階 API（「OpenGL Next」）。'],
+  [2017, 'OpenGL 4.6', '目前最新的穩定版本。']];
+(() => {
+  const X = y => 40 + (y - 1980) / 40 * 880;
+  let s = '<line x1="30" y1="95" x2="930" y2="95" stroke="#c3c8cf" stroke-width="3"/>';
+  TL.forEach(([y, t], i) => {
+    const up = i % 2 === 0, x = X(y);
+    s += `<g data-i="${i}" style="cursor:pointer"><circle cx="${x}" cy="95" r="9" fill="${y === 2010 ? '#c2412d' : '#3557c9'}" stroke="#fff" stroke-width="2"/>` +
+      `<line x1="${x}" y1="${up ? 86 : 104}" x2="${x}" y2="${up ? 50 : 140}" stroke="#c3c8cf"/>` +
+      `<text x="${x}" y="${up ? 34 : 160}" font-weight="700">${y}</text><text x="${x}" y="${up ? 48 : 176}" fill="#4b535d">${t}</text></g>`;
+  });
+  $('tlSvg').innerHTML = s;
+  const pick = i => { $('tlTxt').innerHTML = `<b>${TL[i][0]}　${TL[i][1]}</b><br>${TL[i][2]}`; $('tlSvg').querySelectorAll('g').forEach((g, j) => g.querySelector('circle').setAttribute('r', j === i ? 12 : 9)); };
+  $('tlSvg').querySelectorAll('g').forEach(g => g.onclick = () => pick(+g.dataset.i)); pick(5);
+})();
+
+// ---------- fixed vs programmable 圖 ----------
+(() => {
+  const col = { prog: '#c6f0d6', opt: '#fde7b6', fix: '#e5e7eb', io: '#dbeafe' };
+  const L = [['Vertex\nProcessing', 'fix'], ['Primitive\nProcessing', 'fix'], ['Rasterizer', 'fix'], ['Fragment\nProcessing', 'fix'], ['Per-Sample\nProcessing', 'fix']];
+  const R = [['Vertex\nSpecification', 'fix'], ['Vertex\nShader', 'prog'], ['Tessellation\nShader', 'opt'], ['Geometry\nShader', 'opt'], ['Rasterizer', 'fix'], ['Fragment\nShader', 'prog'], ['Per-Sample\nProcessing', 'fix']];
+  let s = '<defs><marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#666"/></marker></defs>';
+  const col_ = (list, x0, title) => {
+    s += `<text x="${x0 + 60}" y="16" font-weight="700" font-size="13.5">${title}</text>`;
+    const h = 270 / list.length;
+    list.forEach(([n, t], i) => {
+      const y = 26 + i * h, lines = n.split('\n');
+      s += `<rect x="${x0}" y="${y}" width="120" height="${h - 10}" rx="7" fill="${col[t]}" stroke="#999" ${t === 'opt' ? 'stroke-dasharray="5 3"' : ''}/>`;
+      lines.forEach((l, k) => s += `<text x="${x0 + 60}" y="${y + (h - 10) / 2 + 4 + (k - (lines.length - 1) / 2) * 14}">${l}</text>`);
+      if (i < list.length - 1) s += `<path d="M${x0 + 60} ${y + h - 10} v8" stroke="#666" stroke-width="1.6" marker-end="url(#c)"/>`;
+    });
+  };
+  const mem = (x) => { s += `<rect x="${x}" y="80" width="90" height="160" rx="8" fill="#fff" stroke="#999"/><text x="${x + 45}" y="106" font-weight="700">GPU</text><text x="${x + 45}" y="122" font-weight="700">Memory</text><text x="${x + 45}" y="160" fill="#666">Geometry</text><text x="${x + 45}" y="180" fill="#666">Textures</text><text x="${x + 45}" y="200" fill="#666">Buffers</text>`; };
+  mem(30); col_(L, 150, 'Fixed-function（legacy）');
+  s += '<line x1="440" y1="10" x2="440" y2="320" stroke="#e3e1da" stroke-width="2"/>';
+  mem(480); col_(R, 600, 'Programmable（OpenGL 3.0+）');
+  s += '<text x="790" y="120" text-anchor="start" fill="#2f8a5b" font-size="12">■ programmable</text><text x="790" y="140" text-anchor="start" fill="#b7791f" font-size="12">■ optional</text><text x="790" y="160" text-anchor="start" fill="#6b7280" font-size="12">■ fixed function</text>';
+  $('fpSvg').innerHTML = s;
+})();
+
+// ---------- 迷你 rasterizer：逐步變真實 ----------
+const STEPS = [
+  ['線框', 'Primitive Wireframe', '只畫三角形的邊。這就是 GPU 拿到的原始幾何：一堆三角形。<code>glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)</code> 可以在 OpenGL 裡切成這個模式。'],
+  ['彩色線框', 'Colored Wireframe', '每個物件的邊用不同顏色，開始能分辨物體。'],
+  ['實心 + 線框', 'Solid Rendering with Wireframe', '三角形填滿，並用 <b>depth test（z-buffer）</b>決定前後遮擋；線框疊在上面方便看結構。'],
+  ['固定色', 'Constant Shading', '每個物件一個顏色，沒有光照 → 看不出立體感（作業 1 最後的版本就是這樣加貼圖）。'],
+  ['Flat', 'Flat Shading', '每個<b>面</b>用自己的法向量算一次光照（dot(N, L)）→ 有立體感，但看得到一面一面的稜角。'],
+  ['Smooth', 'Smooth Shading', '每個<b>頂點</b>有法向量，光照在三角形內<b>內插</b>（Gouraud）→ 曲面變平滑。對應 VS out → rasterizer 插值 → FS in。'],
+  ['材質', 'Materials', '加上 <b>specular</b> 高光（Phong）：不同材質反光程度不同，球看起來像塑膠。'],
+  ['貼圖', 'Textures', '用 UV 座標到貼圖取色（這裡是程式產生的格紋），表面細節不必用更多三角形。'],
+  ['複雜光照', 'Complex Lighting Effects', '加上<b>陰影</b>（判斷光線是否被擋）和環境光，畫面更真實。真正的 OpenGL 會用 shadow mapping（離屏渲染深度，見講義 06）。']];
+let stepK = 7;
+$('stepBtns').innerHTML = STEPS.map((s, i) => `<button class="b" data-k="${i}">${i + 1}. ${s[0]}</button>`).join('');
+$('stepBtns').querySelectorAll('button').forEach(b => b.onclick = () => { stepK = +b.dataset.k; render(); });
+
+// 場景：球 + 立方體 + 地板
+function sphere(cx, cy, cz, r, nu, nv, col) {
+  const V = [], T = [];
+  for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
+    const u = i / nu, v = j / nv, th = u * 2 * Math.PI, ph = v * Math.PI;
+    const n = [Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th)];
+    V.push({ p: [cx + r * n[0], cy + r * n[1], cz + r * n[2]], n, uv: [u * 4, v * 2] });
+  }
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1; T.push([a, c, b], [b, c, d]); }
+  return { V, T, col, spec: 1 };
+}
+function box(cx, cy, cz, s, col) {
+  const V = [], T = [], F = [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 1, 0], [0, 0, -1]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]], [[0, -1, 0], [0, 0, -1], [1, 0, 0]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]]];
+  F.forEach(([n, a, b]) => {
+    const k = V.length;
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([x, y]) => V.push({ p: [cx + s * (n[0] + a[0] * x + b[0] * y), cy + s * (n[1] + a[1] * x + b[1] * y), cz + s * (n[2] + a[2] * x + b[2] * y)], n, uv: [(x + 1) / 2, (y + 1) / 2] }));
+    T.push([k, k + 2, k + 1], [k, k + 3, k + 2]);
+  });
+  return { V, T, col, spec: 0.3 };
+}
+function plane(y, s, col) { const V = [], T = [], N = 6; for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) V.push({ p: [-s + 2 * s * i / N, y, -s + 2 * s * j / N], n: [0, 1, 0], uv: [i / 1.5, j / 1.5] }); for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = j * (N + 1) + i; T.push([a, a + N + 1, a + 1], [a + 1, a + N + 1, a + N + 2]); } return { V, T, col, spec: 0 }; }
+const SCENE = [plane(-1, 3, [0.62, 0.66, 0.6]), sphere(-0.8, -0.1, 0.2, 0.9, 18, 12, [0.85, 0.3, 0.25]), box(1.1, -0.45, -0.3, 0.55, [0.3, 0.45, 0.85])];
+const WIRE = [[150, 150, 150], [210, 60, 50], [50, 90, 210]];
+function render() {
+  const cv = $('rcv'), W = cv.width, H = cv.height, c = cv.getContext('2d');
+  $('stepBtns').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === stepK));
+  $('stepTxt').innerHTML = `<b>${stepK + 1}. ${STEPS[stepK][1]}</b><br>${STEPS[stepK][2]}`;
+  const rot = $('rrot').value * Math.PI / 180, la = $('rlit').value * Math.PI / 180;
+  const L = (() => { const v = [Math.cos(la) * 0.7, 0.75, Math.sin(la) * 0.7], l = Math.hypot(...v); return v.map(x => x / l); })();
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const xf = p => [p[0] * cr + p[2] * sr, p[1], -p[0] * sr + p[2] * cr];   // 繞 y 旋轉場景
+  const cam = [0, 1.6, 6.2];
+  const proj = p => { const e = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]]; const pitch = 0.22, y = e[1] * Math.cos(pitch) - e[2] * Math.sin(pitch), z = e[1] * Math.sin(pitch) + e[2] * Math.cos(pitch); const d = -z, f = 340; return [W / 2 + e[0] * f / d, H / 2 - y * f / d, d]; };
+  const img = c.createImageData(W, H), zb = new Float32Array(W * H).fill(1e9);
+  for (let i = 0; i < W * H; i++) { const t = i / W / H; img.data[i * 4] = 236 - t * 20; img.data[i * 4 + 1] = 240 - t * 18; img.data[i * 4 + 2] = 246 - t * 10; img.data[i * 4 + 3] = 255; }
+  const shadowOf = (p) => {   // 光線往 L 方向是否打到球（解析解）
+    const s = SCENE[1].V; const C = xf([-0.8, -0.1, 0.2]), r = 0.9; const oc = [p[0] - C[0], p[1] - C[1], p[2] - C[2]];
+    const b = oc[0] * L[0] + oc[1] * L[1] + oc[2] * L[2], cc = oc[0] ** 2 + oc[1] ** 2 + oc[2] ** 2 - r * r; if (b * b - cc > 0 && -b - Math.sqrt(b * b - cc) > 1e-3) return true;
+    const B = xf([1.1, -0.45, -0.3]), h = 0.55;   // 立方體：用球近似判斷
+    const ob = [p[0] - B[0], p[1] - B[1], p[2] - B[2]], b2 = ob[0] * L[0] + ob[1] * L[1] + ob[2] * L[2], c2 = ob[0] ** 2 + ob[1] ** 2 + ob[2] ** 2 - (h * 1.15) ** 2;
+    return b2 * b2 - c2 > 0 && -b2 - Math.sqrt(b2 * b2 - c2) > 1e-3;
+  };
+  const shade = (o, n, p, uv) => {
+    let base = o.col;
+    if (stepK >= 7) { const ch = (Math.floor(uv[0] * 4) + Math.floor(uv[1] * 4)) % 2; base = base.map(v => v * (ch ? 1 : 0.62)); }
+    if (stepK === 3) return base;
+    const nd = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
+    let lit = 1, amb = 0.22;
+    if (stepK >= 8) { if (shadowOf(p)) lit = 0.25; amb = 0.3; }
+    let col = base.map(v => v * (amb + 0.78 * nd * lit));
+    if (stepK >= 6 && o.spec) {
+      const v = [cam[0] - p[0], cam[1] - p[1], cam[2] - p[2]], vl = Math.hypot(...v), hv = [L[0] + v[0] / vl, L[1] + v[1] / vl, L[2] + v[2] / vl], hl = Math.hypot(...hv);
+      const sp = Math.pow(Math.max(0, (n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2]) / hl), 40) * o.spec * lit; col = col.map(x => x + sp * 0.9);
+    }
+    return col;
+  };
+  const wires = [];
+  SCENE.forEach((o, oi) => {
+    const P = o.V.map(v => { const w = xf(v.p); return { w, s: proj(w), n: xf(v.n) }; });
+    o.T.forEach(t => {
+      const [a, b, d] = t.map(k => P[k]);
+      if (stepK <= 1) { wires.push([a.s, b.s, d.s, oi]); return; }
+      const area = (b.s[0] - a.s[0]) * (d.s[1] - a.s[1]) - (b.s[1] - a.s[1]) * (d.s[0] - a.s[0]);
+      if (area <= 0 && oi > 0) return;   // back-face culling（地板雙面）
+      const fn = (() => { const u = [b.w[0] - a.w[0], b.w[1] - a.w[1], b.w[2] - a.w[2]], v = [d.w[0] - a.w[0], d.w[1] - a.w[1], d.w[2] - a.w[2]], n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]], l = Math.hypot(...n) || 1; return n.map(x => -x / l); })();
+      const ns = oi === 0 ? [[0, 1, 0], [0, 1, 0], [0, 1, 0]] : [a.n, b.n, d.n];
+      const flatN = stepK === 4 ? (oi === 0 ? [0, 1, 0] : fn) : null;
+      // Gouraud（step 5）：頂點算色再內插；step 6+：逐像素（Phong）
+      const vcol = stepK === 5 ? [a, b, d].map((q, k) => shade(o, ns[k], q.w, [0, 0])) : null;
+      const uvs = t.map(k => o.V[k].uv);
+      const minx = Math.max(0, Math.floor(Math.min(a.s[0], b.s[0], d.s[0]))), maxx = Math.min(W - 1, Math.ceil(Math.max(a.s[0], b.s[0], d.s[0])));
+      const miny = Math.max(0, Math.floor(Math.min(a.s[1], b.s[1], d.s[1]))), maxy = Math.min(H - 1, Math.ceil(Math.max(a.s[1], b.s[1], d.s[1])));
+      const A2 = area;
+      if (Math.abs(A2) < 1e-6) return;
+      for (let y = miny; y <= maxy; y++) for (let x = minx; x <= maxx; x++) {
+        const px = x + .5, py = y + .5;
+        let w0 = ((b.s[0] - px) * (d.s[1] - py) - (b.s[1] - py) * (d.s[0] - px)) / A2, w1 = ((d.s[0] - px) * (a.s[1] - py) - (d.s[1] - py) * (a.s[0] - px)) / A2, w2 = 1 - w0 - w1;
+        if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+        // 透視校正內插
+        const iz = w0 / a.s[2] + w1 / b.s[2] + w2 / d.s[2], z = 1 / iz, k0 = w0 / a.s[2] * z, k1 = w1 / b.s[2] * z, k2 = w2 / d.s[2] * z;
+        const id = y * W + x; if (z >= zb[id]) continue; zb[id] = z;
+        let col;
+        if (stepK === 2) col = o.col.map(v => v * 0.92);
+        else if (vcol) col = [0, 1, 2].map(i => vcol[0][i] * k0 + vcol[1][i] * k1 + vcol[2][i] * k2);
+        else {
+          const wp = [0, 1, 2].map(i => a.w[i] * k0 + b.w[i] * k1 + d.w[i] * k2), uv = [0, 1].map(i => uvs[0][i] * k0 + uvs[1][i] * k1 + uvs[2][i] * k2);
+          let n = flatN || (() => { const q = [0, 1, 2].map(i => ns[0][i] * k0 + ns[1][i] * k1 + ns[2][i] * k2), l = Math.hypot(...q); return q.map(v => v / l); })();
+          col = shade(o, n, wp, uv);
+        }
+        img.data[id * 4] = Math.min(255, col[0] * 255); img.data[id * 4 + 1] = Math.min(255, col[1] * 255); img.data[id * 4 + 2] = Math.min(255, col[2] * 255);
+      }
+      if (stepK === 2) wires.push([a.s, b.s, d.s, -1]);
+    });
+  });
+  c.putImageData(img, 0, 0);
+  c.lineWidth = 0.8;
+  wires.forEach(([a, b, d, oi]) => { c.strokeStyle = oi < 0 ? 'rgba(20,20,30,.45)' : stepK === 0 ? '#555' : `rgb(${WIRE[oi]})`; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.lineTo(d[0], d[1]); c.closePath(); c.stroke(); });
+}
+['rrot', 'rlit'].forEach(id => $(id).oninput = render); render();
+</script></body></html>

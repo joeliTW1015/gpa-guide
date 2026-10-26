@@ -15,8 +15,17 @@ textarea{width:100%;font:12px/1.5 ui-monospace,monospace;border:1px solid var(--
 svg text{font-family:system-ui,sans-serif}
 </style></head>
 <body><main>
+<p class="kicker">講義 07 · Mesh Rendering ＋ Appendix - Assimp</p>
 <h1>Mesh Rendering 與場景加速</h1>
 <p class="mut">對應講義 07（Mesh Rendering）與 Appendix - Assimp。重點：讀進 3D 模型（OBJ / Assimp）、把整個場景畫出來、讓場景畫得更快（culling、減少 draw call、GPU-driven rendering）。</p>
+<div class="key"><b>本章重點</b>
+<ul>
+<li>3D model = Scene（物件配置）+ Shape（頂點與三角形）+ Material（表面性質）；最直接的畫法是每個 shape 一個 VAO、每個 material 一張 texture，逐一 draw。</li>
+<li>OBJ 的 v / vt / vn 各自編號，GPU 的一個頂點 = 一組 (位置, uv, 法向量)；同一位置配不同法向量（per-face normal）就必須拆成多個頂點。</li>
+<li>Assimp 讀各種格式：<code>aiScene</code> 存所有 mesh 與 material，node 只存 index；mesh 的 <code>mMaterialIndex</code> 指向 material。</li>
+<li>加速（演算法面）：AABB + 平面測試做 <b>frustum culling</b>、階層式 culling（BVH 等）。</li>
+<li>加速（實作面）：減少 draw call（instancing、multi-draw）、indirect draw 把參數放 GPU、GPU-driven rendering（compute shader 自己挑要畫什麼）、multi-thread。</li>
+</ul></div>
 <div class="toc"><a href="#model">3D Model 結構</a><a href="#formats">模型格式</a><a href="#obj">Wavefront OBJ</a><a href="#mtl">材質 MTL</a><a href="#problems">格式問題</a><a href="#normal">Per-face / Per-vertex Normal</a><a href="#assimp">Assimp</a><a href="#load">載入流程</a><a href="#accel">加速總覽</a><a href="#aabb">AABB 與平面</a><a href="#frustum">Frustum Culling</a><a href="#hier">階層式 Culling</a><a href="#overhead">Driver Overhead</a><a href="#instance">Instancing 矩陣</a><a href="#multidraw">Multi-draw</a><a href="#indirect">Indirect Draw</a><a href="#gpudriven">GPU-driven</a><a href="#thread">Multi-thread</a><a href="#errata">講義程式小錯</a></div>
 
 <!-- ============================================================ -->

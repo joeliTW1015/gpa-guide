@@ -17,8 +17,17 @@ svg text{font-family:system-ui,sans-serif}
 .hl rect.box{transition:fill .2s}
 </style></head>
 <body><main>
+<p class="kicker">講義 06 · Fragment Processing and Frame Buffer</p>
 <h1>Fragment Shader 與 Framebuffer</h1>
 <p class="mut">對應講義 06（Fragment Processing and Frame buffer）。重點：fragment shader 前後的處理（per-sample tests、blending）、fragment shader 本身、用 framebuffer object（FBO）做 off-screen rendering 與後製。</p>
+<div class="key"><b>本章重點</b>
+<ul>
+<li>Fragment shader 是最後一個 programmable stage，每個 fragment 跑一次、彼此平行；負責光照與貼圖。</li>
+<li>Per-sample processing：scissor → stencil → depth test，全過才寫入；開 blending 時先混合：<code>c′ = src ⊙ sfactor + dst ⊙ dfactor</code>。</li>
+<li>半透明物件<b>順序很重要</b>：先畫不透明、再由遠到近畫透明；互相穿插的情況需要 OIT。</li>
+<li><b>FBO</b>（framebuffer object）是一組 attachment（color texture / depth renderbuffer）的容器，不是 buffer object；預設 framebuffer ID = 0（螢幕）。</li>
+<li>Off-screen rendering：先畫進 FBO texture，再用全螢幕四邊形取樣做<b>後製</b>（灰階、模糊、量化、DoG）；MRT 用 <code>glDrawBuffers</code> 一次寫多張。</li>
+</ul></div>
 <div class="toc"><a href="#overview">總覽</a><a href="#fs">Fragment Shader</a><a href="#persample">Per-Sample Processing</a><a href="#blend">Blending</a><a href="#order">透明物件順序</a><a href="#offscreen">Off-Screen Rendering</a><a href="#fbo">FBO 結構</a><a href="#cube">範例：Spinning Cube → FBO</a><a href="#fboapi">FBO API</a><a href="#mrt">Multiple Render Targets</a><a href="#post">影像後製</a><a href="#smooth">smoothstep</a><a href="#sprite">Point Sprites</a><a href="#errata">講義程式小錯</a></div>
 
 <div class="note"><b>講義的程式碼區塊顏色</b>：<span style="background:#fffbcc;padding:0 4px">黃色</span> = Application（CPU，C++：建 context、管理 OpenGL 物件、產生 GPU 工作）；<span style="background:#dbeafe;padding:0 4px">藍色</span> = Shader（GPU，以 <code>#version 410 core</code> 開頭）。本頁的 code 以註解標示是 C++ 或 GLSL。</div>

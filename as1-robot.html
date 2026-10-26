@@ -30,6 +30,7 @@ td.apil div{break-inside:avoid;padding:1px 0}
 input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid var(--line);border-radius:6px}
 </style></head>
 <body><main>
+<p class="kicker">作業 · Assignment 1</p>
 <h1>作業 1：Animated Robot</h1>
 <p class="mut">依 <code>2026(FALL)_GPA - Assignment 1.pdf</code>、<code>assignments_1_robot.zip</code>（template）、<code>Assignment - 01 Appendix.zip</code>（OBJ）整理。程式片段已在 template 上實測編譯執行（Linux、OpenGL 4.1 core）。</p>
 <div class="toc"><a href="#intro">1. 作業介紹</a><a href="#grade">2. 評分與規則</a><a href="#pre">3. 先備知識</a><a href="#files">4. 提供的檔案</a><a href="#hier">5. 階層模型互動</a><a href="#notes">6. 實作須知</a><a href="#steps">7. 實作步驟</a><a href="#api">8. 用到的 API</a><a href="#submit">9. 繳交</a></div>
@@ -97,7 +98,7 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 <tr><td>Shader pipeline</td><td>VS 算 <code>gl_Position</code>、FS 算顏色 / 貼圖</td><td><a href="01-pipeline.html#pipeline">Pipeline 互動圖</a>、<a href="02-project-syntax.html#shader">Shader Program 建立流程</a>、<a href="02-project-syntax.html#glsl">GLSL 速查</a></td></tr>
 <tr><td>VAO / VBO / attribute</td><td>把 OBJ 的 position / uv 送進 VS</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a>、<a href="05-vertex-draw.html#layout">Stacked vs Interleaved</a></td></tr>
 <tr><td>Draw call</td><td><code>glDrawArrays(GL_TRIANGLES, …)</code> 畫每個部位</td><td><a href="05-vertex-draw.html#modes">Primitive 模式</a>、<a href="05-vertex-draw.html#elements">DrawArrays vs DrawElements</a></td></tr>
-<tr><td>Transformation、MVP</td><td>P、V、每個部位的 M</td><td><a href="01-pipeline.html#space">座標空間與 MVP</a>、<a href="01-pipeline.html#math">必要數學</a></td></tr>
+<tr><td>Transformation、MVP</td><td>P、V、每個部位的 M</td><td><a href="l01-transform.html#spaces">座標空間與 MVP</a>、<a href="l01-transform.html#model">必要數學</a></td></tr>
 <tr><td>GLM</td><td><code>translate / rotate / scale / perspective / lookAt</code></td><td><a href="02-project-syntax.html#glm">GLM 速查</a></td></tr>
 <tr><td><b>階層式模型</b></td><td>子部位矩陣 = 父矩陣 × 自己的 local 矩陣</td><td><a href="#hier">本頁 5.</a></td></tr>
 <tr><td>Uniform</td><td>每畫一個部位前更新 <code>uM</code>、顏色、是否用貼圖</td><td><a href="02-project-syntax.html#obj">OpenGL Objects</a></td></tr>

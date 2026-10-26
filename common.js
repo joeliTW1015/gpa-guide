@@ -1,11 +1,12 @@
-// 共用：頂部導覽（分組）、上一頁 / 下一頁、code 複製按鈕、tabs
+// 共用：頂部導覽（依講義順序分組）、側欄目錄、標題錨點、表格外框、閱讀進度、上一頁 / 下一頁、code 複製按鈕、tabs
 (function () {
-  // 閱讀順序：觀念 → 實作 → 作業 → 參考
+  // 閱讀順序：講義 01 → 07 → 實作 / 附錄 → 作業 → 參考
   const groups = [['', [['index.html', '首頁']]],
-    ['觀念', [['01-pipeline.html', 'Pipeline'], ['05-vertex-draw.html', 'Vertex & Draw'], ['06-fragment-fbo.html', 'Fragment & FBO'], ['07-mesh-rendering.html', 'Mesh & 加速']]],
+    ['講義', [['l01-transform.html', '01 轉換'], ['l02-overview.html', '02 概觀'], ['01-pipeline.html', '03 Pipeline'],
+      ['l04-objects.html', '04 Objects'], ['05-vertex-draw.html', '05 Vertex'], ['06-fragment-fbo.html', '06 Fragment'], ['07-mesh-rendering.html', '07 Mesh']]],
     ['實作', [['03-env-git.html', '環境 / 繳交'], ['02-project-syntax.html', '專案與語法']]],
     ['作業', [['as1-robot.html', 'AS1 機器人']]],
-    ['參考', [['04-api.html', 'API 參考']]]];
+    ['參考', [['04-api.html', 'API']]]];
   const pages = groups.flatMap(([, ps]) => ps);
   const cur = location.pathname.split('/').pop() || 'index.html';
   const nav = document.createElement('nav');
@@ -13,15 +14,55 @@
   nav.innerHTML = groups.map(([g, ps]) => `<span class="grp">${g ? `<i>${g}</i>` : ''}` +
     ps.map(([h, t]) => `<a href="${h}" class="${h === cur ? 'on' : ''}">${t}</a>`).join('') + '</span>').join('');
   document.body.prepend(nav);
+  const bar = document.createElement('div'); bar.id = 'readbar'; document.body.prepend(bar);
 
-  const i = pages.findIndex(([h]) => h === cur), main = document.querySelector('main');
+  const main = document.querySelector('main');
+  const i = pages.findIndex(([h]) => h === cur);
   if (i >= 0 && main) {
     const pn = document.createElement('div');
     pn.className = 'pn';
-    pn.innerHTML = (i > 0 ? `<a href="${pages[i - 1][0]}">← ${pages[i - 1][1]}</a>` : '<span></span>') +
-      (i < pages.length - 1 ? `<a href="${pages[i + 1][0]}">${pages[i + 1][1]} →</a>` : '<span></span>');
+    pn.innerHTML = (i > 0 ? `<a href="${pages[i - 1][0]}"><small>上一頁</small>← ${pages[i - 1][1]}</a>` : '<span></span>') +
+      (i < pages.length - 1 ? `<a href="${pages[i + 1][0]}" style="text-align:right"><small>下一頁</small>${pages[i + 1][1]} →</a>` : '<span></span>');
     main.appendChild(pn);
   }
+
+  // 表格包外框（可橫向捲動）
+  document.querySelectorAll('main table').forEach(t => {
+    if (t.parentElement.classList.contains('tw')) return;
+    const w = document.createElement('div'); w.className = 'tw';
+    t.parentNode.insertBefore(w, t); w.appendChild(t);
+  });
+
+  // h2 / h3 錨點
+  document.querySelectorAll('main h2[id], main h3[id]').forEach(h => {
+    const a = document.createElement('a'); a.className = 'anchor'; a.href = '#' + h.id; a.textContent = '#';
+    h.appendChild(a);
+  });
+
+  // 側欄目錄：由 h2[id] 產生，寬螢幕才顯示；捲動時標出目前章節
+  const hs = [...document.querySelectorAll('main h2[id]')];
+  if (main && hs.length >= 3) {
+    const side = document.createElement('aside'); side.className = 'side';
+    side.innerHTML = '<div class="st">本頁目錄</div>' + hs.map(h => `<a href="#${h.id}">${h.textContent.replace(/#$/, '').trim()}</a>`).join('');
+    document.body.appendChild(side); document.body.classList.add('has-side');
+    const links = [...side.querySelectorAll('a')];
+    const spy = () => {
+      let k = 0;
+      hs.forEach((h, j) => { if (h.getBoundingClientRect().top < 120) k = j; });
+      links.forEach((a, j) => a.classList.toggle('on', j === k));
+    };
+    addEventListener('scroll', spy, { passive: true }); spy();
+  }
+
+  // 閱讀進度 + 回到頂端
+  const top = document.createElement('button'); top.id = 'totop'; top.title = '回到頂端'; top.textContent = '↑';
+  top.onclick = () => scrollTo({ top: 0 }); document.body.appendChild(top);
+  const prog = () => {
+    const h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+    bar.style.width = (max > 0 ? h.scrollTop / max * 100 : 0) + '%';
+    top.classList.toggle('show', h.scrollTop > 600);
+  };
+  addEventListener('scroll', prog, { passive: true }); prog();
 
   document.querySelectorAll('pre').forEach(pre => {
     const b = document.createElement('button');
@@ -31,9 +72,10 @@
     pre.appendChild(b);
   });
 
-  // <div class="tabs" data-group="x"><button data-pane="id">..</button></div> + <div class="pane" id="id">
+  // <div class="tabs"><button data-pane="id">..</button></div> + <div class="pane" id="id">
   document.querySelectorAll('.tabs').forEach(tabs => {
     const btns = [...tabs.querySelectorAll('button')];
+    if (!btns.length || !btns[0].dataset.pane) return;   // 由頁面自己的程式處理的 tab 列
     const show = id => btns.forEach(b => {
       b.classList.toggle('on', b.dataset.pane === id);
       document.getElementById(b.dataset.pane).classList.toggle('on', b.dataset.pane === id);

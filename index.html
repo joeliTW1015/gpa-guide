@@ -1,61 +1,90 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GPA 速成指南</title><link rel="stylesheet" href="style.css">
-<style>.sec{font-size:13px;color:var(--mut);margin:1.6em 0 .2em;letter-spacing:.05em}</style></head>
+<style>
+.hero{padding:26px 28px;margin:18px 0 8px;border-radius:16px;background:linear-gradient(135deg,#22356e,#3557c9 55%,#6b5bd6);color:#fff;box-shadow:0 10px 30px rgba(35,64,159,.25)}
+.hero h1{color:#fff;margin:0 0 6px;font-size:30px}
+.hero p{margin:4px 0;color:#e3e9ff;font-size:15px}
+.hero .chips{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+.hero .chips span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:2px 12px;font-size:12.5px}
+.road{position:relative;margin:18px 0 6px;padding-left:34px}
+.road::before{content:"";position:absolute;left:14px;top:6px;bottom:6px;width:3px;border-radius:2px;background:linear-gradient(#3557c9,#7c5cff)}
+.lec{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px 12px;margin:12px 0;box-shadow:var(--shadow);transition:transform .12s,box-shadow .12s}
+.lec:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(20,24,40,.09)}
+.lec::before{content:attr(data-n);position:absolute;left:-34px;top:14px;width:31px;height:31px;border-radius:50%;background:#fff;border:3px solid #3557c9;color:#23409f;font:700 12px var(--mono);display:flex;align-items:center;justify-content:center}
+.lec h3{margin:0 0 2px;font-size:17px}
+.lec h3 a{text-decoration:none}
+.lec .sub{font-size:12.5px;color:var(--mut)}
+.lec p{margin:6px 0 4px;font-size:14.5px}
+.lec .t{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.lec .t span{font-size:12px;background:#f1f3f8;border-radius:6px;padding:1px 8px;color:#3a414b}
+.lec .t span.i{background:#e3f4ea;color:#1f6b45}
+.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:12px 0}
+@media(max-width:860px){.cards3{grid-template-columns:1fr}}
+.cards3 .card{margin:0}
+.cards3 .card h3{margin:0 0 6px;font-size:16px}
+.sec{font-size:12.5px;font-weight:700;letter-spacing:.1em;color:#8a919a;margin:2.2em 0 .2em}
+</style></head>
 <body><main>
-<h1>繪圖程式設計與應用（CS5507）速成指南</h1>
-<p class="mut">依 2026 Fall 講義 00–07、Appendix 與作業說明整理。上方導覽依建議閱讀順序排列：觀念 → 實作 → 作業 → 參考。</p>
+<div class="hero">
+<h1>繪圖程式設計與應用 速成指南</h1>
+<p>CS5507 · 2026 Fall · 依講義 00–07、Appendix 與作業說明整理的互動式筆記</p>
+<p>每章：本章重點 → 講義內容（重製的架構圖與表格）→ 互動示範 → 程式碼。按 <code style="background:rgba(255,255,255,.18);color:#fff">/</code> 搜尋全站。</p>
+<div class="chips"><span>7 章講義</span><span>40+ 個互動示範</span><span>154 個 API 說明</span><span>作業 1 完整指南</span></div>
+</div>
 
-<div class="warn"><b>進行中：作業 1</b>，截止 <b>2026/10/19（日）23:59</b>，FTP 繳交。→ <a href="as1-robot.html">作業 1 頁面</a></div>
+<div class="sec">講義：建議依序閱讀</div>
+<div class="road">
+<div class="lec" data-n="01"><h3><a href="l01-transform.html">座標轉換（Transformation）</a></h3><div class="sub">講義 01 · 進入 OpenGL 前的數學</div>
+<p>向量、齊次座標、4×4 矩陣 = 座標系；Model / View / Projection 矩陣的推導；六個座標空間（Object → World → Eye → Clip → NDC → Screen）。</p>
+<div class="t"><span>dot / cross</span><span>左右手座標</span><span>change of basis</span><span>T·R·S 順序</span><span>gimbal lock / quaternion</span><span>lookAt</span><span>ortho / perspective</span><span class="i">互動：2D 轉換遊樂場</span><span class="i">互動：深度精度</span><span class="i">互動：MVP 一個頂點走全程</span></div></div>
 
-<div class="sec">觀念（講義）</div>
-<div class="card"><h3><a href="01-pipeline.html">Rendering Pipeline</a>（講義 01–03）</h3>
-<ul><li>Pipeline 各 stage 互動圖：誰是 fixed / programmable、對應哪些 API</li>
-<li>座標空間鏈 Object → World → Eye → Clip → NDC → Screen 與 MVP 矩陣</li>
-<li>Rasterizer 插值、Depth test、Blending 小 demo</li></ul></div>
+<div class="lec" data-n="02"><h3><a href="l02-overview.html">OpenGL 概觀（OpenGL Overview）</a></h3><div class="sub">講義 02 · OpenGL 是什麼、在乎什麼</div>
+<p>OpenGL 的定位與歷史、state machine 與兩類 API、fixed-function vs programmable pipeline、GL / GLU / GLUT / GLFW 的分工、程式的基本結構。</p>
+<div class="t"><span>版本時間軸</span><span>OpenGL / ES / WebGL / Vulkan</span><span>名詞小辭典</span><span>軟體架構圖</span><span class="i">互動：Yes / No 測驗</span><span class="i">互動：逐步變真實（軟體 rasterizer 9 步）</span></div></div>
 
-<div class="card"><h3><a href="05-vertex-draw.html">Vertex Processing 與 Drawing Commands</a>（講義 05）</h3>
-<ul><li>三種 vertex specification、stacked vs interleaved 的 stride / offset 互動對照</li>
-<li>VS 輸出（gl_Position / gl_PointSize / gl_ClipDistance）、flat / smooth 插值</li>
-<li>Primitive 模式互動圖、glDrawElements、BaseVertex、Primitive restart</li>
-<li>Instancing 與 divisor 互動表、Indirect draw、版本對照</li></ul></div>
+<div class="lec" data-n="03"><h3><a href="01-pipeline.html">OpenGL Rendering Pipeline</a></h3><div class="sub">講義 03 · 一個三角形的旅程 + 第一支 shader</div>
+<p>每個 stage 做什麼、哪些可程式化、用哪些 API 設定；rasterizer 七個步驟、per-sample tests；OpenGL 101：畫一個點、一個三角形、傳資料給下一個 stage。</p>
+<div class="t"><span>Vertex Processing</span><span>Tessellation / Geometry</span><span>Rasterizer API 表</span><span>Compute pipeline</span><span>Shader / Program 架構</span><span class="i">互動：pipeline 圖</span><span class="i">互動：三角形旅程</span><span class="i">互動：OpenGL 101 六個範例</span></div></div>
 
-<div class="card"><h3><a href="06-fragment-fbo.html">Fragment Shader 與 Framebuffer</a>（講義 06）</h3>
-<ul><li>Per-sample tests 流程圖、Blending 寫入模型與 factor 表 + 互動計算器、透明物件順序示範</li>
-<li>Off-screen rendering、FBO 結構圖、Spinning Cube 兩階段（FBO → 螢幕）逐步互動圖、attachment 表、MRT</li>
-<li>影像後製互動（Grayscale / Box Blur / Quantization / DoG，附對應 GLSL）、smoothstep 曲線、Point sprite 星空</li></ul></div>
+<div class="lec" data-n="04"><h3><a href="l04-objects.html">OpenGL Objects</a></h3><div class="sub">講義 04 · Buffer、Uniform、Texture</div>
+<p>資料怎麼送進 GPU：buffer 的建立與 binding point、uniform 與 location、uniform block 與 std140、texture image unit、filtering / mipmap / wrapping、array texture。</p>
+<div class="t"><span>buffer usage 表</span><span>uniform 陣列 / struct</span><span>UBO binding point</span><span>texture target 表</span><span class="i">互動：buffer 建立步驟</span><span class="i">互動：std140 計算器</span><span class="i">互動：隧道過濾比較</span><span class="i">互動：spinning cubes</span></div></div>
 
-<div class="card"><h3><a href="07-mesh-rendering.html">Mesh Rendering 與場景加速</a>（講義 07、Appendix - Assimp）</h3>
-<ul><li>3D model 結構、格式表、OBJ / MTL 格式 + 互動 OBJ 解析（算 GPU 頂點數）、per-face vs per-vertex normal 互動</li>
-<li>Assimp：aiScene 結構互動圖、post-process flag 表、完整載入流程（含講義骨架補完）</li>
-<li>AABB / 平面 / frustum culling 互動、階層式 culling、driver overhead、instancing 矩陣、multi-draw 與 indirect 互動、GPU-driven instance culling 逐步示範</li></ul></div>
+<div class="lec" data-n="05"><h3><a href="05-vertex-draw.html">Vertex Processing 與 Drawing Commands</a></h3><div class="sub">講義 05 · 頂點怎麼進 VS、怎麼畫</div>
+<p>三種 vertex specification、stacked vs interleaved、VS 輸出與插值修飾詞、primitive 模式、indexed 繪製、primitive restart、instancing、indirect draw。</p>
+<div class="t"><span>stride / offset</span><span>gl_PerVertex</span><span>flat / smooth</span><span>BaseVertex</span><span>divisor</span><span class="i">互動：primitive 模式</span><span class="i">互動：divisor 表</span></div></div>
 
-<div class="sec">實作</div>
-<div class="card"><h3><a href="03-env-git.html">環境架設 / Git / 繳交規則</a>（Appendix - Project Configuration、Syllabus）</h3>
-<ul><li>Windows（講義官方）與 Linux（已用 AS1 template 實測）建置步驟</li>
-<li>GitLab clone、submodule、自己的 private repo 備份</li>
-<li>MD5 繳交流程、抄襲與 Demo 規則、配分、通用繳交 checklist</li></ul></div>
+<div class="lec" data-n="06"><h3><a href="06-fragment-fbo.html">Fragment Shader 與 Framebuffer</a></h3><div class="sub">講義 06 · 像素的顏色與離屏渲染</div>
+<p>Per-sample tests、blending 寫入模型與 factor 表、透明物件順序、FBO 結構與 attachment、MRT、影像後製、point sprite。</p>
+<div class="t"><span>blend factor 表</span><span>OIT</span><span>FBO ≠ buffer object</span><span>glDrawBuffers</span><span class="i">互動：blending 計算器</span><span class="i">互動：FBO 兩階段</span><span class="i">互動：後製（灰階 / 模糊 / 量化 / DoG）</span></div></div>
 
-<div class="card"><h3><a href="02-project-syntax.html">專案結構與語法</a>（講義 04、Appendix）</h3>
-<ul><li>Template 專案目錄、CMakeLists 做什麼</li>
-<li>GLFW + GLAD 程式骨架、render loop、double buffering</li>
-<li>OpenGL Objects（VAO / VBO / Uniform / UBO / Texture）綁定關係、stb_image</li>
-<li>GLSL、GLM 速查與常見坑</li></ul></div>
+<div class="lec" data-n="07"><h3><a href="07-mesh-rendering.html">Mesh Rendering 與場景加速</a></h3><div class="sub">講義 07 + Appendix - Assimp · 讀模型、畫場景、畫得更快</div>
+<p>3D 模型結構與格式、OBJ / MTL、per-face vs per-vertex normal、Assimp 載入、frustum culling、driver overhead、instancing 矩陣、multi-draw、indirect、GPU-driven rendering。</p>
+<div class="t"><span>aiScene 結構</span><span>AABB / 平面測試</span><span>BVH</span><span>DrawElementsIndirectCommand</span><span class="i">互動：OBJ 解析</span><span class="i">互動：frustum culling</span><span class="i">互動：multi-draw</span><span class="i">互動：GPU 收集可見 instance</span></div></div>
+</div>
 
-<div class="sec">作業</div>
-<div class="card"><h3><a href="as1-robot.html">作業 1：Animated Robot</a>（截止 2026/10/19）</h3>
-<ul><li>作業介紹、評分自評計算、規則</li>
-<li>先備知識對照表 + Demo 練習題</li>
-<li>提供的 template 與 OBJ 檔分析（尺寸、頂點數）</li>
-<li>階層模型互動圖（含三種常見錯誤示範）</li>
-<li>實作須知、11 個實作步驟（含已實測的程式片段、進度勾選）</li>
-<li>作業用到的 74 個 API 一覽，連到 API 參考</li>
-<li>繳交：檔案結構、檔名檢查、打包 / MD5 / FTP 流程</li></ul></div>
+<div class="sec">實作、作業與參考</div>
+<div class="cards3">
+<div class="card"><h3><a href="03-env-git.html">環境架設 / Git / 繳交</a></h3>
+<p class="mut">Appendix - Project Configuration、Syllabus</p>
+<ul><li>Windows（官方）與 Linux（已實測）建置</li><li>GitLab、submodule、private repo 備份</li><li>MD5 繳交、抄襲與 Demo 規則、配分</li></ul></div>
+<div class="card"><h3><a href="02-project-syntax.html">專案結構與語法（速查）</a></h3>
+<p class="mut">Appendix - GLFW and GLAD、GLSL、GLM、Image Loading</p>
+<ul><li>Template 結構、CMake、GLFW + GLAD 骨架</li><li>Shader program 完整流程與常見錯誤</li><li>GLSL / GLM 速查、黑畫面檢查表</li></ul></div>
+<div class="card"><h3><a href="as1-robot.html">作業 1：Animated Robot</a></h3>
+<p class="mut">已於 2026/10/19 截止</p>
+<ul><li>評分項目、先備知識、Demo 練習題</li><li>階層模型互動圖、11 個實作步驟</li><li>作業用到的 74 個 API、繳交流程</li></ul></div>
+</div>
+<div class="card"><h3 style="margin:0 0 6px"><a href="04-api.html">常用 API 參考</a></h3>
+<p style="margin:0">GLFW / Shader / Buffer / Uniform / Draw / Texture / FBO / GLSL / GLM / ImGui / OBJ / Assimp 共 154 個函式，每個都有簽名、回傳型別、參數表、範例與官方文件連結，可搜尋與分類篩選。各講義頁的函式名稱都連到這裡。</p></div>
 
-<div class="sec">參考</div>
-<div class="card"><h3><a href="04-api.html">常用 API 參考</a></h3>
-<ul><li>GLFW / Shader / Buffer / Uniform / Draw / Texture / FBO / GLSL / GLM / ImGui / OBJ / Assimp 共 154 個函式（含講義 05–07、stb_image、tinyobjloader、Assimp、FBO、compute）</li>
-<li>每個都有簽名、回傳型別、參數表、範例、官方文件連結；可搜尋與分類篩選</li></ul></div>
+<div class="sec">怎麼用這份指南</div>
+<div class="grid2">
+<div class="card"><b>第一次讀</b>
+<ol><li>先讀每章開頭的「本章重點」，抓住全貌</li><li>照講義順序往下讀，遇到互動示範就動手調參數</li><li>程式碼區塊有註解標明是 C++（CPU）還是 GLSL（GPU）</li><li>每頁底部有上一頁 / 下一頁</li></ol></div>
+<div class="card"><b>複習 / 考前</b>
+<ul><li>按 <code>/</code> 或 <code>Ctrl+K</code> 全站搜尋函式名或關鍵字</li><li>寬螢幕左側有本頁目錄，會標示目前位置</li><li>作業 1 頁的 Demo 練習題可以自我測驗</li><li>函式細節查 API 參考頁</li></ul></div></div>
 
 <div class="note">GitLab 網址已更新為 <a href="https://cgvlab.igvi.cs.nthu.edu.tw/">https://cgvlab.igvi.cs.nthu.edu.tw/</a>（1005 公告），講義內舊網址作廢。</div>
 </main><script src="common.js"></script></body></html>
