@@ -18,9 +18,14 @@
 .sum{font-size:20px;font-weight:700}
 .bar{height:10px;background:#eee;border-radius:5px;overflow:hidden;margin:6px 0}
 .bar i{display:block;height:100%;background:var(--prog);transition:width .3s}
-.step>summary{display:flex;gap:8px;align-items:center}
-.step>summary input{margin:0}
-.step.done>summary span{color:#999;text-decoration:line-through}
+.step>summary,.rv>summary{display:flex;gap:8px;align-items:center}
+.step>summary input,.rv>summary input,.qz>summary input{margin:0}
+.step.done>summary span,.rv.done>summary span{color:#999;text-decoration:line-through}
+.qz>summary{display:flex;gap:8px;align-items:baseline}
+.qz.got>summary{color:#8a919a}
+.qz.hide{display:none}
+.qz.pick{outline:3px solid var(--tip);outline-offset:2px}
+#qzCats button.b{padding:2px 10px}
 .ok{color:var(--prog);font-weight:600}.bad{color:var(--warn);font-weight:600}
 .tree{font:13px/1.8 ui-monospace,monospace;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px}
 .tree s{color:var(--warn)}
@@ -33,7 +38,7 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 <p class="kicker">作業 · Assignment 1</p>
 <h1>作業 1：Animated Robot</h1>
 <p class="mut">依 <code>2026(FALL)_GPA - Assignment 1.pdf</code>、<code>assignments_1_robot.zip</code>（template）、<code>Assignment - 01 Appendix.zip</code>（OBJ）整理。程式片段已在 template 上實測編譯執行（Linux、OpenGL 4.1 core）。</p>
-<div class="toc"><a href="#intro">1. 作業介紹</a><a href="#grade">2. 評分與規則</a><a href="#pre">3. 先備知識</a><a href="#files">4. 提供的檔案</a><a href="#hier">5. 階層模型互動</a><a href="#notes">6. 實作須知</a><a href="#steps">7. 實作步驟</a><a href="#api">8. 用到的 API</a><a href="#submit">9. 繳交</a></div>
+<div class="toc"><a href="#intro">1. 作業介紹</a><a href="#grade">2. 評分與規則</a><a href="#pre">3. 先備知識</a><a href="#files">4. 提供的檔案</a><a href="#hier">5. 階層模型互動</a><a href="#notes">6. 實作須知</a><a href="#steps">7. 實作步驟</a><a href="#api">8. 用到的 API</a><a href="#submit">9. 繳交</a><a href="#review">10. Code Review 順序</a><a href="#quiz">11. Demo 題庫</a></div>
 
 <!-- ================================================================ -->
 <h2 id="intro">1. 作業介紹</h2>
@@ -110,6 +115,7 @@ input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid va
 </table>
 
 <h3>Demo 練習題</h3>
+<p class="mut">以下是概念題；依自己 main.cpp 逐行出的 100+ 題、隨機抽題見 <a href="#quiz">11. Demo 題庫</a>，建議的讀 code 順序見 <a href="#review">10. Code Review 順序</a>。</p>
 <details><summary>為什麼 L2 Arm 的矩陣要乘上 M<sub>torso</sub> 和 M<sub>arm1</sub>？</summary>
 <p>L2 Arm 的 local 矩陣只描述「相對於 L1 Arm 的手肘」的位置與旋轉。往左乘 M<sub>arm1</sub> 轉到 torso 空間，再乘 M<sub>torso</sub> 轉到 world。所以 torso 移動 / 旋轉時整條手臂跟著動。</p></details>
 <details><summary>畫部位時的 scale 為什麼不能傳給子節點？</summary>
@@ -624,8 +630,364 @@ Compress-Archive -Path "$env:TEMP\${id}_AS1" -DestinationPath "${id}_AS1.zip"</c
 <div class="pane" id="ftpCli"><pre><code><span class="c"># Linux / macOS / Windows 10+ 都有 curl（未實測上傳，伺服器不可刪除）</span>
 curl -T 112062000_AS1.zip ftp://cgv.cs.nthu.edu.tw/Assignment_01/ --user GPA2026:2026GPA</code></pre></div>
 <div class="warn">伺服器<b>不能下載、不能刪除</b>（也不能覆蓋）。要交新版本就另取名 <code>學號_AS1_v2.zip</code>（再來 <code>_v3</code>），並<b>重新登記新版的 MD5</b>。</div></li>
-<li><b>Demo</b>：準備好解釋每一行程式（禁用 AI、禁止上網）。</li>
+<li><b>Demo</b>：準備好解釋每一行程式（禁用 AI、禁止上網）→ <a href="#review">10. Code Review 順序</a>、<a href="#quiz">11. Demo 題庫</a>。</li>
 </ol>
+
+<!-- ================================================================ -->
+<h2 id="review">10. Code Review 順序</h2>
+<p class="mut">依<b>執行順序 + 資料流</b>讀 <code>113000107_AS1/src/main.cpp</code>（595 行）和兩個 shader，不是從檔案第一行讀到最後一行。行號對應目前的 main.cpp。每步：讀哪幾行 → 要能說出什麼 → 讀完自問（連到 <a href="#quiz">11. 題庫</a>）→ 改一行驗證（改完記得改回來）。<button class="b" id="rvReset">全部清除</button></p>
+<div class="bar"><i id="rvBar"></i></div>
+<div id="review-list">
+
+<details class="rv" id="r1"><summary><input type="checkbox"><span>R1. 鳥瞰：檔頭註解 + <code>main()</code>（約 15 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:1–15</code>（架構說明）→ <code>main.cpp:492–595</code>（<code>main()</code>）</p>
+<p><b>要能說出</b></p>
+<ul>
+<li>初始化順序：error callback → <code>glfwInit</code> → window hint（4.1 core）→ 建視窗 → <code>glfwMakeContextCurrent</code> → <b>GLAD</b> → 自己的 callback → ImGui 初始化 → 載 shader / OBJ / texture → 主迴圈 → 清理。</li>
+<li>每幀順序：<code>glfwPollEvents</code> → 算 <code>dt</code>、累加 <code>animTime</code> → <code>processInput</code> → ImGui NewFrame + <code>on_gui</code> → viewport → <code>on_display</code>（畫機器人）→ ImGui Render → <code>glfwSwapBuffers</code>。</li>
+<li>哪些是 template 原有、哪些是自己加的（GLAD、callback、載入資源、dt、viewport 位置）。</li>
+</ul>
+<p><b>讀完自問</b>：<a href="#q-i1">i1</a>、<a href="#q-i2">i2</a>、<a href="#q-i5">i5</a>、<a href="#q-i6">i6</a>、<a href="#q-i7">i7</a></p>
+<p><b>改一行驗證</b>：<code>glfwSwapInterval(1)</code> 改成 <code>0</code> → FPS 變高，但動畫和移動速度不變（因為乘了 <code>dt</code>）。</p></details>
+
+<details class="rv" id="r2"><summary><input type="checkbox"><span>R2. Shader：資料的終點（約 10 分）</span></summary>
+<p><b>讀</b>：<code>shaders/robot.vs.glsl</code>、<code>shaders/robot.fs.glsl</code>（共 34 行）</p>
+<p><b>要能說出</b></p>
+<ul>
+<li>VS 的輸入：<code>location 0 = aPos</code>、<code>location 1 = aUV</code>（對應 C++ 哪兩行？→ R4）；uniform <code>uP / uV / uM</code>。</li>
+<li>VS 輸出 <code>gl_Position</code>（clip space）和 <code>vUV</code>（給 rasterizer 內插）。</li>
+<li>FS 依 <code>uUseTex</code> 選貼圖或純色；<code>uTex</code> 存的是 texture unit 編號。</li>
+</ul>
+<p><b>讀完自問</b>：<a href="#q-s1">s1</a>–<a href="#q-s8">s8</a></p>
+<p><b>改一行驗證</b>：FS 改成 <code>fragColor = vec4(vUV, 0.0, 1.0);</code> → 每個部位顯示 UV 漸層，可看出 uv 怎麼鋪在 Cube / Capsule 上。</p></details>
+
+<details class="rv" id="r3"><summary><input type="checkbox"><span>R3. Shader 載入與 uniform location（約 10 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:91–147</code>（<code>readFile</code> / <code>compileShader</code> / <code>createProgram</code>）→ <code>main.cpp:535–541</code>（取 location）→ <code>main.cpp:52–56</code>（全域變數）</p>
+<p><b>要能說出</b>：create → source → compile → 查 <code>GL_COMPILE_STATUS</code> → program → attach → link → 查 <code>GL_LINK_STATUS</code> → 刪 shader 物件；location 為什麼只取一次。</p>
+<p><b>讀完自問</b>：<a href="#q-c1">c1</a>–<a href="#q-c5">c5</a></p>
+<p><b>改一行驗證</b>：VS 裡故意把 <code>gl_Position</code> 打成 <code>gl_Positon</code> → 終端機印出 compile error 和 link error，畫面只剩背景和 ImGui。</p></details>
+
+<details class="rv" id="r4"><summary><input type="checkbox"><span>R4. Mesh：OBJ → VBO → VAO（約 20 分，重點）</span></summary>
+<p><b>讀</b>：<code>main.cpp:43–51</code>（<code>struct Mesh</code>）→ <code>main.cpp:149–197</code>（<code>loadObj</code>）→ <code>main.cpp:543–546</code>（呼叫處）</p>
+<p><b>要能說出</b></p>
+<ul>
+<li>為什麼把每個三角形的角「展開」成一筆頂點（OBJ 的 v / vt 各有 index），所以用 <code>glDrawArrays</code> 不用 EBO。</li>
+<li>interleaved 格式 <code>[x y z u v]</code>：stride = 20 bytes、uv offset = 12 bytes。</li>
+<li>VAO 記了什麼、<code>glBindVertexArray(0)</code> 的用意。</li>
+<li><code>count</code> 是頂點數：Cube 36、Sphere 2304、Capsule 2496、Cylinder 240。</li>
+</ul>
+<p><b>讀完自問</b>：<a href="#q-m1">m1</a>–<a href="#q-m10">m10</a></p>
+<p><b>改一行驗證</b>：<code>loadObj</code> 回傳前加 <code>printf("%s %d\n", path, mesh.count);</code>，對照上面的數字。</p></details>
+
+<details class="rv" id="r5"><summary><input type="checkbox"><span>R5. Texture（約 10 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:199–221</code>（<code>loadTexture</code>）→ <code>main.cpp:420–423</code>（每幀綁定）→ <code>main.cpp:376</code>（胸口板 <code>textured = true</code>）→ FS 的 <code>texture(uTex, vUV)</code></p>
+<p><b>要能說出</b>：翻轉、強制 4 channel（<code>nailong.png</code> 本身是 512×512 <b>RGB</b>）、<code>GL_RGBA8</code> vs <code>GL_RGBA</code>、mipmap 與 filter、texture unit 0 三行的關係。</p>
+<p><b>讀完自問</b>：<a href="#q-t1">t1</a>–<a href="#q-t8">t8</a></p>
+<p><b>改一行驗證</b>：註解掉 <code>stbi_set_flip_vertically_on_load(true)</code> → 胸口圖上下顛倒。</p></details>
+
+<details class="rv" id="r6"><summary><input type="checkbox"><span>R6. 每幀繪製入口：<code>on_display</code>（約 10 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:575–579</code>（viewport）→ <code>main.cpp:401–426</code>（<code>on_display</code>）</p>
+<p><b>要能說出</b>：清 color + depth、開 depth test、P（<code>perspective</code> 4 個參數）、V（<code>lookAt</code> 3 個參數）每幀設一次；M 每個部位設一次（在 <code>drawPart</code>）。</p>
+<p><b>讀完自問</b>：<a href="#q-p1">p1</a>–<a href="#q-p6">p6</a></p>
+<p><b>改一行驗證</b>：<code>glClear</code> 拿掉 <code>GL_DEPTH_BUFFER_BIT</code> → 機器人一動就殘缺 / 消失。</p></details>
+
+<details class="rv" id="r7"><summary><input type="checkbox"><span>R7. 階層核心：<code>jointMatrix</code> / <code>drawPart</code> / <code>drawLimb</code>（約 25 分，最重要）</span></summary>
+<p><b>讀</b>：<code>main.cpp:317–361</code></p>
+<p><b>要能說出</b></p>
+<ul>
+<li><code>jointMatrix</code> = parent · T(關節位置) · R<sub>y</sub> · R<sub>x</sub> · R<sub>z</sub>，回傳值往下傳。</li>
+<li><code>drawPart</code> = joint · T(offset) · S(size)，<b>只用來畫，不往下傳</b> → scale 不會影響子部位。</li>
+<li><code>drawLimb</code>：seg1 掛在 parent、seg2 掛在 seg1 的 <code>(0, -len, 0)</code>；Capsule 高 2 所以 y scale = <code>len / 2</code>、往下移 <code>len / 2</code>；回傳末端（手腕 / 腳踝）矩陣。</li>
+</ul>
+<p><b>動手</b>：在紙上把左前臂的完整矩陣寫出來（<code>P · V · T(pos) · R<sub>y</sub>(yaw) · M<sub>torso</sub> · T(肩) · R(arm1) · T(0,−0.6,0) · R(arm2) · T(0,−0.3,0) · S</code>），Demo 很可能要你指著程式碼講。</p>
+<p><b>讀完自問</b>：<a href="#q-h1">h1</a>–<a href="#q-h10">h10</a></p>
+<p><b>改一行驗證</b>：<code>jointMatrix</code> 裡把 translate 移到三個 rotate 之後 → 關節繞父的原點公轉、四肢脫離身體（同 <a href="#hier">5. 互動圖</a>「R·T 順序錯」）。</p></details>
+
+<details class="rv" id="r8"><summary><input type="checkbox"><span>R8. 組裝機器人：<code>drawRobot</code> + 常數（約 15 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:76–85</code>（顏色、<code>TORSO_HEIGHT</code>）→ <code>main.cpp:363–399</code>（<code>drawRobot</code>）</p>
+<p><b>要能說出</b>：每個部位掛在誰下面、關節位置數字從哪來（torso 半高 0.6 → 脖子在 y = 0.6；肩膀 x = ±0.7；髖關節 y = −0.7）、<code>TORSO_HEIGHT = 2.26</code> 怎麼算、每幀幾個 draw call。</p>
+<p><b>動手</b>：照報告的階層圖，把每幀 29 次 <code>drawPart</code>（含 <code>drawLimb</code> 內部的 4 次 × 4）分別歸到哪個節點。</p>
+<p><b>讀完自問</b>：<a href="#q-r1">r1</a>–<a href="#q-r8">r8</a></p>
+<p><b>改一行驗證</b>：肩膀 <code>-0.7f</code> 改 <code>-1.2f</code> → 只有左手整條移開，手掌跟著走（證明手掌是手臂的子節點）。</p></details>
+
+<details class="rv" id="r9"><summary><input type="checkbox"><span>R9. 動畫：<code>Pose</code> / <code>computePose</code>（約 20 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:64–68</code>（動畫狀態）→ <code>main.cpp:227–311</code> → <code>main.cpp:561–566</code>（<code>animTime</code> 累加）</p>
+<p><b>要能說出</b>：角度正負代表的方向（機器人面向 +z：x 負 = 往前）、每種動畫的週期（Walk <code>sin(4t)</code> ≈ 1.57 秒一步）、<code>std::max(0, s)</code> 的用途、暫停的做法、角度都是<b>相對父節點</b>。</p>
+<p><b>動手</b>：在 <code>on_gui</code> 暫時加 <code>ImGui::SliderFloat("t", &amp;animTime, 0.0f, 3.0f);</code>，暫停後拖動 t 逐格看每個關節。</p>
+<p><b>讀完自問</b>：<a href="#q-a1">a1</a>–<a href="#q-a10">a10</a></p></details>
+
+<details class="rv" id="r10"><summary><input type="checkbox"><span>R10. 互動：ImGui、鍵盤、滑鼠（約 15 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:432–440</code>（<code>on_gui</code>）→ <code>main.cpp:442–456</code>（<code>processInput</code>）→ <code>main.cpp:458–482</code>（滑鼠 callback）→ <code>main.cpp:520–531</code>（註冊順序）</p>
+<p><b>要能說出</b>：immediate mode GUI、polling vs callback、<code>WantCapture*</code>、為什麼 callback 要在 ImGui 初始化之前註冊、WASD 是 world 軸向。</p>
+<p><b>讀完自問</b>：<a href="#q-u1">u1</a>–<a href="#q-u9">u9</a></p>
+<p><b>改一行驗證</b>：把兩行 <code>glfwSet*Callback</code> 移到 <code>ImGui_ImplGlfw_InitForOpenGL</code> 之後 → ImGui 選單點不動。</p></details>
+
+<details class="rv" id="r11"><summary><input type="checkbox"><span>R11. 收尾：全域變數、清理、模擬 Demo（約 20 分）</span></summary>
+<p><b>讀</b>：<code>main.cpp:39–85</code>（全部全域變數，逐一說出誰寫、誰讀）→ <code>main.cpp:587–594</code>（清理）</p>
+<p><b>模擬 Demo</b>：到 <a href="#quiz">11. 題庫</a> 勾「只抽還不會的」，按「隨機抽題」連抽 10 題，<b>先口頭回答</b>再展開對答案。也練「現場修改題」（<a href="#q-x1">x1</a>–<a href="#q-x6">x6</a>），助教可能叫你當場改。</p>
+<p><b>讀完自問</b>：<a href="#q-i8">i8</a>、<a href="#q-g1">g1</a>–<a href="#q-g6">g6</a></p></details>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="quiz">11. Demo 題庫（依 113000107 的 main.cpp）</h2>
+<p class="mut">題目都對應到目前 <code>main.cpp</code> 的行號。先自己口頭回答，再點開。勾「會了」存在瀏覽器。標 <span class="tag" style="background:var(--warn)">陷阱</span> 的是程式裡真的存在、助教看 code 可能會問的細節。</p>
+<div class="card">
+<div class="ctrl" id="qzCats"></div>
+<div class="ctrl"><button class="b" id="qzRand">🎲 隨機抽題</button><label><input type="checkbox" id="qzTodo"> 只抽 / 只顯示還不會的</label><button class="b" id="qzOpen">全部展開</button><button class="b" id="qzClear">清除「會了」</button><span id="qzCount" class="mut"></span></div>
+<div class="bar"><i id="qzBar"></i></div>
+</div>
+<div id="quiz-list">
+
+<h3 id="qz-init">初始化與主迴圈</h3>
+<details class="qz" data-c="init" id="q-i1"><summary>i1. <code>#include &lt;glad/glad.h&gt;</code> 為什麼一定要在 GLFW 之前？（<code>main.cpp:16</code>）</summary>
+<p>glad.h 自己宣告了全部 OpenGL 型別與函式指標，並會檢查「OpenGL header 是否已被 include」。GLFW 的 header 預設會 include 系統的 <code>GL/gl.h</code>；若先 include GLFW，glad 會報 <code>OpenGL header already included</code>。先 include glad，GLFW 偵測到就不再 include 系統 header。</p></details>
+<details class="qz" data-c="init" id="q-i2"><summary>i2. <code>gladLoadGLLoader</code> 為什麼要在 <code>glfwMakeContextCurrent</code> 之後？（<code>main.cpp:510–518</code>）</summary>
+<p>GLAD 透過 <code>glfwGetProcAddress</code> 向<b>目前的 OpenGL context</b> 查詢每個 <code>gl*</code> 函式的位址。還沒有 current context 時查不到，函式指標都是 null，之後呼叫任何 <code>gl*</code>（例如 <code>loadObj</code> 裡的 <code>glGenVertexArrays</code>）就 crash。所以載入資源也必須在 GLAD 之後。</p></details>
+<details class="qz" data-c="init" id="q-i3"><summary>i3. 四行 <code>glfwWindowHint</code> 各在做什麼？拿掉 <code>FORWARD_COMPAT</code> 會怎樣？（<code>main.cpp:500–503</code>）</summary>
+<p>要求 OpenGL <b>4.1</b>、<b>core profile</b>（沒有 fixed function）、forward compatible（移除所有 deprecated 功能）。macOS 要建立 3.2 以上的 core context 必須設 forward compat，拿掉在 Mac 上 <code>glfwCreateWindow</code> 會失敗回傳 null（程式 <code>return 1</code>）；Linux / Windows 通常沒差。版本 4.1 是因為 macOS 最高只支援 4.1。</p></details>
+<details class="qz" data-c="init" id="q-i4"><summary>i4. <code>glfwSwapInterval(1)</code> 是什麼？改成 0 動畫會變快嗎？（<code>main.cpp:511</code>）</summary>
+<p>vsync：swap 時等一次螢幕垂直同步，FPS 被限制在螢幕更新率（例如 60 Hz）。改 0 FPS 會變很高，但<b>動畫不會變快</b>：<code>animTime += dt</code>、移動量 <code>2.0f * dt</code> 都乘上經過的實際時間，與 FPS 無關。</p></details>
+<details class="qz" data-c="init" id="q-i5"><summary>i5. 主迴圈每一幀依序做了什麼？為什麼 ImGui 最後才 Render？（<code>main.cpp:552–585</code>）</summary>
+<p>poll events → 算 dt、累加 animTime → processInput → ImGui NewFrame ×3 + <code>on_gui()</code>（只建立 UI 資料，還沒畫）→ viewport → <code>on_display</code> 畫機器人 → <code>ImGui::Render</code> + <code>RenderDrawData</code> → swap。ImGui 最後畫才會<b>蓋在場景上面</b>；它的 backend 畫的時候會暫時關 depth test，畫完再還原。</p></details>
+<details class="qz" data-c="init" id="q-i6"><summary>i6. 為什麼要 <code>glfwSwapBuffers</code>？只有一個 buffer 會怎樣？</summary>
+<p>Double buffering：所有繪製畫在 back buffer，畫完整張再跟 front buffer（螢幕上顯示的）交換。只有一個 buffer 的話，使用者會看到畫到一半的畫面（閃爍、撕裂）。</p></details>
+<details class="qz" data-c="init" id="q-i7"><summary>i7. <code>glfwPollEvents</code> 做什麼？你的 <code>cursor_pos_callback</code> 是什麼時候被呼叫的？</summary>
+<p>處理作業系統累積的視窗事件（鍵盤、滑鼠、resize…），並在<b>這個函式裡面</b>同步呼叫已註冊的 callback。所以 <code>mouse_button_callback</code> / <code>cursor_pos_callback</code> 都在 <code>main.cpp:554</code> 那一行執行期間被呼叫（先經過 ImGui 的 callback，再串到你的）。</p></details>
+<details class="qz" data-c="init" id="q-i8"><summary>i8. <span class="tag" style="background:var(--warn)">陷阱</span> 視窗最小化一段時間再還原，動畫會怎樣？（<code>main.cpp:555–566</code>）</summary>
+<p>最小化時 <code>continue</code> 跳過了整段，包括 <code>lastTime = now</code>。還原後第一幀 <code>dt</code> = 整段最小化的時間 → <code>animTime</code> 一次跳很多（動畫跳格）；如果當時按住 WASD，機器人會瞬間移很遠。修法：在 <code>continue</code> 前更新 <code>lastTime = glfwGetTime()</code>，或把 dt 夾在上限（如 <code>std::min(dt, 0.1f)</code>）。</p></details>
+<details class="qz" data-c="init" id="q-i9"><summary>i9. 為什麼 <code>glfwSetErrorCallback</code> 在 <code>glfwInit</code> 之前？（<code>main.cpp:494</code>）</summary>
+<p>它是少數可以在 init 前呼叫的 GLFW 函式。先設好，<code>glfwInit</code> 本身失敗（例如沒有顯示器、缺 X11 / Wayland）時也能印出原因。</p></details>
+
+<h3 id="qz-shader">Shader 與 GLSL</h3>
+<details class="qz" data-c="shader" id="q-s1"><summary>s1. VS 的 <code>layout(location = 0) in vec3 aPos</code> 跟 C++ 哪一行對應？</summary>
+<p><code>main.cpp:190</code> 的 <code>glVertexAttribPointer(0, 3, GL_FLOAT, …)</code> 和 <code>glEnableVertexAttribArray(0)</code>：attribute 0、3 個 float。uv 是 location 1、2 個 float（<code>main.cpp:191</code>）。編號不一致 VS 就讀到錯的資料。</p></details>
+<details class="qz" data-c="shader" id="q-s2"><summary>s2. <code>uP * uV * uM * vec4(aPos, 1.0)</code>：為什麼是這個順序？為什麼 w = 1.0？</summary>
+<p>矩陣從右邊開始作用在頂點：先 M（model → world）、再 V（world → view）、最後 P（view → clip）。寫成 <code>uM * uV * uP</code> 就錯。w = 1 表示「點」，4×4 矩陣最後一欄的平移才會作用；w = 0 是方向向量，不受平移影響。</p></details>
+<details class="qz" data-c="shader" id="q-s3"><summary>s3. <code>gl_Position</code> 在哪個座標空間？之後到 FS 之前發生了什麼？</summary>
+<p>Clip space。之後 fixed function：primitive assembly → clipping → perspective divide（÷w 得 NDC）→ viewport transform（到螢幕像素）→ rasterization（產生 fragment，內插 <code>vUV</code>）→ FS → depth test → 寫入 framebuffer。</p></details>
+<details class="qz" data-c="shader" id="q-s4"><summary>s4. VS 的 <code>out vec2 vUV</code> 跟 FS 的 <code>in vec2 vUV</code> 怎麼連起來？FS 拿到的值是哪個頂點的？</summary>
+<p>link 時依<b>名字和型別</b>配對。FS 拿到的不是任何一個頂點的值，而是 rasterizer 依 fragment 在三角形內的位置，用三個頂點的 vUV 做（透視校正的）重心內插的結果。</p></details>
+<details class="qz" data-c="shader" id="q-s5"><summary>s5. <code>uniform sampler2D uTex</code> 裡存的是什麼？為什麼 C++ 用 <code>glUniform1i(locTex, 0)</code>？</summary>
+<p>存的是 <b>texture unit 編號</b>，不是 texture id。<code>glActiveTexture(GL_TEXTURE0)</code> 選 unit 0、<code>glBindTexture</code> 把 <code>chestTex</code> 綁到 unit 0、<code>glUniform1i(locTex, 0)</code> 告訴 sampler 去 unit 0 讀（<code>main.cpp:421–423</code>）。</p></details>
+<details class="qz" data-c="shader" id="q-s6"><summary>s6. <code>uniform bool uUseTex</code> 為什麼用 <code>glUniform1i</code> 設定？</summary>
+<p>GLSL 的 bool uniform 沒有專用的 glUniform 函式，用 <code>glUniform1i</code>（或 <code>1f</code>）設定，0 = false、非 0 = true（<code>main.cpp:338</code>）。</p></details>
+<details class="qz" data-c="shader" id="q-s7"><summary>s7. 為什麼每次 <code>drawPart</code> 都要重設 <code>uColor</code> 和 <code>uUseTex</code>？</summary>
+<p>uniform 的值存在 program 裡，設了就一直保留到下次改。如果只在胸口板設 <code>uUseTex = 1</code> 而不在其他部位設回 0，之後畫的所有部位都會變成貼圖。每次畫都設一次最保險。</p></details>
+<details class="qz" data-c="shader" id="q-s8"><summary>s8. 為什麼 P、V、M 分開傳，不在 CPU 先乘好傳一個 MVP？</summary>
+<p>兩種都可以。分開傳比較好讀、P / V 每幀只設一次。代價是 VS 對<b>每個頂點</b>都做兩次 4×4 矩陣乘法（每幀約 5 萬個頂點），在 CPU 對 29 個部位各乘一次 MVP 會更省；本作業規模差異可忽略。</p></details>
+<details class="qz" data-c="shader" id="q-s9"><summary>s9. 為什麼 shader 開頭是 <code>#version 410 core</code>？</summary>
+<p>對應 context 的 OpenGL 4.1 core（GLSL 4.10）。版本寫太高在 macOS 編不過；ImGui backend 也用同一版（<code>glsl_version = "#version 410"</code>，<code>main.cpp:499</code>）。</p></details>
+
+<h3 id="qz-compile">Shader 編譯 / 連結</h3>
+<details class="qz" data-c="compile" id="q-c1"><summary>c1. 說明 <code>createProgram</code> 的完整流程。（<code>main.cpp:124–147</code>）</summary>
+<p>兩次 <code>compileShader</code>（create → source → compile → 查 <code>GL_COMPILE_STATUS</code>，失敗印 info log）→ <code>glCreateProgram</code> → 兩次 <code>glAttachShader</code> → <code>glLinkProgram</code> → 查 <code>GL_LINK_STATUS</code> → <code>glDeleteShader</code> 兩個 shader 物件 → 回傳 program。</p></details>
+<details class="qz" data-c="compile" id="q-c2"><summary>c2. link 完就 <code>glDeleteShader</code>，program 不會壞掉嗎？</summary>
+<p>不會。link 後 program 已經有自己的可執行碼。shader 物件仍 attach 在 program 上時，delete 只是<b>標記刪除</b>，等 detach 或 program 被刪時才真的釋放。</p></details>
+<details class="qz" data-c="compile" id="q-c3"><summary>c3. 在錯的目錄執行程式會發生什麼？從程式哪裡看得出來？</summary>
+<p><code>readFile</code> 開檔失敗印 <code>Cannot open shaders/... (請在專案根目錄執行)</code>，回傳空字串 → 編譯空 shader 失敗 → link 失敗；<code>loadObj</code> 印 <code>LoadObj failed</code>、<code>count = 0</code>；畫面只剩背景色 + ImGui。路徑是相對於<b>工作目錄</b>，不是執行檔位置。</p></details>
+<details class="qz" data-c="compile" id="q-c4"><summary>c4. <span class="tag" style="background:var(--warn)">陷阱</span> <code>compileShader</code> 失敗時程式會停下來嗎？</summary>
+<p>不會，只印錯誤，仍回傳 shader 繼續 link。link 失敗的 program 在 <code>glUseProgram</code> 時產生 <code>GL_INVALID_OPERATION</code>，之後什麼都畫不出來，但程式不會 crash。要更嚴謹可以失敗時回傳 0 並結束程式。</p></details>
+<details class="qz" data-c="compile" id="q-c5"><summary>c5. 為什麼 uniform location 在 link 後取一次存成全域變數？什麼時候會拿到 −1？</summary>
+<p><code>glGetUniformLocation</code> 是用字串查表，每幀查很浪費；location 在 link 後就固定，存起來重複用（同講義 Spinning Cube）。−1：名字打錯，或該 uniform 在 shader 裡沒被用到、被 compiler 優化掉。對 −1 呼叫 <code>glUniform*</code> 會被靜默忽略，不報錯。</p></details>
+<details class="qz" data-c="compile" id="q-c6"><summary>c6. <code>glShaderSource(shader, 1, &amp;src, nullptr)</code> 的 4 個參數？<code>src</code> 指向的字串會不會先被釋放？</summary>
+<p>shader、字串數量 1、字串指標陣列、長度陣列（nullptr = 以 <code>\0</code> 結尾）。<code>src = source.c_str()</code>，<code>source</code> 是同一個函式的區域變數，活到函式結束；而且 <code>glShaderSource</code> 會<b>複製</b>字串，呼叫完就不再需要它。</p></details>
+
+<h3 id="qz-mesh">OBJ / VAO / VBO</h3>
+<details class="qz" data-c="mesh" id="q-m1"><summary>m1. 為什麼 <code>loadObj</code> 要把每個角展開成一筆頂點，不用 EBO + <code>glDrawElements</code>？</summary>
+<p>OBJ 的 face 對 position、uv 各有<b>獨立的 index</b>（<code>f 1/3/1</code>），OpenGL 一個頂點只能有一個 index。直接展開最簡單，用 <code>glDrawArrays</code> 畫。代價是重複頂點：Cube 只有 24 個不同頂點卻存了 36 筆。要用 EBO 得先把相同的 (v, vt) 組合去重。</p></details>
+<details class="qz" data-c="mesh" id="q-m2"><summary>m2. <code>attrib.vertices[3 * idx.vertex_index + k]</code> 為什麼乘 3？texcoord 為什麼乘 2？</summary>
+<p>tinyobj 把所有 position 存成一條扁平的 float 陣列 <code>[x0 y0 z0 x1 y1 z1 …]</code>，第 i 個頂點從 <code>3i</code> 開始；uv 每個 2 個 float，所以 <code>2i</code>。</p></details>
+<details class="qz" data-c="mesh" id="q-m3"><summary>m3. <code>idx.texcoord_index &gt;= 0</code> 的判斷是為了什麼？（<code>main.cpp:174</code>）</summary>
+<p>OBJ 的面若沒有 vt（如 <code>f 1//1</code>），tinyobj 的 <code>texcoord_index</code> 是 −1，直接拿來當 index 會讀越界。這裡補 0。作業的 4 個 OBJ 都有 vt，但換 OBJ 時就派得上用場。</p></details>
+<details class="qz" data-c="mesh" id="q-m4"><summary>m4. 算出 stride 和 uv 的 offset。為什麼 offset 要寫成 <code>(void*)</code>？</summary>
+<p>每頂點 5 float = 20 bytes（stride）；position offset 0、uv offset <code>3 * sizeof(float)</code> = 12 bytes。最後一個參數是「目前綁定的 <code>GL_ARRAY_BUFFER</code> 裡的 byte offset」，因為舊 API 的型別是指標，所以要轉成 <code>void*</code>。</p></details>
+<details class="qz" data-c="mesh" id="q-m5"><summary>m5. <code>mesh.count</code> 存的是什麼？Cube 是多少？為什麼？</summary>
+<p><b>頂點數</b>（<code>data.size() / 5</code>），不是三角形數。Cube 12 個三角形 × 3 = 36。<code>glDrawArrays(GL_TRIANGLES, 0, count)</code> 的第三個參數就是頂點數。若誤傳 <code>count / 3</code>，只會畫出前 1/3 的三角形。</p></details>
+<details class="qz" data-c="mesh" id="q-m6"><summary>m6. VAO 記住了什麼？<code>GL_ARRAY_BUFFER</code> 的綁定有記在 VAO 嗎？</summary>
+<p>VAO 記錄每個 attribute 的 enable 狀態與格式（size、type、stride、offset），以及<b>呼叫 <code>glVertexAttribPointer</code> 當下綁定的 VBO</b>；也記 <code>GL_ELEMENT_ARRAY_BUFFER</code> 綁定。<code>GL_ARRAY_BUFFER</code> 這個綁定點本身<b>不</b>存在 VAO 裡，是透過 <code>glVertexAttribPointer</code> 間接記住。所以畫的時候只要 <code>glBindVertexArray</code>，不用再綁 VBO（<code>main.cpp:340</code>）。</p></details>
+<details class="qz" data-c="mesh" id="q-m7"><summary>m7. 最後的 <code>glBindVertexArray(0)</code> 有什麼用？（<code>main.cpp:195</code>）</summary>
+<p>解除綁定，避免之後別的程式碼（例如下一次 <code>loadObj</code> 之前、或 ImGui）意外修改到這個 VAO 的設定。不解除也能跑，是防呆習慣。</p></details>
+<details class="qz" data-c="mesh" id="q-m8"><summary>m8. 忘了 <code>glEnableVertexAttribArray(1)</code> 會怎樣？忘了 0 呢？</summary>
+<p>attribute 沒啟用時，VS 讀到的是常數預設值（<code>(0,0,0,1)</code>）。忘了 1：所有頂點 uv = (0,0)，胸口板變成單一顏色（貼圖左下角的顏色），純色部位不受影響。忘了 0：所有頂點位置都是原點，三角形退化，什麼都看不到。</p></details>
+<details class="qz" data-c="mesh" id="q-m9"><summary>m9. <code>GL_STATIC_DRAW</code> 是什麼意思？</summary>
+<p>給 driver 的使用提示：資料上傳一次、畫很多次、不會再改。driver 可能放到 GPU 記憶體。只是提示，用錯不會錯誤，只影響效能。</p></details>
+<details class="qz" data-c="mesh" id="q-m10"><summary>m10. OBJ 裡有 normal（vn），為什麼沒讀？</summary>
+<p>本作業沒有光照，FS 只用純色或貼圖，用不到 normal。要做光照時才加第三個 attribute（stride 變 8 float），並在 VS 用 normal matrix 轉換。</p></details>
+<details class="qz" data-c="mesh" id="q-m11"><summary>m11. 為什麼不需要自己把四邊形切成三角形？</summary>
+<p><code>tinyobj::LoadObj</code> 的 <code>triangulate</code> 參數預設為 <code>true</code>，會自動把多邊形切成三角形；而且這幾個 OBJ 本來就全是三角形面。</p></details>
+
+<h3 id="qz-tex">Texture</h3>
+<details class="qz" data-c="tex" id="q-t1"><summary>t1. <code>stbi_set_flip_vertically_on_load(true)</code> 為什麼需要？</summary>
+<p>圖檔第一列是影像<b>最上面</b>，OpenGL texture 的 v = 0 在<b>最下面</b>。不翻轉貼圖會上下顛倒。</p></details>
+<details class="qz" data-c="tex" id="q-t2"><summary>t2. <code>stbi_load(…, 4)</code> 最後的 4 是什麼？<code>nailong.png</code> 是 RGB，為什麼還能用 <code>GL_RGBA</code>？</summary>
+<p><code>req_comp = 4</code>：不管原圖幾個 channel，都轉成 RGBA 回傳（缺的 alpha 補 255）。<code>channels</code> 變數拿到的是原圖的 3，但 <code>data</code> 已是 4 channel，所以 <code>glTexImage2D</code> 用 <code>GL_RGBA</code> 正確。好處：不用處理 RGB 寬度不是 4 的倍數時的 <code>GL_UNPACK_ALIGNMENT</code> 問題。</p></details>
+<details class="qz" data-c="tex" id="q-t3"><summary>t3. <code>glTexImage2D</code> 裡 <code>GL_RGBA8</code> 跟 <code>GL_RGBA</code> 差在哪？</summary>
+<p>第 3 個參數 <code>GL_RGBA8</code> 是 internal format：GPU 上怎麼存（每 channel 8 bit）。第 7、8 個參數 <code>GL_RGBA, GL_UNSIGNED_BYTE</code> 描述<b>你傳進來的 CPU 資料</b>格式。</p></details>
+<details class="qz" data-c="tex" id="q-t4"><summary>t4. 如果拿掉 <code>glGenerateMipmap</code>，其他不變，會怎樣？</summary>
+<p>MIN_FILTER 設成 <code>GL_LINEAR_MIPMAP_LINEAR</code> 需要完整的 mipmap 鏈；沒有 mipmap 時 texture 是 <b>incomplete</b>，取樣結果是黑色 → 胸口板全黑。另一種修法是把 MIN_FILTER 改成 <code>GL_LINEAR</code>。</p></details>
+<details class="qz" data-c="tex" id="q-t5"><summary>t5. MIN_FILTER 和 MAG_FILTER 什麼時候各自生效？</summary>
+<p>MAG：貼圖被放大（一個 texel 蓋多個 pixel，鏡頭靠近）。MIN：貼圖被縮小（多個 texel 擠進一個 pixel，遠處）。<code>LINEAR_MIPMAP_LINEAR</code> = 在兩層 mipmap 各做雙線性再內插（trilinear）。</p></details>
+<details class="qz" data-c="tex" id="q-t6"><summary>t6. 為什麼 <code>glTexImage2D</code> 之後就能 <code>stbi_image_free</code>？</summary>
+<p><code>glTexImage2D</code> 會把資料複製給 OpenGL（GPU），之後 CPU 端的記憶體就用不到了。</p></details>
+<details class="qz" data-c="tex" id="q-t7"><summary>t7. <span class="tag" style="background:var(--warn)">陷阱</span> 胸口板呼叫 <code>drawPart</code> 時傳了 <code>METAL_COLOR</code>，這個顏色有用到嗎？（<code>main.cpp:376</code>）</summary>
+<p>沒有。<code>textured = true</code> → <code>uUseTex = 1</code> → FS 直接輸出 <code>texture(uTex, vUV)</code>，<code>uColor</code> 被忽略。若想讓貼圖帶色調，可改成 <code>texture(uTex, vUV) * vec4(uColor, 1.0)</code>。</p></details>
+<details class="qz" data-c="tex" id="q-t8"><summary>t8. 胸口板是一個壓扁的 Cube，6 個面都有貼圖嗎？為什麼放在 z = 0.31，不是 0.3？</summary>
+<p>6 個面都有（Cube.obj 每個面 uv 都是 0–1），側面只是很薄看不到。torso 前表面在 z = 0.6 / 2 = 0.3；板子厚 0.04、中心 0.31 → 範圍 0.29–0.33，前表面突出 torso 0.03。如果剛好和 torso 前表面重疊在同一深度，會發生 <b>z-fighting</b>（兩個面搶深度、閃爍）。</p></details>
+<details class="qz" data-c="tex" id="q-t9"><summary>t9. wrap mode 沒設定，預設是什麼？會影響這個作業嗎？</summary>
+<p>預設 <code>GL_REPEAT</code>。Cube 的 uv 都在 0–1，所以不影響；uv 超出 0–1 時才看得出差別（重複 vs <code>CLAMP_TO_EDGE</code> 拉邊）。</p></details>
+
+<h3 id="qz-proj">相機與 depth</h3>
+<details class="qz" data-c="proj" id="q-p1"><summary>p1. <code>glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f)</code> 四個參數？（<code>main.cpp:412</code>）</summary>
+<p>垂直視角 fovy（弧度）、寬高比、near、far。只有 near–far 之間、視錐內的東西會被畫。</p></details>
+<details class="qz" data-c="proj" id="q-p2"><summary>p2. 為什麼 aspect 用 <code>std::max(height, 1)</code>？為什麼用 framebuffer size 而不是 window size？</summary>
+<p>視窗高度可能是 0（極端縮小），除以 0 得到 inf / NaN 的投影矩陣。HiDPI 螢幕上 window size（screen 座標）和 framebuffer size（實際像素）不同，<code>glViewport</code> 要的是像素，所以兩者都用 <code>glfwGetFramebufferSize</code> 的值（<code>main.cpp:576–579</code>）。</p></details>
+<details class="qz" data-c="proj" id="q-p3"><summary>p3. <code>glm::lookAt(eye, center, up)</code> 在你的程式裡相機在哪、看哪？</summary>
+<p>eye = (0, 3.2, 9)：機器人前上方；center = (0, 2.5, 0)：機器人胸口附近；up = +y。相機固定不動，機器人面向 +z，所以預設看到機器人正面。</p></details>
+<details class="qz" data-c="proj" id="q-p4"><summary>p4. near 改成 0.0001 或 0 會怎樣？</summary>
+<p>depth buffer 精度在 near 附近最集中，near 太小 → 遠處物體深度幾乎相同 → z-fighting。near = 0 時投影矩陣退化，深度全部錯。</p></details>
+<details class="qz" data-c="proj" id="q-p5"><summary>p5. 沒開 depth test 會怎樣？為什麼每幀都要清 depth buffer？</summary>
+<p>沒開：後畫的永遠蓋掉先畫的（例如後畫的腿蓋在身體前面）。不清：上一幀的深度殘留，這一幀大部分 fragment 被判定「比較遠」而丟掉 → 畫面殘缺。預設比較函式是 <code>GL_LESS</code>。</p></details>
+<details class="qz" data-c="proj" id="q-p6"><summary>p6. <code>glEnable(GL_DEPTH_TEST)</code> 放在 <code>on_display</code> 每幀呼叫，有必要嗎？</summary>
+<p>不是必要。ImGui 的 OpenGL3 backend 畫 UI 時會關 depth test，但畫完會<b>還原</b>原本狀態，所以在初始化時開一次也行。每幀開一次成本極低、比較保險。</p></details>
+<details class="qz" data-c="proj" id="q-p7"><summary>p7. depth buffer 是誰建立的？你有寫程式建立嗎？</summary>
+<p>沒有。GLFW 建立視窗時的 default framebuffer 預設就有 24-bit depth buffer（<code>GLFW_DEPTH_BITS</code> 預設 24）。</p></details>
+<details class="qz" data-c="proj" id="q-p8"><summary>p8. 你有開 back-face culling 嗎？開了會有什麼差別？</summary>
+<p>沒有，所以每個三角形正反面都會畫。開 <code>glEnable(GL_CULL_FACE)</code> 會省掉背向相機的三角形（約一半），前提是 OBJ 的三角形都是逆時針（CCW）排列；畫面看起來應該一樣。</p></details>
+
+<h3 id="qz-hier">矩陣與階層</h3>
+<details class="qz" data-c="hier" id="q-h1"><summary>h1. 說明 <code>jointMatrix</code> 的乘法順序，以及套用在頂點上的實際順序。（<code>main.cpp:319–326</code>）</summary>
+<p>m = parent · T(position) · R<sub>y</sub> · R<sub>x</sub> · R<sub>z</sub>。作用在頂點時從右往左：先繞 z、再繞 x、再繞 y（都在關節自己的座標系、以關節為支點），再移到關節位置，最後套 parent 轉到父的座標系。</p></details>
+<details class="qz" data-c="hier" id="q-h2"><summary>h2. <code>glm::translate(m, v)</code> 是 <code>m · T</code> 還是 <code>T · m</code>？為什麼這很重要？</summary>
+<p><code>m · T</code>（新矩陣乘在右邊）。所以從 torso 開始一行一行 translate / rotate 下去，結果自動是 M<sub>torso</sub> · M<sub>arm1</sub> · M<sub>arm2</sub>，子部位的變換在父的座標系裡進行。</p></details>
+<details class="qz" data-c="hier" id="q-h3"><summary>h3. <code>drawPart</code> 為什麼是先 translate 再 scale（<code>T · S</code>）？反過來呢？</summary>
+<p><code>T · S</code> 作用在頂點是先縮放、再平移，offset 是真正的距離。<code>S · T</code> 的話 offset 也會被縮放：例如上臂 offset y = −0.3、scale y = 0.3，實際只移 −0.09，手臂頂端就不會接在肩膀上。</p></details>
+<details class="qz" data-c="hier" id="q-h4"><summary>h4. 為什麼 scale 不會傳給子部位？指出程式哪裡保證了這件事。</summary>
+<p><code>drawPart</code> 的 <code>model</code> 是區域變數，含 scale，只拿來設 <code>uM</code> 和畫自己；往下傳的是 <code>jointMatrix</code> 的回傳值（<code>seg1</code>、<code>seg2</code>、<code>torso</code>、<code>head</code>），裡面只有 T 和 R。</p></details>
+<details class="qz" data-c="hier" id="q-h5"><summary>h5. 上臂為什麼是 <code>offset = (0, -len/2, 0)</code>、<code>size = (thick, len/2, thick)</code>？（<code>main.cpp:353</code>）</summary>
+<p>Capsule.obj 高 2（y ∈ [−1, 1]）、中心在原點。y scale = len / 2 → 高度變 len；再往下移 len / 2 → 頂端在關節（y = 0）、底端在 y = −len。這樣旋轉時以頂端（肩膀）為支點。</p></details>
+<details class="qz" data-c="hier" id="q-h6"><summary>h6. 前臂（seg2）的 parent 是誰？為什麼關節位置是 <code>(0, -len, 0)</code>？</summary>
+<p>parent 是 <code>seg1</code>（上臂的關節矩陣，不含 scale）。在 seg1 的座標系裡上臂從 y = 0 延伸到 y = −len，所以手肘在 <code>(0, −len, 0)</code>。上臂一轉，seg1 改變，前臂自動跟著。</p></details>
+<details class="qz" data-c="hier" id="q-h7"><summary>h7. 寫出畫「左前臂」時 VS 實際用到的完整矩陣。</summary>
+<p><code>P · V · T(robotPos + (0, 2.26 + bodyY, 0)) · R<sub>y</sub>(robotYaw) · R(p.torso) · T(−0.7, 0.45, 0) · R(p.lArm1) · T(0, −0.6, 0) · R(p.lArm2) · T(0, −0.3, 0) · S(0.198, 0.3, 0.198)</code>。前面到 <code>R(p.lArm2)</code> 是 <code>seg2</code>，後面兩個是 <code>drawPart</code> 加的。</p></details>
+<details class="qz" data-c="hier" id="q-h8"><summary>h8. 為什麼關節處要畫一顆球？（<code>main.cpp:352、357</code>）</summary>
+<p>兩節 capsule 轉出角度時，關節外側會出現縫隙或尖角。球心在關節原點，畫成稍粗於手臂的球（<code>thick × 1.3</code> / <code>× 1.2</code>）把接縫蓋住，看起來像機械關節。</p></details>
+<details class="qz" data-c="hier" id="q-h9"><summary>h9. <code>drawLimb</code> 回傳什麼？拿去做什麼？</summary>
+<p>回傳 <code>seg2 · T(0, −len, 0)</code>：前臂 / 小腿末端（手腕 / 腳踝）的矩陣，不含 scale。<code>drawRobot</code> 拿它畫手掌（球）和腳掌（Cube），所以手掌、腳掌是第三層子節點。</p></details>
+<details class="qz" data-c="hier" id="q-h10"><summary>h10. 為什麼 <code>glUniformMatrix4fv</code> 的 transpose 參數是 <code>GL_FALSE</code>？<code>glm::value_ptr</code> 做什麼？</summary>
+<p>GLM 和 GLSL 都是 <b>column-major</b>，記憶體排列一致，不用轉置。<code>value_ptr</code> 回傳指向矩陣 16 個連續 float 第一個的指標，給 OpenGL 讀。</p></details>
+<details class="qz" data-c="hier" id="q-h11"><summary>h11. 按 Q / E 轉身時，機器人繞哪一點轉？如果寫成先 rotate 再 translate 呢？</summary>
+<p>torso = T(位置) · R<sub>y</sub>(yaw) → 繞<b>自己身體中心的垂直軸</b>原地轉。若寫成 R<sub>y</sub>(yaw) · T(位置)，會繞 <b>world 原點</b>公轉；robotPos 不是 0 時機器人會繞圈移動。</p></details>
+<details class="qz" data-c="hier" id="q-h12"><summary>h12. <code>jointMatrix</code> 的三個 rotate 順序換成 X→Y→Z，揮手動作會一樣嗎？</summary>
+<p>不一定。3D 旋轉不可交換，只有一個軸非 0 時順序無關；多軸同時非 0 時（例如 Walk 的 <code>lArm1 = (0.5s, 0, −0.08)</code>）結果會略有不同。這是 Euler angle 的特性。</p></details>
+
+<h3 id="qz-robot">機器人組裝</h3>
+<details class="qz" data-c="robot" id="q-r1"><summary>r1. 畫出你的階層圖，每個節點有哪些 <code>drawPart</code>？</summary>
+<p>Torso（root：身體、胸口板、骨盆）→ Head（脖子、頭、2 眼、天線、天線球）；→ L1/R1 Arm（肩球、上臂）→ L2/R2 Arm（肘球、前臂）→ 手掌；→ L1/R1 Leg（髖球、大腿）→ L2/R2 Leg（膝球、小腿）→ 腳掌。</p></details>
+<details class="qz" data-c="robot" id="q-r2"><summary>r2. 每一幀有幾個 draw call（不含 ImGui）？大約多少頂點？</summary>
+<p>torso 3 + head 6 + 四肢各 4（2 球 + 2 capsule）× 4 = 16 + 手掌 2 + 腳掌 2 = <b>29</b> 個 <code>glDrawArrays</code>。頂點：13 顆 Sphere × 2304 + 8 個 Capsule × 2496 + 6 個 Cube × 36 + 2 個 Cylinder × 240 ≈ <b>50,616</b>，Sphere 佔六成。</p></details>
+<details class="qz" data-c="robot" id="q-r3"><summary>r3. <code>TORSO_HEIGHT = 2.26</code> 怎麼來的？（<code>main.cpp:84–85</code>）</summary>
+<p>從 torso 中心往下：髖關節在 −0.7、大腿 0.7、小腿 0.7、腳掌高 0.16（中心在腳踝下 0.08）→ 0.7 + 1.4 + 0.16 = 2.26。torso 中心放在 y = 2.26，站直時腳底剛好在 y = 0。</p></details>
+<details class="qz" data-c="robot" id="q-r4"><summary>r4. 頭的關節為什麼在 <code>(0, 0.6, 0)</code>？頭的中心為什麼在關節上方 0.4？</summary>
+<p>torso 的 scale y = 1.2，半高 0.6 → 脖子關節在 torso 頂面。頭的 Cube 高 0.5，中心放在 0.4 → 底面在 0.15，中間 0.15 是脖子（Cylinder，高 0.16）。頭繞脖子關節轉，不是繞頭中心轉。</p></details>
+<details class="qz" data-c="robot" id="q-r5"><summary>r5. <span class="tag" style="background:var(--warn)">陷阱</span> 程式裡的 <code>rArm</code>（x = +0.7）是機器人自己的右手嗎？</summary>
+<p>不是。機器人面向 +z（朝相機），它自己的右手在 <b>−x</b>（觀眾的左邊）。程式的 L / R 是以<b>觀眾畫面</b>的左右命名。Demo 時講清楚即可：「L/R 是畫面左右」。</p></details>
+<details class="qz" data-c="robot" id="q-r6"><summary>r6. 腳掌為什麼 offset 是 <code>(0, -0.08, 0.08)</code>？</summary>
+<p>腳掌 Cube 高 0.16，y 往下 0.08 → 頂面剛好在腳踝；z 往前（+z，機器人面向）0.08 → 腳尖往前伸，像真正的腳。</p></details>
+<details class="qz" data-c="robot" id="q-r7"><summary>r7. 下半節為什麼是 <code>color * 0.85f</code>、<code>thick * 0.9f</code>？</summary>
+<p>前臂 / 小腿顏色暗一點、細一點，讓兩節分得出來，純視覺設計。<code>glm::vec3 * float</code> 是每個分量都乘。</p></details>
+<details class="qz" data-c="robot" id="q-r8"><summary>r8. Sphere.obj 直徑 1，眼睛 <code>glm::vec3(0.13f)</code> 實際多大？會不會被頭擋住？</summary>
+<p>直徑 0.13。頭的 Cube 深 0.5 → 前表面 z = 0.25；眼睛中心在 z = 0.25，一半埋在頭裡、一半凸出來，depth test 只顯示凸出的半球。</p></details>
+
+<h3 id="qz-anim">動畫</h3>
+<details class="qz" data-c="anim" id="q-a1"><summary>a1. 暫停是怎麼做的？暫停時還能移動機器人嗎？</summary>
+<p><code>if (playing) animTime += dt;</code>（<code>main.cpp:565</code>）：暫停 = 不累加，<code>computePose</code> 拿到同一個 t，姿勢就固定。<code>processInput</code> 不受 <code>playing</code> 影響，暫停時 WASD / QE / 拖曳仍然有效。</p></details>
+<details class="qz" data-c="anim" id="q-a2"><summary>a2. <code>computePose</code> 有沒有記憶上一幀的狀態？切換動畫時會怎樣？</summary>
+<p>沒有，它只依 <code>(mode, t)</code> 算出姿勢（純函式）。所以切換 Combo 時姿勢會<b>瞬間跳</b>到新動畫的同一時間點，沒有過渡。要平滑可以記錄切換時刻，在一段時間內對兩個 Pose 做線性內插。</p></details>
+<details class="qz" data-c="anim" id="q-a3"><summary>a3. Walk 一個步伐週期多久？擺幅幾度？</summary>
+<p><code>sin(t * 4)</code> 週期 2π / 4 ≈ <b>1.57 秒</b>。大腿擺幅 0.5 rad ≈ 28.6°，手臂同樣 0.5 rad。</p></details>
+<details class="qz" data-c="anim" id="q-a4"><summary>a4. 角度正負代表什麼方向？用右手定則說明 <code>x 負 = 往前擺</code>。</summary>
+<p>繞 +x 軸、角度為正時，右手大拇指指 +x，四指從 +y 轉向 +z。腿原本指向 −y，正角度會讓它轉向 −z（往後）；負角度轉向 +z（往前，機器人面向 +z）。</p></details>
+<details class="qz" data-c="anim" id="q-a5"><summary>a5. <span class="tag" style="background:var(--warn)">陷阱</span> Walk 註解寫「往後擺的那隻腿膝蓋彎」，程式實際上是哪隻腿彎？（<code>main.cpp:250–254</code>）</summary>
+<p>s &gt; 0 時 <code>lLeg1.x = −0.5s</code> 為負 → 左腿在<b>前面</b>，同時 <code>lLeg2.x = 0.6·max(0, s)</code> &gt; 0 → 左膝彎。所以是「<b>擺在前面</b>的那隻腿膝蓋彎」，<b>註解寫反了</b>。小腿正角度 = 往後折，符合膝蓋方向。Demo 被問就照程式實際行為講，並說明註解有誤。</p></details>
+<details class="qz" data-c="anim" id="q-a6"><summary>a6. <code>std::max(0.0f, s)</code> 在這裡的作用？</summary>
+<p>半波整流：只保留 sin 的正半週，負的部分變 0。用在膝蓋 / 手肘：關節只能往一個方向彎，一個週期內只在半週彎曲，另外半週伸直。</p></details>
+<details class="qz" data-c="anim" id="q-a7"><summary>a7. Walk 時手和腳的相位關係？</summary>
+<p>左右腿反相（<code>±0.5s</code>）；手臂與<b>同側</b>的腳反相（<code>lArm1.x = +0.5s</code> vs <code>lLeg1.x = −0.5s</code>）→ 左腳在前時左手在後，跟人走路一樣。</p></details>
+<details class="qz" data-c="anim" id="q-a8"><summary>a8. <code>bodyY = 0.05 * |cos(4t)|</code>：身體什麼時候最高？一個步伐週期彈幾次？</summary>
+<p>|cos| 最大時 sin = 0，也就是兩腿經過垂直、交錯的瞬間 → 身體最高（跟真實走路一樣）。|cos| 的週期是 cos 的一半，所以一個步伐週期（左右各一步）彈 <b>2 次</b>。</p></details>
+<details class="qz" data-c="anim" id="q-a9"><summary>a9. Walk 的 <code>head.y = −0.15s</code>、<code>torso.y = 0.1s</code>，頭在 world 中實際轉多少？</summary>
+<p>head 是 torso 的子節點，角度是<b>相對 torso</b>。world 中頭的偏轉 = 0.1s − 0.15s = <b>−0.05s</b>，即頭的轉向和身體相反、幅度小，看起來像身體扭動時頭保持朝前。</p></details>
+<details class="qz" data-c="anim" id="q-a10"><summary>a10. Wave 的 <code>rArm1.z = 2.6</code> 為什麼是繞 z 軸？2.6 是幾度？</summary>
+<p>z 軸指向機器人前方，繞 z 轉手臂會在左右平面（側舉）抬起。2.6 rad ≈ 149°：手臂從朝下（−y）轉到斜上外側。前臂 <code>rArm2.z = 0.5·sin(6t)</code> 左右揮。</p></details>
+<details class="qz" data-c="anim" id="q-a11"><summary>a11. Jump 蹲下時 <code>torso.x = 0.3·crouch</code>，腿會不會跟著傾斜？</summary>
+<p>會。腿是 torso 的子節點，torso 前傾 0.3 rad，整雙腿也跟著轉 0.3 rad，腿的實際角度 = torso.x + leg1.x。若想讓腿不受身體傾斜影響，要在腿角度裡扣掉 torso.x，或改用骨盆當 root。</p></details>
+<details class="qz" data-c="anim" id="q-a12"><summary>a12. Jump 蹲下時腳底會剛好貼地嗎？</summary>
+<p>不精確。<code>bodyY = −0.35·crouch</code> 是手調的近似值，沒有根據腿的角度反算（forward kinematics），腳可能稍微浮起或陷入（沒有畫地板所以不明顯）。精確做法：由大腿、小腿、torso 傾斜角算出腳踝高度，再決定 bodyY；或用 IK。</p></details>
+<details class="qz" data-c="anim" id="q-a13"><summary>a13. 動畫為什麼用經過的時間，不是每幀 +1？</summary>
+<p>每幀 +1 的速度跟 FPS 綁在一起，換台電腦或關 vsync 速度就變。用 <code>dt</code> 累加，任何 FPS 下 1 秒就是 1 秒。</p></details>
+
+<h3 id="qz-ui">ImGui 與輸入</h3>
+<details class="qz" data-c="ui" id="q-u1"><summary>u1. ImGui 是 immediate mode GUI，這在 <code>on_gui</code> 怎麼看出來？</summary>
+<p>沒有建立 / 保存任何按鈕物件，每一幀都重新呼叫 <code>Begin / Checkbox / Combo / End</code> 描述 UI。<code>Checkbox(&amp;playing)</code> 直接讀寫你的變數，使用者點了就在這一幀改掉 <code>playing</code>（回傳值為 true 表示這幀有改變）。</p></details>
+<details class="qz" data-c="ui" id="q-u2"><summary>u2. <code>ImGui::Combo("Animation", &amp;animMode, modes, IM_ARRAYSIZE(modes))</code> 如何對應到 enum？</summary>
+<p>Combo 把選到的 index（0、1、2）寫進 <code>animMode</code>；字串陣列順序 Walk / Wave / Jump 與 <code>enum { ANIM_WALK = 0, ANIM_WAVE = 1, ANIM_JUMP = 2 }</code> 一致。<code>IM_ARRAYSIZE</code> = <code>sizeof(arr) / sizeof(arr[0])</code> = 3。所以 <code>animMode</code> 宣告成 <code>int</code> 而不是 enum 型別。</p></details>
+<details class="qz" data-c="ui" id="q-u3"><summary>u3. 為什麼自己的 callback 要在 <code>ImGui_ImplGlfw_InitForOpenGL(window, true)</code> 之前設定？</summary>
+<p>第二個參數 <code>true</code> = ImGui 安裝自己的 GLFW callback，並<b>記住原本已註冊的 callback</b>，在它處理完後串接呼叫。若之後才設定，<code>glfwSet*Callback</code> 會把 ImGui 的 callback 換掉 → ImGui 收不到滑鼠，選單點不動。</p></details>
+<details class="qz" data-c="ui" id="q-u4"><summary>u4. 鍵盤用 <code>glfwGetKey</code>（polling），滑鼠用 callback，為什麼？</summary>
+<p>移動需要「按住就持續動」，每幀問一次按鍵狀態最直接，乘 dt 速度穩定。key callback 只在按下 / 放開 / repeat 時觸發，repeat 有延遲且頻率不固定。滑鼠拖曳需要「按下那一刻」記錄起點、每次游標移動的增量，用事件比較自然。單次觸發的動作（例如按 P 切換暫停）才適合 key callback。</p></details>
+<details class="qz" data-c="ui" id="q-u5"><summary>u5. <code>WantCaptureMouse</code> 為什麼只在按下時檢查，放開時不檢查？（<code>main.cpp:463–469</code>）</summary>
+<p>按下時在 ImGui 視窗上 → 不開始拖曳。放開時不管在哪都要結束拖曳；若放開時也檢查，在場景按下、拖到選單上放開，<code>dragging</code> 會卡在 true，之後滑鼠一動機器人就轉。</p></details>
+<details class="qz" data-c="ui" id="q-u6"><summary>u6. <span class="tag" style="background:var(--warn)">陷阱</span> 機器人面向相機時按 W，它往哪走？跟面向一致嗎？</summary>
+<p><code>robotPos.z -= move</code> → 往 world −z（遠離相機、畫面深處）。機器人 yaw = 0 時面向 +z，所以 W 讓它<b>倒退走</b>；轉身後 WASD 方向也不跟著轉（是 world 軸向，不是機器人自己的前後）。題目只要求「控制位置與旋轉」，符合規定；改法見 <a href="#q-x1">x1</a>。</p></details>
+<details class="qz" data-c="ui" id="q-u7"><summary>u7. 移動速度是多少？為什麼乘 dt？</summary>
+<p><code>move = 2.0f * dt</code> → 每秒 2 單位；<code>turn = 2.0f * dt</code> → 每秒 2 rad（約 115°）。不乘 dt 的話每幀固定移動量，FPS 高的電腦跑得比較快。</p></details>
+<details class="qz" data-c="ui" id="q-u8"><summary>u8. 拖曳 1 個像素轉多少？為什麼不用乘 dt？</summary>
+<p>0.01 rad / 單位（約 0.57°）。滑鼠拖曳是「位移量」驅動，移了多少就轉多少，與經過時間無關；乘 dt 反而讓轉速跟 FPS 有關。（嚴格說游標座標是 screen 座標，HiDPI 下不等於像素。）</p></details>
+<details class="qz" data-c="ui" id="q-u9"><summary>u9. 點過 ImGui 選單後，WASD 會不會失效？</summary>
+<p>不會。這份程式<b>沒有</b>開 <code>ImGuiConfigFlags_NavEnableKeyboard</code>（template 原本有，已拿掉），所以 <code>WantCaptureKeyboard</code> 只在有 ImGui 元件正被操作（<code>ActiveId != 0</code>，例如按住 Checkbox、正在文字框打字）或有 modal 視窗時為 true；點完放開就恢復。<code>processInput</code> 開頭的檢查只擋這段時間。</p></details>
+<details class="qz" data-c="ui" id="q-u10"><summary>u10. 為什麼不能用 <code>scanf</code> / <code>std::cin</code> 讓使用者輸入？</summary>
+<p>作業規定（−10）。而且 console 輸入會<b>阻塞</b>主迴圈：等輸入時不會 poll events、不會重畫，視窗凍結。所有輸入都走 GLFW 事件 / ImGui。</p></details>
+
+<h3 id="qz-gen">綜合 / 規則</h3>
+<details class="qz" data-c="gen" id="q-g1"><summary>g1. 你的程式哪裡證明沒有用 fixed function pipeline？</summary>
+<p>沒有 <code>glBegin / glVertex / glTranslatef / glPushMatrix / glMatrixMode</code>；矩陣全部由 GLM 計算、用 <code>glUniformMatrix4fv</code> 傳給自己的 VS；頂點資料放在 VBO、由 VAO 描述；context 是 core profile（fixed function 在 core profile 根本不能用）。</p></details>
+<details class="qz" data-c="gen" id="q-g2"><summary>g2. 程式結束時有釋放 VAO / VBO / texture / program 嗎？</summary>
+<p>沒有呼叫 <code>glDeleteVertexArrays / glDeleteBuffers / glDeleteTextures / glDeleteProgram</code>。<code>glfwDestroyWindow</code> 刪掉 context 時 driver 會一起回收，程式結束 OS 也會回收，所以沒有實際影響；嚴謹的寫法是在清理段補上。</p></details>
+<details class="qz" data-c="gen" id="q-g3"><summary>g3. <code>TINYOBJLOADER_IMPLEMENTATION</code>、<code>STB_IMAGE_IMPLEMENTATION</code> 是什麼？為什麼只能定義一次？</summary>
+<p>header-only 函式庫：沒定義時 header 只有宣告；定義後 include 會把<b>函式實作</b>也展開進這個 .cpp。如果兩個 .cpp 都定義，同一個函式會有兩份定義 → link 時 multiple definition 錯誤。本作業只有 main.cpp，所以放這裡。</p></details>
+<details class="qz" data-c="gen" id="q-g4"><summary>g4. 全域變數裡，哪些是「輸入寫、繪製讀」的狀態？</summary>
+<p><code>robotPos / robotYaw</code>（processInput、滑鼠 callback 寫 → <code>drawRobot</code> 讀）、<code>playing / animMode</code>（ImGui 寫 → 主迴圈 / <code>on_display</code> 讀）、<code>animTime</code>（主迴圈寫 → <code>computePose</code> 讀）、<code>dragging / lastMouseX</code>（只在滑鼠 callback 之間使用）。</p></details>
+<details class="qz" data-c="gen" id="q-g5"><summary>g5. 為什麼 <code>Mesh</code> 可以宣告成全域變數，在 GL context 建立之前就存在？</summary>
+<p>全域的 <code>Mesh</code> 只是三個整數（初始為 0），宣告時不呼叫任何 OpenGL 函式；真正建立 GPU 資源是在 GLAD 初始化之後呼叫 <code>loadObj</code> 時。</p></details>
+<details class="qz" data-c="gen" id="q-g6"><summary>g6. 檔頭寫了用 AI 協助，助教問「這段是你寫的嗎」要怎麼回答？</summary>
+<p>照實說：使用 Claude Code 協助撰寫並已在檔頭註明；接著直接用自己的話解釋被問到的那段在做什麼、為什麼這樣寫、改掉會怎樣（這份題庫就是在練這個）。規定是可以用 AI，但必須能解釋每一行。</p></details>
+
+<h3 id="qz-mod">現場修改題（可能被要求當場改）</h3>
+<details class="qz" data-c="mod" id="q-x1"><summary>x1. 讓 W / S 沿著機器人面向的方向前進 / 後退。</summary>
+<pre><code><span class="c">// processInput：yaw = 0 時面向 +z；繞 y 轉 yaw 後的前方 = (sin yaw, 0, cos yaw)</span>
+glm::vec3 forward(std::sin(robotYaw), 0.0f, std::cos(robotYaw));
+if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) robotPos += forward * move;
+if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) robotPos -= forward * move;</code></pre></details>
+<details class="qz" data-c="mod" id="q-x2"><summary>x2. 加一個 ImGui slider 調整動畫速度。</summary>
+<pre><code>float animSpeed = 1.0f;                                         <span class="c">// 全域</span>
+ImGui::SliderFloat("Speed", &amp;animSpeed, 0.0f, 3.0f);            <span class="c">// on_gui</span>
+if (playing) animTime += dt * animSpeed;                        <span class="c">// main loop</span></code></pre></details>
+<details class="qz" data-c="mod" id="q-x3"><summary>x3. 把頭改成貼圖、身體改回純色。</summary>
+<p><code>main.cpp:382</code> 頭的 <code>drawPart</code> 最後加 <code>, true</code>；<code>main.cpp:376</code> 胸口板拿掉 <code>, true</code>（或整行刪除）。texture 已綁在 unit 0，不用改其他地方。</p></details>
+<details class="qz" data-c="mod" id="q-x4"><summary>x4. 加第 4 種動畫「點頭」。</summary>
+<p>① enum 加 <code>ANIM_NOD = 3</code>；② <code>modes[]</code> 加 <code>"Nod"</code>；③ <code>computePose</code> 加一個分支：<code>p.head.x = 0.3f * std::sin(t * 5.0f);</code>（其他部位也給一點動作才符合「牽動所有部位」）。</p></details>
+<details class="qz" data-c="mod" id="q-x5"><summary>x5. 用 ImGui ColorEdit 改身體顏色。</summary>
+<p><code>BODY_COLOR</code> 是 <code>const</code>，先改成非 const 的 <code>glm::vec3 bodyColor</code>，再在 <code>on_gui</code> 加 <code>ImGui::ColorEdit3("Body", glm::value_ptr(bodyColor));</code>，<code>drawRobot</code> 改用 <code>bodyColor</code>。</p></details>
+<details class="qz" data-c="mod" id="q-x6"><summary>x6. 用滑鼠滾輪拉近 / 拉遠相機。</summary>
+<pre><code>float camDist = 9.0f;                                           <span class="c">// 全域</span>
+void scroll_callback(GLFWwindow*, double, double yoff) {
+	if (ImGui::GetIO().WantCaptureMouse) return;
+	camDist = std::clamp(camDist - (float)yoff, 3.0f, 20.0f);
+}
+<span class="c">// main：在 ImGui 初始化之前 glfwSetScrollCallback(window, scroll_callback);</span>
+<span class="c">// on_display：lookAt 的 eye 改成 glm::vec3(0.0f, 3.2f, camDist)</span></code></pre></details>
+</div>
+
 </main>
 <script src="common.js"></script>
 <script>
@@ -811,4 +1173,65 @@ function names() {
   else out.innerHTML = `<span class="ok">✓ 格式正確${m[2] ? '（第 ' + m[3] + ' 版，記得重新登記 MD5）' : ''}</span>`;
 }
 sidEl.oninput = fnEl.oninput = names;
+// ---------- Code review 進度 ----------
+const rvSt = JSON.parse(localStorage.getItem('gpa-as1-review') || '{}'), rvs = [...document.querySelectorAll('.rv')];
+function rvRender() {
+  rvs.forEach(d => { const c = d.querySelector('summary input'); c.checked = !!rvSt[d.id]; d.classList.toggle('done', c.checked); });
+  document.getElementById('rvBar').style.width = (rvs.filter(d => rvSt[d.id]).length / rvs.length * 100) + '%';
+}
+rvs.forEach(d => {
+  const c = d.querySelector('summary input');
+  c.onclick = e => e.stopPropagation();
+  c.onchange = () => { rvSt[d.id] = c.checked; localStorage.setItem('gpa-as1-review', JSON.stringify(rvSt)); rvRender(); };
+});
+document.getElementById('rvReset').onclick = () => { for (const k in rvSt) delete rvSt[k]; localStorage.removeItem('gpa-as1-review'); rvRender(); };
+rvRender();
+
+// ---------- Demo 題庫：分類篩選、會了、隨機抽題 ----------
+const QC = { all: '全部', init: '初始化', shader: 'Shader', compile: '編譯連結', mesh: 'OBJ / VAO', tex: 'Texture', proj: '相機 / depth', hier: '矩陣階層', robot: '組裝', anim: '動畫', ui: 'ImGui / 輸入', gen: '綜合', mod: '現場修改', trap: '只看陷阱' };
+const qzs = [...document.querySelectorAll('.qz')], qzSt = JSON.parse(localStorage.getItem('gpa-as1-quiz') || '{}');
+let qzCat = 'all';
+qzs.forEach(d => {
+  const c = document.createElement('input'); c.type = 'checkbox'; c.title = '會了';
+  c.onclick = e => e.stopPropagation();
+  c.onchange = () => { qzSt[d.id] = c.checked; localStorage.setItem('gpa-as1-quiz', JSON.stringify(qzSt)); qzRender(); };
+  d.querySelector('summary').prepend(c);
+});
+const qzCats = document.getElementById('qzCats');
+qzCats.innerHTML = Object.entries(QC).map(([k, t]) => `<button class="b" data-c="${k}">${t}</button>`).join('');
+qzCats.querySelectorAll('button').forEach(b => b.onclick = () => { qzCat = b.dataset.c; qzRender(); });
+const qzTodo = document.getElementById('qzTodo');
+const inCat = d => qzCat === 'all' || (qzCat === 'trap' ? !!d.querySelector('summary .tag') : d.dataset.c === qzCat);
+function qzRender() {
+  qzCats.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.c === qzCat));
+  qzs.forEach(d => {
+    d.querySelector('summary input').checked = !!qzSt[d.id];
+    d.classList.toggle('got', !!qzSt[d.id]);
+    d.classList.toggle('hide', !inCat(d) || (qzTodo.checked && !!qzSt[d.id]));
+  });
+  document.querySelectorAll('#quiz-list h3').forEach(h => {
+    let n = h.nextElementSibling, any = false;
+    for (; n && n.tagName !== 'H3'; n = n.nextElementSibling) if (n.classList.contains('qz') && !n.classList.contains('hide')) any = true;
+    h.style.display = any ? '' : 'none';
+  });
+  const got = qzs.filter(d => qzSt[d.id]).length;
+  document.getElementById('qzCount').textContent = `會了 ${got} / ${qzs.length}`;
+  document.getElementById('qzBar').style.width = got / qzs.length * 100 + '%';
+}
+qzTodo.onchange = qzRender;
+document.getElementById('qzRand').onclick = () => {
+  const pool = qzs.filter(d => inCat(d) && !(qzTodo.checked && qzSt[d.id]));
+  if (!pool.length) return;
+  qzs.forEach(d => d.classList.remove('pick'));
+  const d = pool[Math.floor(Math.random() * pool.length)];
+  d.classList.remove('hide'); d.open = false; d.classList.add('pick');
+  d.scrollIntoView({ block: 'center', behavior: 'smooth' });
+};
+const qzOpen = document.getElementById('qzOpen');
+qzOpen.onclick = () => { const o = qzOpen.textContent === '全部展開'; qzs.forEach(d => d.open = o); qzOpen.textContent = o ? '全部收合' : '全部展開'; };
+document.getElementById('qzClear').onclick = () => { if (!confirm('清除所有「會了」？')) return; for (const k in qzSt) delete qzSt[k]; localStorage.removeItem('gpa-as1-quiz'); qzRender(); };
+// 從 R1–R11 的連結跳到題目時自動展開
+const openHash = () => { const d = document.getElementById(location.hash.slice(1)); if (d && d.classList.contains('qz')) { d.classList.remove('hide'); d.open = true; } };
+addEventListener('hashchange', openHash); openHash();
+qzRender();
 </script></body></html>

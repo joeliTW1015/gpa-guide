@@ -1,0 +1,1245 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作業 2：Framebuffer Processing and Post Effect</title><link rel="stylesheet" href="style.css">
+<style>
+.due{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.due .big{font-size:28px;font-weight:700;color:var(--warn)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:14px}
+.kv b{color:var(--mut);font-weight:600}
+.score label{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px dashed #eee}
+.score label span:last-child{color:var(--mut);white-space:nowrap}
+.sum{font-size:20px;font-weight:700}
+.bar{height:10px;background:#eee;border-radius:5px;overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--prog);transition:width .3s}
+.step>summary{display:flex;gap:8px;align-items:center}
+.step>summary input{margin:0}
+.step.done>summary span{color:#999;text-decoration:line-through}
+.ok{color:var(--prog);font-weight:600}.bad{color:var(--warn);font-weight:600}
+.tree{font:13px/1.8 ui-monospace,monospace;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.tree s{color:var(--warn)}
+td.apil{columns:2;column-gap:24px}
+td.apil div{break-inside:avoid;padding:1px 0}
+@media(max-width:760px){td.apil{columns:1}}
+input[type=text]{font:inherit;font-size:14px;padding:3px 8px;border:1px solid var(--line);border-radius:6px}
+.gal{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:860px){.gal{grid-template-columns:repeat(2,1fr)}}
+.gal figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.gal img{display:block;width:100%;cursor:zoom-in}
+.gal figcaption{font-size:12.5px;padding:4px 8px;color:var(--mut)}
+#fxCv{width:100%;max-width:800px;display:block;margin:0 auto;border-radius:8px;border:1px solid var(--line);background:#222;touch-action:none}
+.flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;font-size:13.5px}
+.flow div{flex:1;min-width:130px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.flow div b{display:block;color:var(--acc-ink)}
+.flow i{align-self:center;font-style:normal;color:var(--mut)}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;cursor:zoom-out}
+#lightbox img{max-width:94vw;max-height:90vh;border-radius:8px}
+</style></head>
+<body><main>
+<p class="kicker">作業 · Assignment 2</p>
+<h1>作業 2：Framebuffer Processing and Post Effect</h1>
+<p class="mut">依 <code>2026(Fall)_GPA - Assignment 2.pdf</code>（38 頁）與 <code>Assignment2/assignments/</code>（template）整理。本頁程式碼由同一份參考實作直接擷取，已在 template 上用 <b>Crytek Sponza</b> 實測編譯執行（Linux、OpenGL 4.1 core、2026-10-30），下方截圖都是該程式的輸出。</p>
+<div class="toc"><a href="#intro">1. 作業介紹</a><a href="#grade">2. 評分與規則</a><a href="#pre">3. 先備知識</a><a href="#files">4. 提供的檔案與場景</a><a href="#arch">5. 架構與互動示範</a><a href="#notes">6. 實作須知</a><a href="#steps">7. 實作步驟</a><a href="#api">8. 用到的 API</a><a href="#submit">9. 繳交</a></div>
+
+<!-- ================================================================ -->
+<h2 id="intro">1. 作業介紹</h2>
+<div class="card due">
+<div><div class="mut">距離截止</div><div class="big" id="cd">—</div></div>
+<div class="kv">
+<b>題目</b><span>載入有貼圖的 3D 場景（必須用 <b>Assimp</b>），用 trackball 瀏覽，並以 <b>FBO + shader</b> 做各種後製效果</span>
+<b>公告</b><span>2026/10/19</span>
+<b>截止</b><span><b>2026/11/02（一）23:59</b></span>
+<b>繳交</b><span>FTP <code>Assignment_02/</code> 上傳 zip（專案 + PDF 報告，不含 <code>builder/</code>、<code>build/</code>）</span>
+<b>不收遲交</b><span>MD5 機制同作業 1：期限前登記的 checksum 與上傳檔一致即不算遲交</span>
+<b>違規</b><span>不符規定（檔名、結構等）<b>−10</b></span>
+</div></div>
+
+<h3>要做出什麼</h3>
+<ul>
+<li><b>場景</b>：用 Assimp 載入有貼圖的場景（建議 Crytek Sponza），可切換「diffuse 貼圖」與「world-space normal 當顏色」兩種顯示。</li>
+<li><b>Trackball</b>：W/A/S/D 沿<b>相機自己的方向</b>移動、Z/X 上下、滑鼠拖曳改變視線方向。</li>
+<li><b>Comparison bar</b>：一條可以用滑鼠拖動的分隔線，一邊原圖、一邊效果（Before / After）。</li>
+<li><b>後製效果</b>（全部在 shader 做）：Image Abstraction（blur + quantization + DoG）、Watercolor、Magnifier、Bloom、Pixelization、Sine wave 動畫。</li>
+<li><b>ImGui 選單</b>（或鍵盤 / 滑鼠事件）切換效果，<b>不能用 console 輸入</b>。</li>
+</ul>
+
+<h3>參考實作的輸出</h3>
+<p class="mut">紅線左邊是原圖、右邊是效果（點圖放大）。</p>
+<div class="gal">
+<figure><img src="img/as2-diffuse.jpg" alt="Diffuse"><figcaption>Diffuse 貼圖</figcaption></figure>
+<figure><img src="img/as2-normal.jpg" alt="Normal"><figcaption>World normal 當顏色</figcaption></figure>
+<figure><img src="img/as2-abstraction.jpg" alt="Abstraction"><figcaption>Image Abstraction</figcaption></figure>
+<figure><img src="img/as2-watercolor.jpg" alt="Watercolor"><figcaption>Watercolor</figcaption></figure>
+<figure><img src="img/as2-magnifier.jpg" alt="Magnifier"><figcaption>Magnifier</figcaption></figure>
+<figure><img src="img/as2-bloom.jpg" alt="Bloom"><figcaption>Bloom</figcaption></figure>
+<figure><img src="img/as2-pixel.jpg" alt="Pixelization"><figcaption>Pixelization</figcaption></figure>
+<figure><img src="img/as2-sine.jpg" alt="Sine wave"><figcaption>Sine wave（某一幀）</figcaption></figure>
+</div>
+<div id="lightbox"><img alt=""></div>
+
+<!-- ================================================================ -->
+<h2 id="grade">2. 評分與規則</h2>
+<div class="grid2">
+<div class="card score" id="score"><b>Program &amp; Report（70%）自評</b><p class="mut" style="margin:2px 0 6px">勾選已完成的項目（存在瀏覽器）。</p></div>
+<div>
+<div class="card"><b>總分估算</b>
+<div class="ctrl">Q&amp;A Demo 預估 <input type="range" id="qa" min="0" max="100" value="80"> <span id="qaV"></span></div>
+<div class="sum" id="total">—</div>
+<div class="bar"><i id="totalBar"></i></div>
+<p class="mut" id="totalNote">總分 = Program&amp;Report × 0.7 + Q&amp;A × 0.3</p>
+<div class="ctrl"><label><input type="checkbox" id="dedConsole"> 用了 console 輸入（scanf / cin）−10</label></div>
+<div class="ctrl"><label><input type="checkbox" id="dedRule"> 不符繳交規定（檔名、結構）−10</label></div>
+</div>
+<div class="warn"><b>直接 0 分</b>
+<ul style="margin:4px 0"><li>後製效果<b>不是用 shader 做的</b>（例如 <code>glReadPixels</code> 讀回 CPU 再逐像素處理）</li>
+<li>沒用 OpenGL</li><li>繳交的程式無法編譯 / 執行（可用自己筆電重新 Demo）</li>
+<li>完全複製其他同學的程式碼；Moss 相似度 ≥ 20% 視為抄襲，抄與被抄雙方都 0 分</li></ul></div>
+</div></div>
+<div class="grid2">
+<div class="card"><b>Q&amp;A Demo（30%）</b>
+<ul><li>助教依<b>你的程式碼</b>產生專屬題庫，Demo 時抽題</li>
+<li>問答中<b>禁用任何 AI 工具、禁止上網</b></li>
+<li>練習題見 <a href="#pre">3. 先備知識</a></li></ul></div>
+<div class="card"><b>硬性規定</b>
+<ul><li>必須從提供的 template 開始，不能用自己的 framework</li>
+<li>場景必須用 <b>Assimp</b> 載入；模型路徑、transformation 可以寫死</li>
+<li>效果結果不必和助教範例 100% 一樣，<b>演算法符合要求</b>即可</li>
+<li>AI 可用，但要<b>註明</b>；不可交自己解釋不了的程式</li></ul></div>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="pre">3. 先備知識</h2>
+<table>
+<tr><th style="width:24%">主題</th><th style="width:32%">作業裡用在哪</th><th>去哪複習</th></tr>
+<tr><td><b>FBO（off-screen rendering）</b></td><td>場景先畫進 FBO 的 color texture</td><td><a href="06-fragment-fbo.html#offscreen">Off-Screen Rendering</a>、<a href="06-fragment-fbo.html#fbo">FBO 結構</a>、<a href="06-fragment-fbo.html#cube">Spinning Cube 畫到 FBO</a></td></tr>
+<tr><td><b>影像後製</b></td><td>全螢幕 quad + fragment shader 讀 FBO texture</td><td><a href="06-fragment-fbo.html#post">影像後製（含灰階 / 模糊 / 量化 / DoG 互動）</a></td></tr>
+<tr><td>Assimp</td><td>讀 Sponza 的 OBJ / MTL、材質貼圖路徑</td><td><a href="07-mesh-rendering.html#assimp">Assimp</a>、<a href="07-mesh-rendering.html#load">載入流程</a>、<a href="07-mesh-rendering.html#mtl">MTL</a></td></tr>
+<tr><td>EBO / glDrawElements</td><td>Assimp 給的是 index 化的 mesh</td><td><a href="05-vertex-draw.html#elements">DrawArrays vs DrawElements</a></td></tr>
+<tr><td>多張 texture（texture unit）</td><td>diffuse + mask；FBO texture + noise</td><td><a href="02-project-syntax.html#tex">Texture 要點</a></td></tr>
+<tr><td>相機（lookAt）</td><td>trackball：eye、yaw / pitch → 視線方向</td><td><a href="l01-transform.html#spaces">座標空間與 MVP</a>、<a href="02-project-syntax.html#glm">GLM 速查</a></td></tr>
+<tr><td>Normal 與 normal matrix</td><td>world-space normal 當顏色</td><td><a href="07-mesh-rendering.html#normal">Per-face vs Per-vertex Normal</a></td></tr>
+<tr><td>GLFW callbacks、ImGui</td><td>拖曳視角、拖比較線、滾輪調放大鏡、選單切換效果</td><td><a href="02-project-syntax.html#cb">Callbacks</a>、<a href="as1-robot.html#s7">AS1 步驟 7</a></td></tr>
+</table>
+
+<h3>Demo 練習題</h3>
+<details><summary>為什麼要先畫進 FBO，不能直接畫到螢幕再處理？</summary>
+<p>後製需要讀「整張畫面」的任意像素（例如 blur 要讀鄰居）。fragment shader 不能讀目前正在寫的 framebuffer，所以先把場景畫進 FBO 的 color texture，第二個 pass 再把這張 texture 當輸入，用全螢幕 quad 讓每個像素跑一次 post shader。</p></details>
+<details><summary>FBO 為什麼還要接 depth renderbuffer？color 用 texture、depth 用 renderbuffer 的理由？</summary>
+<p>場景要 depth test 才會遮擋正確，FBO 沒有 depth attachment 就沒有 depth buffer。color 之後要被 shader <b>讀</b>（sampler），所以用 texture；depth 只拿來測試、不會被讀，用 renderbuffer 即可（driver 可用最適合的格式）。</p></details>
+<details><summary>畫全螢幕 quad 之前為什麼要 <code>glDisable(GL_DEPTH_TEST)</code>、切回 framebuffer 0？</summary>
+<p>切回 0 才是畫到視窗。quad 只有一層，不需要深度比較；若 depth test 開著且 default framebuffer 的 depth 沒清，quad 可能被擋掉。</p></details>
+<details><summary><code>uTexel = 1 / 解析度</code> 是什麼？為什麼 blur 要用它？</summary>
+<p>uv 範圍是 0~1，一個像素在 uv 空間的大小是 (1/w, 1/h)。要讀「右邊一格」的像素，uv 就加 <code>(1/w, 0)</code>。用它才能讓 blur 半徑以「像素」為單位，跟視窗大小無關。</p></details>
+<details><summary><code>vUV</code> 和 <code>gl_FragCoord</code> 差在哪？各用在哪個效果？</summary>
+<p><code>vUV</code>：0~1、內插出來的 texture 座標，適合 <code>texture()</code> 取樣（大部分效果）。<code>gl_FragCoord.xy</code>：這個 fragment 的<b>像素座標</b>（左下角 (0.5, 0.5)），適合以像素為單位切格子（Pixelization 搭配 <code>texelFetch</code>）。</p></details>
+<details><summary>Quantization 在做什麼？為什麼本頁只量化亮度？</summary>
+<p>把連續的值變成少數幾階：<code>floor(x * levels + 0.5) / levels</code>，產生色塊（海報化）。R、G、B 各自量化時，米色（0.8, 0.75, 0.6）三個 channel 被推到不同階，會變粉紅 / 偏綠；只量化亮度再按比例縮放 RGB，色相不變。兩種都符合「quantization」，自己選一種並能解釋。</p></details>
+<details><summary>DoG（Difference of Gaussians）為什麼能找出邊緣？</summary>
+<p>小 σ 的 Gaussian 保留較多細節、大 σ 的較模糊。兩者相減：平坦區域差不多 → 接近 0；亮度變化（邊緣）處兩者差很多 → 明顯正 / 負值。把「明顯負」的地方畫黑線，就得到像手繪的輪廓。</p></details>
+<details><summary>Magnifier 和 fisheye 差在哪？（講義 p.26）</summary>
+<p>Magnifier：圓內所有點都用<b>同一個倍率</b>往中心縮 uv（<code>c + (uv − c) / zoom</code>）→ 內容等比例放大、沒有扭曲。Fisheye：倍率隨離中心的距離改變 → 中間放大、邊緣壓縮，會彎曲。作業要的是 magnifier。</p></details>
+<details><summary>Bloom 為什麼要先取亮部、再 blur、再加回原圖？</summary>
+<p>真實相機的亮光會往外暈開。只取比門檻亮的部分（<code>max(c − 0.6, 0)</code>）→ 模糊讓光擴散 → 加回原圖，亮的地方周圍就有光暈，暗的地方不受影響。兩次不同範圍的 blur 疊加，光暈有內亮外淡的層次。</p></details>
+<details><summary>為什麼禁止 <code>glReadPixels</code> 讀回 CPU 處理？</summary>
+<p>規定要用 shader 做後製（違反 = 0 分）。效能上，讀回 CPU 會讓 GPU 停下來等、再逐像素在 CPU 跑兩層迴圈，比 GPU 每個像素平行處理慢很多。</p></details>
+
+<!-- ================================================================ -->
+<h2 id="files">4. 提供的檔案與場景</h2>
+<div class="grid2">
+<div><b>本機位置</b>
+<div class="tree">Assignment2/<br>
+├─ 2026(Fall)_GPA - Assignment 2.pdf<br>
+└─ assignments/ <span class="mut">← template</span><br>
+&nbsp;&nbsp;&nbsp;├─ assets/ <span class="mut">（空，場景要自己下載）</span><br>
+&nbsp;&nbsp;&nbsp;├─ shaders/ <span class="mut">（空）</span><br>
+&nbsp;&nbsp;&nbsp;├─ src/main.cpp <span class="mut">← ImGui 範例</span><br>
+&nbsp;&nbsp;&nbsp;└─ builder/ <span class="mut">← 同 AS1：glfw、glad、glm、imgui、stb、tinyobj、assimp</span>
+</div>
+<p class="mut">複製 <code>assignments/</code> → <code>學號_AS2/</code> 再開始。建置方式同 AS1（見 <a href="as1-robot.html#notes">AS1 實作須知</a>、<a href="03-env-git.html#setup">環境建置</a>），執行檔一樣叫 <code>CG2025</code>。</p></div>
+<div><b>和 AS1 template 的差別</b>
+<ul>
+<li>已經 <code>#include &lt;glad/glad.h&gt;</code> 並呼叫 <code>gladLoadGLLoader</code>（AS1 要自己補）。</li>
+<li>一樣是 OpenGL <b>4.1 core</b>、ImGui 用 <code>#version 410</code>。</li>
+<li>一樣開了 <code>NavEnableKeyboard</code>（點過選單後 WASD 會被 ImGui 吃掉，建議拿掉）、一樣只清 color、<code>glViewport</code> 在畫完之後才設。</li>
+<li>imgui 版本比 AS1 新，用法相同。</li>
+</ul></div>
+</div>
+
+<h3>場景：Crytek Sponza（實測）</h3>
+<p>講義列出的場景都在 <a href="http://casual-effects.com/data/">casual-effects.com/data</a>（Crytek Sponza、Dabrovic Sponza、Sibenik、Power Plant、Rungholt、Lost Empire、San Miguel）。講義範例圖是 Crytek Sponza，以下都以它為例。</p>
+<table>
+<tr><th style="width:26%">項目</th><th>實測結果</th></tr>
+<tr><td>下載</td><td><code>https://casual-effects.com/g3d/data10/common/model/crytek_sponza/sponza.zip</code>（80 MB，解壓 92 MB）</td></tr>
+<tr><td>內容</td><td><code>sponza.obj</code>、<code>sponza.mtl</code>（25 個材質）、<code>textures/</code>（54 張 PNG：diff / bump / spec / mask）、<code>copyright.txt</code></td></tr>
+<tr><td>放哪</td><td><code>assets/sponza/</code> → 程式用 <code>"assets/sponza/sponza.obj"</code></td></tr>
+<tr><td>單位</td><td>公分：x ∈ [−1921, 1800]、y ∈ [−126, 1429]、z ∈ [−1183, 1105] → model 矩陣 <code>scale(0.01)</code> 變成約 37 × 15 × 23 公尺</td></tr>
+<tr><td>貼圖路徑</td><td>MTL 寫 <code>map_Kd textures\sponza_floor_a_diff.png</code>（<b>反斜線</b>）→ Linux / macOS 要換成 <code>/</code>，Windows 兩種都可</td></tr>
+<tr><td>鏤空</td><td>樹葉、鐵鍊、盆栽有 <code>map_d</code>（mask）→ Assimp 的 <code>aiTextureType_OPACITY</code>；不處理會看到整片方形</td></tr>
+<tr><td>Assimp 載入後</td><td>393 個 mesh、26 個材質（多一個 Assimp 預設材質）、實際用到 27 張貼圖（24 diffuse + 3 mask）</td></tr>
+</table>
+<div class="note">場景檔很大：放在 <code>assets/</code> 會一起打包上傳（講義說 "upload your (probably large) final product"）。只放用得到的 diffuse / mask 貼圖可以減少大小，但路徑要和 MTL 一致。</div>
+
+<!-- ================================================================ -->
+<h2 id="arch">5. 架構與互動示範</h2>
+<h3>每一幀的流程</h3>
+<div class="flow">
+<div><b>① Pass 1：場景 → FBO</b>bind FBO、開 depth test、清 color + depth、scene program、對 393 個 mesh 各 <code>glDrawElements</code></div><i>→</i>
+<div><b>FBO color texture</b>整張畫面（和視窗同大小）</div><i>→</i>
+<div><b>② Pass 2：後製 → 螢幕</b>bind framebuffer 0、關 depth test、post program、畫全螢幕 quad（4 個頂點）</div><i>→</i>
+<div><b>③ ImGui</b>畫在最上層 → swap</div>
+</div>
+<p class="mut">兩個 program：<code>scene</code>（MVP + 貼圖 / normal）與 <code>post</code>（讀 FBO texture、依 <code>uEffect</code> 選效果）。比較線、放大鏡都在 post shader 裡完成。</p>
+
+<h3>互動示範（WebGL，跑的是同一份 post shader）</h3>
+<p class="mut">下面直接把參考實作的 <code>shaders/post.fs.glsl</code> 改成 WebGL 版本（只換掉第一行版本宣告），輸入是 Sponza 的截圖。<b>拖曳紅線</b>移動比較線；Magnifier 時<b>滑鼠移動</b>放大鏡、<b>滾輪</b>調大小。</p>
+<div class="ctrl" id="fxBtns"></div>
+<canvas id="fxCv" width="800" height="500"></canvas>
+<div class="ctrl"><span>Zoom <input type="range" id="fxZoom" min="1" max="5" step="0.1" value="2"> <span id="fxZoomV">2.0</span></span>
+<span>Pixel size <input type="range" id="fxPix" min="2" max="32" step="1" value="8"> <span id="fxPixV">8</span></span>
+<span id="fxMsg" class="mut"></span></div>
+
+<!-- ================================================================ -->
+<h2 id="notes">6. 實作須知</h2>
+<table>
+<tr><th style="width:26%">項目</th><th>重點</th></tr>
+<tr><td>講義的 <code>#version 420</code></td><td>講義 p.13 用 <code>#version 420 core</code> + <code>layout(binding = 1) uniform sampler2D noise_map;</code>。但 template 要求 4.1 context：<b>macOS 最高 4.1，420 一定編不過</b>；Windows / Linux 的 driver 通常給更高版本所以多半能編。本頁用 <code>#version 410</code> + C++ 端 <code>glUniform1i(locNoise, 1)</code> 指定 unit，各平台都能跑。</td></tr>
+<tr><td>GLSL 陣列初始化（講義 p.25）</td><td><code>float k[] = { … };</code>（C 風格）在 GLSL 4.10 不合法 → 用建構子 <code>float k[9] = float[](…);</code>。這是講義列的第一大錯誤來源。</td></tr>
+<tr><td>Trackball 方向</td><td>「W/A/S/D aligned to eye space」= 沿相機的前 / 右方向移動，<b>不是</b>世界的 −z / −x。講義例子寫 "W: left of the current look direction"，應是筆誤（左邊是 A）。前方 = 由 yaw / pitch 算出的 <code>lookDir()</code>，右方 = <code>cross(front, up)</code>。</td></tr>
+<tr><td>pitch 要夾住</td><td>pitch 到 ±90° 時視線和 <code>lookAt</code> 的 up (0,1,0) 平行，<code>cross</code> 為 0、畫面翻轉 → 夾在 ±1.5 rad。</td></tr>
+<tr><td>只能用 shader 做後製</td><td>不可 <code>glReadPixels</code> 讀回 CPU 處理（0 分）。本頁截圖用的 <code>glReadPixels</code> 只是驗證工具，不在作業程式裡。</td></tr>
+<tr><td>FBO 跟著視窗大小</td><td>每幀比較 <code>glfwGetFramebufferSize</code> 和 FBO 大小，不同就重建；否則 resize 後畫面模糊或錯位。視窗最小化時大小為 0，要跳過。</td></tr>
+<tr><td>FBO texture 設定</td><td>只有 level 0、沒有 mipmap → MIN_FILTER 必須是 <code>GL_LINEAR</code>（用 mipmap filter 會 incomplete、全黑）。WRAP 用 <code>CLAMP_TO_EDGE</code>，blur / 扭曲取樣到畫面外時才不會從另一邊繞回來。</td></tr>
+<tr><td>Texture unit 不要混用</td><td>scene pass：unit 0 = diffuse、unit 1 = mask。post pass：unit 0 = FBO texture、unit 1 = noise。每個 pass 開始時重新 bind，sampler uniform 用 <code>glUniform1i</code> 設 unit 編號。</td></tr>
+<tr><td>滑鼠座標 vs 像素</td><td>GLFW 游標座標是 <b>screen 座標、y 往下</b>；uv 是 0~1、y 往上。轉換：<code>(x / 視窗寬, 1 − y / 視窗高)</code>，用 <code>glfwGetWindowSize</code>（不是 framebuffer size），HiDPI 才不會錯。</td></tr>
+<tr><td>滑鼠事件分工</td><td>本頁：左鍵按在比較線 ±8 px 內 → 拖線；其他地方 → 轉視角；滾輪 → 放大鏡半徑。callback 一樣要在 <code>ImGui_ImplGlfw_InitForOpenGL</code> <b>之前</b>註冊，並檢查 <code>WantCaptureMouse</code>。</td></tr>
+<tr><td>Assimp 旗標</td><td><code>aiProcess_Triangulate</code>（全部變三角形）、<code>aiProcess_GenSmoothNormals</code>（沒有 normal 時補上）、<code>aiProcess_JoinIdenticalVertices</code>（合併重複頂點、產生 index）。<code>Assimp::Importer</code> 離開作用域時會釋放 scene，所以資料要在函式內上傳到 GPU。</td></tr>
+<tr><td>UV 上下</td><td>本頁 <code>stbi_set_flip_vertically_on_load(true)</code> + Assimp <b>不加</b> <code>aiProcess_FlipUVs</code>。兩個都開（或都關）貼圖會上下顛倒。</td></tr>
+<tr><td>Normal 當顏色</td><td>直接輸出 <code>normalize(normal)</code>：負的分量被截成 0（講義範例圖：地板綠、牆紅 / 藍，背向的面黑）。想看到全部方向可改 <code>normal * 0.5 + 0.5</code>，Demo 時說明即可。</td></tr>
+<tr><td>效能</td><td>post shader 每個像素要取樣很多次：Abstraction ≈ 131 次、Bloom 162 次、Pixelization 8×8 = 64 次。1280×800 下仍可即時跑；進階做法是 ping-pong FBO + 可分離的 Gaussian（水平、垂直各一次）。</td></tr>
+<tr><td>Console 輸入</td><td><code>scanf</code> / <code>cin</code> −10，效果切換走 ImGui。</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="steps">7. 實作步驟</h2>
+<p class="mut">每步完成就打勾（存在瀏覽器）。程式碼都來自同一份已實測的參考實作。<button class="b" id="stReset">全部清除</button></p>
+<div class="bar"><i id="stBar"></i></div>
+<div id="steps">
+
+<details class="step" id="s0"><summary><input type="checkbox"><span>0. 建立專案、下載場景、建置 template</span></summary>
+<ol>
+<li>複製 <code>Assignment2/assignments/</code> → <code>學號_AS2/</code>。</li>
+<li>下載 Crytek Sponza，解壓到 <code>學號_AS2/assets/sponza/</code>（裡面要直接有 <code>sponza.obj</code>、<code>sponza.mtl</code>、<code>textures/</code>）。</li>
+<li>建置方式同 AS1：Windows 用 CMake GUI（source = <code>builder</code>、build = <code>build</code>）；Linux：
+<pre><code>cmake -S builder -B build -DCMAKE_BUILD_TYPE=Release -DASSIMP_BUILD_TESTS=OFF
+cmake --build build -j
+./build/CG2025          <span class="c"># 在專案根目錄執行</span></code></pre></li>
+</ol>
+<p><b>驗收</b>：跑出 template 的 ImGui demo 視窗。</p></details>
+
+<details class="step" id="s1"><summary><input type="checkbox"><span>1. 整理 template：include、拿掉 demo、callback 位置</span></summary>
+<pre><code>#include &lt;glad/glad.h&gt;
+#include &lt;GLFW/glfw3.h&gt;
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+
+#include &lt;glm/glm.hpp&gt;
+#include &lt;glm/gtc/matrix_transform.hpp&gt;
+#include &lt;glm/gtc/type_ptr.hpp&gt;
+
+#include &lt;assimp/Importer.hpp&gt;
+#include &lt;assimp/scene.h&gt;
+#include &lt;assimp/postprocess.h&gt;
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#include &lt;algorithm&gt;
+#include &lt;cmath&gt;
+#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;fstream&gt;
+#include &lt;map&gt;
+#include &lt;sstream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;</code></pre>
+<ul>
+<li>刪掉 <code>on_gui()</code> 的 demo 視窗、拿掉 <code>io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;</code>。</li>
+<li><code>main()</code> 在 <code>ImGui_ImplGlfw_InitForOpenGL</code> 之前註冊三個 callback（步驟 4、6、9 會寫）：
+<pre><code>glfwSetMouseButtonCallback(window, mouse_button_callback);
+glfwSetCursorPosCallback(window, cursor_pos_callback);
+glfwSetScrollCallback(window, scroll_callback);</code></pre></li>
+<li><code>readFile</code> / <code>compileShader</code> / <code>createProgram</code> 直接沿用 AS1（見 <a href="as1-robot.html#s2">AS1 步驟 2</a>）。</li>
+</ul></details>
+
+<details class="step" id="s2"><summary><input type="checkbox"><span>2. 用 Assimp 載入場景（mesh + 材質貼圖）</span></summary>
+<pre><code>struct Mesh { GLuint vao = 0, vbo = 0, ebo = 0; GLsizei indexCount = 0; unsigned material = 0; };
+struct Material { GLuint diffuse = 0, mask = 0; };
+std::vector&lt;Mesh&gt; meshes;
+std::vector&lt;Material&gt; materials;
+std::map&lt;std::string, GLuint&gt; textureCache;
+
+GLuint loadTexture(const std::string&amp; path)
+{
+	auto it = textureCache.find(path);
+	if (it != textureCache.end()) return it-&gt;second;
+	int w, h, n;
+	stbi_set_flip_vertically_on_load(true);
+	unsigned char* data = stbi_load(path.c_str(), &amp;w, &amp;h, &amp;n, 4);
+	if (!data) { fprintf(stderr, "stbi_load failed: %s\n", path.c_str()); return textureCache[path] = 0; }
+	GLuint tex;
+	glGenTextures(1, &amp;tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	stbi_image_free(data);
+	return textureCache[path] = tex;
+}
+
+void loadScene(const std::string&amp; path)
+{
+	Assimp::Importer importer;
+	const aiScene* scene = importer.ReadFile(path,
+		aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_JoinIdenticalVertices);
+	if (!scene || !scene-&gt;mRootNode || (scene-&gt;mFlags &amp; AI_SCENE_FLAGS_INCOMPLETE))
+	{
+		fprintf(stderr, "Assimp: %s\n", importer.GetErrorString());
+		return;
+	}
+	std::string dir = path.substr(0, path.find_last_of('/') + 1);
+
+	materials.resize(scene-&gt;mNumMaterials);
+	for (unsigned i = 0; i &lt; scene-&gt;mNumMaterials; i++)
+	{
+		aiMaterial* mat = scene-&gt;mMaterials[i];
+		aiString p;
+		if (mat-&gt;GetTexture(aiTextureType_DIFFUSE, 0, &amp;p) == AI_SUCCESS)
+		{
+			std::string file = p.C_Str();
+			std::replace(file.begin(), file.end(), '\\', '/');
+			materials[i].diffuse = loadTexture(dir + file);
+		}
+		if (mat-&gt;GetTexture(aiTextureType_OPACITY, 0, &amp;p) == AI_SUCCESS)
+		{
+			std::string file = p.C_Str();
+			std::replace(file.begin(), file.end(), '\\', '/');
+			materials[i].mask = loadTexture(dir + file);
+		}
+	}
+
+	for (unsigned m = 0; m &lt; scene-&gt;mNumMeshes; m++)
+	{
+		const aiMesh* am = scene-&gt;mMeshes[m];
+		std::vector&lt;float&gt; v;
+		v.reserve(am-&gt;mNumVertices * 8);
+		for (unsigned i = 0; i &lt; am-&gt;mNumVertices; i++)
+		{
+			v.push_back(am-&gt;mVertices[i].x); v.push_back(am-&gt;mVertices[i].y); v.push_back(am-&gt;mVertices[i].z);
+			v.push_back(am-&gt;mNormals[i].x);  v.push_back(am-&gt;mNormals[i].y);  v.push_back(am-&gt;mNormals[i].z);
+			if (am-&gt;HasTextureCoords(0)) { v.push_back(am-&gt;mTextureCoords[0][i].x); v.push_back(am-&gt;mTextureCoords[0][i].y); }
+			else { v.push_back(0.0f); v.push_back(0.0f); }
+		}
+		std::vector&lt;unsigned&gt; idx;
+		idx.reserve(am-&gt;mNumFaces * 3);
+		for (unsigned f = 0; f &lt; am-&gt;mNumFaces; f++)
+			for (unsigned k = 0; k &lt; am-&gt;mFaces[f].mNumIndices; k++)
+				idx.push_back(am-&gt;mFaces[f].mIndices[k]);
+
+		Mesh mesh;
+		mesh.indexCount = (GLsizei)idx.size();
+		mesh.material = am-&gt;mMaterialIndex;
+		glGenVertexArrays(1, &amp;mesh.vao);
+		glBindVertexArray(mesh.vao);
+		glGenBuffers(1, &amp;mesh.vbo);
+		glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+		glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+		glGenBuffers(1, &amp;mesh.ebo);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned), idx.data(), GL_STATIC_DRAW);
+		GLsizei stride = 8 * sizeof(float);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+		glEnableVertexAttribArray(0);
+		glEnableVertexAttribArray(1);
+		glEnableVertexAttribArray(2);
+		glBindVertexArray(0);
+		meshes.push_back(mesh);
+	}
+	printf("loaded %zu meshes, %zu materials, %zu textures\n", meshes.size(), materials.size(), textureCache.size());
+}</code></pre>
+<ul>
+<li>每個頂點 8 個 float：position(3) normal(3) uv(2)，stride 32 bytes；index 存在 EBO，畫的時候用 <code>glDrawElements</code>。</li>
+<li><code>textureCache</code>：多個材質共用同一張圖時只載一次。</li>
+<li>OBJ 沒有節點階層的 transform，所以直接走 <code>scene-&gt;mMeshes</code>；換成 FBX / glTF 等有節點 transform 的格式要走 node tree（或加 <code>aiProcess_PreTransformVertices</code>）。</li>
+</ul>
+<p><b>驗收</b>：終端機印出 <code>loaded 393 meshes, 26 materials, 27 textures</code>，沒有 <code>stbi_load failed</code>。</p></details>
+
+<details class="step" id="s3"><summary><input type="checkbox"><span>3. Scene shader：diffuse 貼圖 / normal 顏色</span></summary>
+<div class="grid2">
+<div><b>shaders/scene.vs.glsl</b><pre><code>#version 410 core
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+
+uniform mat4 uP;
+uniform mat4 uV;
+uniform mat4 uM;
+
+out vec3 vNormal;   <span class="c">// world space normal</span>
+out vec2 vUV;
+
+void main()
+{
+    <span class="c">// M 只有等比例縮放，mat3(uM) 轉 normal 方向即可（非等比例要用 transpose(inverse(mat3(uM)))）</span>
+    vNormal = mat3(uM) * aNormal;
+    vUV = aUV;
+    gl_Position = uP * uV * uM * vec4(aPos, 1.0);
+}</code></pre></div>
+<div><b>shaders/scene.fs.glsl</b><pre><code>#version 410 core
+
+in vec3 vNormal;
+in vec2 vUV;
+
+uniform int uMode;            <span class="c">// 0 = diffuse texture, 1 = world normal as color</span>
+uniform bool uHasTex;
+uniform bool uHasMask;
+uniform sampler2D uDiffuse;   <span class="c">// texture unit 0</span>
+uniform sampler2D uMask;      <span class="c">// texture unit 1（樹葉、鐵鍊的鏤空）</span>
+
+out vec4 fragColor;
+
+void main()
+{
+    if (uHasMask &amp;&amp; texture(uMask, vUV).r &lt; 0.5)
+        discard;
+
+    if (uMode == 1)
+        fragColor = vec4(normalize(vNormal), 1.0);   <span class="c">// 負值會被截成 0</span>
+    else if (uHasTex)
+        fragColor = vec4(texture(uDiffuse, vUV).rgb, 1.0);
+    else
+        fragColor = vec4(0.8, 0.8, 0.8, 1.0);
+}</code></pre></div></div>
+<p>link 後取 location（同 AS1）：<code>uP uV uM uMode uHasTex uHasMask uDiffuse uMask</code>。畫場景（先直接畫到螢幕測試，步驟 5 再改成畫進 FBO）：</p>
+<pre><code>void renderScene(int w, int h)
+{
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glViewport(0, 0, w, h);
+	glEnable(GL_DEPTH_TEST);
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	glUseProgram(sceneProg);
+	glm::mat4 P = glm::perspective(glm::radians(60.0f), (float)w / std::max(h, 1), 0.1f, 100.0f);
+	glm::mat4 V = glm::lookAt(eye, eye + lookDir(), glm::vec3(0, 1, 0));
+	glm::mat4 M = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));   <span class="c">// Sponza 單位是公分</span>
+	glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(P));
+	glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(V));
+	glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(M));
+	glUniform1i(locMode, sceneMode);
+	glUniform1i(locDiffuse, 0);
+	glUniform1i(locMask, 1);
+
+	for (const Mesh&amp; mesh : meshes)
+	{
+		const Material&amp; mat = materials[mesh.material];
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, mat.diffuse);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, mat.mask);
+		glUniform1i(locHasTex, mat.diffuse != 0);
+		glUniform1i(locHasMask, mat.mask != 0);
+		glBindVertexArray(mesh.vao);
+		glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
+	}
+}</code></pre>
+<p><b>驗收</b>：看到 Sponza 長廊、貼圖方向正確、樹葉是鏤空的；切 <code>sceneMode = 1</code> 地板變綠。</p></details>
+
+<details class="step" id="s4"><summary><input type="checkbox"><span>4. Trackball：WASD / ZX / 滑鼠拖曳</span></summary>
+<pre><code><span class="c">// 相機（trackball）</span>
+glm::vec3 eye(-10.0f, 2.0f, -0.5f);
+float yaw = 0.0f, pitch = 0.0f;          <span class="c">// radian；yaw = 0 看 +x</span>
+bool lookDragging = false, barDragging = false;
+double lastX = 0.0, lastY = 0.0;
+
+glm::vec3 lookDir()
+{
+	return glm::vec3(std::cos(pitch) * std::cos(yaw), std::sin(pitch), std::cos(pitch) * std::sin(yaw));
+}
+
+void processInput(GLFWwindow* window, float dt)
+{
+	if (ImGui::GetIO().WantCaptureKeyboard) return;
+	glm::vec3 front = lookDir();
+	glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0, 1, 0)));
+	float speed = 5.0f * dt;
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) eye += front * speed;
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) eye -= front * speed;
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) eye -= right * speed;
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) eye += right * speed;
+	if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) eye.y += speed;
+	if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) eye.y -= speed;
+}</code></pre>
+<p>滑鼠拖曳改 yaw / pitch（完整的 callback 在步驟 6，比較線也用左鍵）：</p>
+<pre><code>yaw += (float)(x - lastX) * 0.005f;           <span class="c">// 左右拖 → 左右轉</span>
+pitch -= (float)(y - lastY) * 0.005f;         <span class="c">// 往上拖 → 抬頭（螢幕 y 往下）</span>
+pitch = std::clamp(pitch, -1.5f, 1.5f);       <span class="c">// 避免轉到正上 / 正下翻轉</span></code></pre>
+<ul>
+<li><code>lookDir()</code>：球座標，yaw 繞 y 軸、pitch 上下；長度為 1。</li>
+<li>W/S 沿 <code>front</code>（含 pitch，往下看時 W 會往下走）；A/D 沿 <code>right = cross(front, up)</code>；Z/X 沿世界 y。</li>
+<li><code>processInput</code> 在主迴圈每幀呼叫，乘 <code>dt</code> 讓速度和 FPS 無關（同 AS1）。</li>
+</ul>
+<p><b>驗收</b>：轉向後按 W 一定往畫面正前方走、按 A 往畫面左邊。</p></details>
+
+<details class="step" id="s5"><summary><input type="checkbox"><span>5. FBO + 全螢幕 quad + post shader（先原樣輸出）</span></summary>
+<pre><code>GLuint fbo = 0, fboColor = 0, fboDepth = 0;
+int fboW = 0, fboH = 0;
+GLuint quadVao, quadVbo, noiseTex;
+
+<span class="c">// 效果</span>
+int sceneMode = 0;                       <span class="c">// 0 diffuse, 1 normal</span>
+int effect = 0;
+float barPos = 0.5f;
+float magRadius = 0.2f, magZoom = 2.0f;
+float pixelSize = 8.0f;
+
+void createFBO(int w, int h)
+{
+	if (fbo) { glDeleteFramebuffers(1, &amp;fbo); glDeleteTextures(1, &amp;fboColor); glDeleteRenderbuffers(1, &amp;fboDepth); }
+	glGenFramebuffers(1, &amp;fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+	glGenTextures(1, &amp;fboColor);
+	glBindTexture(GL_TEXTURE_2D, fboColor);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboColor, 0);
+
+	glGenRenderbuffers(1, &amp;fboDepth);
+	glBindRenderbuffer(GL_RENDERBUFFER, fboDepth);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fboDepth);
+
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		fprintf(stderr, "FBO incomplete\n");
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	fboW = w; fboH = h;
+}
+
+void createQuad()
+{
+	static const float quad[] = {
+		 1.0f, -1.0f,  1.0f, 0.0f,
+		-1.0f, -1.0f,  0.0f, 0.0f,
+		-1.0f,  1.0f,  0.0f, 1.0f,
+		 1.0f,  1.0f,  1.0f, 1.0f,
+	};
+	glGenVertexArrays(1, &amp;quadVao);
+	glBindVertexArray(quadVao);
+	glGenBuffers(1, &amp;quadVbo);
+	glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	glBindVertexArray(0);
+}</code></pre>
+<div class="grid2">
+<div><b>shaders/post.vs.glsl</b><pre><code>#version 410 core
+
+layout(location = 0) in vec2 aPos;   <span class="c">// NDC，已經在 -1 ~ 1</span>
+layout(location = 1) in vec2 aUV;
+
+out vec2 vUV;
+
+void main()
+{
+    vUV = aUV;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}</code></pre></div>
+<div><b>先做最簡單的 post.fs.glsl</b><pre><code>#version 410 core
+in vec2 vUV;
+out vec4 fragColor;
+uniform sampler2D uTex;
+void main()
+{
+    fragColor = texture(uTex, vUV);
+}</code></pre></div></div>
+<p>post program link 後取 location：<code>uTex uNoise uEffect uBar uTexel uTime uMouse uMagRadius uMagZoom uPixelSize</code>。</p>
+<pre><code>void renderPost(GLFWwindow* window, int w, int h)
+{
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, w, h);
+	glDisable(GL_DEPTH_TEST);
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	glUseProgram(postProg);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fboColor);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, noiseTex);
+	glUniform1i(locTex, 0);
+	glUniform1i(locNoise, 1);
+
+	double mx, my;
+	int ww, wh;
+	glfwGetCursorPos(window, &amp;mx, &amp;my);
+	glfwGetWindowSize(window, &amp;ww, &amp;wh);
+	glUniform1i(locEffect, effect);
+	glUniform1f(locBar, barPos);
+	glUniform2f(locTexel, 1.0f / w, 1.0f / h);
+	glUniform1f(locTime, (float)glfwGetTime());
+	glUniform2f(locMouse, (float)(mx / ww), 1.0f - (float)(my / wh));   <span class="c">// 螢幕 y 往下 → uv y 往上</span>
+	glUniform1f(locMagRadius, magRadius);
+	glUniform1f(locMagZoom, magZoom);
+	glUniform1f(locPixelSize, pixelSize);
+
+	glBindVertexArray(quadVao);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+}</code></pre>
+<p>主迴圈（取代 template 的 <code>on_display()</code> 與 viewport 那幾行）：</p>
+<pre><code>double last = glfwGetTime();
+while (!glfwWindowShouldClose(window))
+{
+	glfwPollEvents();
+	if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0)   <span class="c">// 最小化：template 原有</span>
+	{
+		ImGui_ImplGlfw_Sleep(10);
+		last = glfwGetTime();                               <span class="c">// 還原後 dt 才不會暴增</span>
+		continue;
+	}
+	double now = glfwGetTime();
+	float dt = (float)(now - last);
+	last = now;
+	processInput(window, dt);
+
+	int w, h;
+	glfwGetFramebufferSize(window, &amp;w, &amp;h);
+	if (w != fboW || h != fboH)
+		createFBO(w, h);            <span class="c">// 第一幀、視窗大小改變時重建</span>
+
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+	on_gui();
+
+	renderScene(w, h);              <span class="c">// Pass 1：場景 → FBO</span>
+	renderPost(window, w, h);       <span class="c">// Pass 2：FBO texture → 螢幕</span>
+
+	ImGui::Render();                <span class="c">// ImGui 畫在最上層</span>
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+	glfwSwapBuffers(window);
+}</code></pre>
+<p><b>驗收</b>：畫面和直接畫一樣；拉動視窗大小後畫面仍清楚、不變形。</p></details>
+
+<details class="step" id="s6"><summary><input type="checkbox"><span>6. Comparison bar（可拖曳）</span></summary>
+<p>post shader 的 <code>main()</code>：先算 <code>before</code>（原圖）和 <code>after</code>（效果），依 <code>vUV.x</code> 和 <code>uBar</code> 決定用哪個，並在線附近 1.5 像素內畫紅色。</p>
+<pre><code>void main()
+{
+    vec3 before = texture(uTex, vUV).rgb;
+    vec3 after = before;
+    if (uEffect == 1) after = abstraction(vUV);
+    else if (uEffect == 2) after = watercolor(vUV);
+    else if (uEffect == 3) after = magnifier(vUV);
+    else if (uEffect == 4) after = bloom(vUV);
+    else if (uEffect == 5) after = pixelize();
+    else if (uEffect == 6) after = sineWave(vUV);
+
+    vec3 c = vUV.x &lt; uBar ? before : after;
+    if (abs(vUV.x - uBar) &lt; 1.5 * uTexel.x)
+        c = vec3(1.0, 0.0, 0.0);                <span class="c">// 紅色比較線</span>
+    fragColor = vec4(c, 1.0);
+}</code></pre>
+<p>滑鼠：按在線附近就拖線，否則轉視角。</p>
+<pre><code>void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+	if (action == GLFW_RELEASE) { lookDragging = barDragging = false; return; }
+	if (ImGui::GetIO().WantCaptureMouse) return;
+	int w, h;
+	glfwGetWindowSize(window, &amp;w, &amp;h);
+	glfwGetCursorPos(window, &amp;lastX, &amp;lastY);
+	if (std::fabs(lastX - barPos * w) &lt; 8.0) barDragging = true;   <span class="c">// 點在比較線附近 → 拖線</span>
+	else lookDragging = true;                                       <span class="c">// 否則 → 轉視角</span>
+}
+
+void cursor_pos_callback(GLFWwindow* window, double x, double y)
+{
+	int w, h;
+	glfwGetWindowSize(window, &amp;w, &amp;h);
+	if (barDragging)
+		barPos = std::clamp((float)(x / w), 0.0f, 1.0f);
+	else if (lookDragging)
+	{
+		yaw += (float)(x - lastX) * 0.005f;
+		pitch -= (float)(y - lastY) * 0.005f;
+		pitch = std::clamp(pitch, -1.5f, 1.5f);
+	}
+	lastX = x; lastY = y;
+}</code></pre>
+<p><b>驗收</b>：紅線可以拖到任意位置；在別處拖曳仍是轉視角。</p></details>
+
+<details class="step" id="s7"><summary><input type="checkbox"><span>7. Image Abstraction（blur + quantization + DoG）</span></summary>
+<p>共用的工具函式（放在 post.fs.glsl 前面）：</p>
+<pre><code>#version 410 core
+
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uTex;     <span class="c">// unit 0：FBO 的 color texture（整個場景）</span>
+uniform sampler2D uNoise;   <span class="c">// unit 1：noise texture（watercolor）</span>
+
+uniform int uEffect;        <span class="c">// 0 none, 1 abstraction, 2 watercolor, 3 magnifier, 4 bloom, 5 pixel, 6 sine</span>
+uniform float uBar;         <span class="c">// 比較線位置（0 ~ 1）；左邊原圖、右邊效果</span>
+uniform vec2 uTexel;        <span class="c">// 1 / 解析度：uv 空間中一個像素的大小</span>
+uniform float uTime;
+uniform vec2 uMouse;        <span class="c">// 放大鏡中心（uv）</span>
+uniform float uMagRadius;   <span class="c">// 放大鏡半徑（以畫面高度為 1）</span>
+uniform float uMagZoom;     <span class="c">// 放大倍率</span>
+uniform float uPixelSize;   <span class="c">// 馬賽克格子邊長（像素）</span>
+
+const float PI = 3.14159265;
+
+float gray(vec3 c)
+{
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+<span class="c">// (2r+1)^2 的 box blur；step = 取樣間隔（像素）</span>
+vec3 blur(vec2 uv, int r, float step)
+{
+    vec3 sum = vec3(0.0);
+    for (int x = -r; x &lt;= r; x++)
+        for (int y = -r; y &lt;= r; y++)
+            sum += texture(uTex, uv + vec2(x, y) * uTexel * step).rgb;
+    float n = float((2 * r + 1) * (2 * r + 1));
+    return sum / n;
+}
+
+<span class="c">// 只量化亮度、保留色相（每個 channel 各自量化會讓米色偏粉紅 / 偏綠）</span>
+vec3 quantize(vec3 c, float levels)
+{
+    float g = gray(c);
+    float q = floor(g * levels + 0.5) / levels;
+    return c * (q / max(g, 0.001));
+}
+
+<span class="c">// 灰階 Gaussian blur（DoG 用）</span>
+float gaussGray(vec2 uv, float sigma)
+{
+    int r = int(ceil(2.0 * sigma));
+    float sum = 0.0, wsum = 0.0;
+    for (int x = -r; x &lt;= r; x++)
+        for (int y = -r; y &lt;= r; y++)
+        {
+            float w = exp(-float(x * x + y * y) / (2.0 * sigma * sigma));
+            sum += w * gray(texture(uTex, uv + vec2(x, y) * uTexel).rgb);
+            wsum += w;
+        }
+    return sum / wsum;
+}</code></pre>
+<pre><code><span class="c">// 1. Image abstraction = (blur + quantization) × DoG 邊緣</span>
+vec3 abstraction(vec2 uv)
+{
+    vec3 c = quantize(blur(uv, 2, 1.0), 5.0);
+    float d = gaussGray(uv, 1.0) - 0.99 * gaussGray(uv, 1.6);   <span class="c">// DoG：小 σ − τ × 大 σ</span>
+    float edge = d &gt;= 0.0 ? 1.0 : clamp(1.0 + tanh(80.0 * d), 0.0, 1.0);
+    return c * edge;
+}</code></pre>
+<ul>
+<li>blur（5×5 box）把紋理細節抹平 → quantization 變成色塊 → 乘上 DoG 邊緣（邊緣 = 0 → 黑線）。</li>
+<li>DoG 用 XDoG 的形式：<code>d = G<sub>σ</sub> − τ·G<sub>1.6σ</sub></code>（τ = 0.99），<code>d ≥ 0</code> 為白、負的地方用 <code>1 + tanh(φ·d)</code> 平滑變黑（φ = 80）。</li>
+<li>參數（blur 半徑、階數、σ、τ、φ）可以調，報告寫出自己用的值。</li>
+</ul></details>
+
+<details class="step" id="s8"><summary><input type="checkbox"><span>8. Watercolor（multi-texture：FBO + noise）</span></summary>
+<p>noise texture：CPU 產生隨機值上傳（也可以用圖片）。256×256 被拉到整個畫面，<code>GL_LINEAR</code> 內插後變成平滑的雜訊。</p>
+<pre><code>GLuint createNoiseTexture(int size)
+{
+	std::vector&lt;unsigned char&gt; data(size * size * 4);
+	for (unsigned char&amp; c : data) c = (unsigned char)(rand() % 256);
+	GLuint tex;
+	glGenTextures(1, &amp;tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	return tex;
+}</code></pre>
+<pre><code><span class="c">// 2. Watercolor：noise 扭曲 uv → 取模糊後的顏色 → quantization</span>
+vec3 watercolor(vec2 uv)
+{
+    vec2 n = texture(uNoise, uv).rg;            <span class="c">// 0 ~ 1</span>
+    vec2 duv = uv + (n - 0.5) * 0.015;          <span class="c">// 扭曲後的 uv</span>
+    return quantize(blur(duv, 2, 2.0), 8.0);
+}</code></pre>
+<p>對應講義 p.12 的 6 步：① 綁兩張 texture（<code>renderPost</code> 裡 unit 0 = FBO、unit 1 = noise）② blur ③ 取 noise 顏色 ④ 用 noise 扭曲 uv ⑤ 用新 uv 取（模糊後的）顏色 ⑥ quantization。<code>n − 0.5</code> 讓位移正負都有，0.015 控制扭曲幅度。</p></details>
+
+<details class="step" id="s9"><summary><input type="checkbox"><span>9. Magnifier（滑鼠移動、滾輪調大小）</span></summary>
+<pre><code><span class="c">// 3. Magnifier：圓內把 uv 往中心縮（等比例放大，不扭曲）</span>
+vec3 magnifier(vec2 uv)
+{
+    float aspect = uTexel.y / uTexel.x;         <span class="c">// 寬 / 高</span>
+    float dist = length((uv - uMouse) * vec2(aspect, 1.0));
+    if (dist &lt; uMagRadius)
+        uv = uMouse + (uv - uMouse) / uMagZoom;
+    vec3 c = texture(uTex, uv).rgb;
+    if (abs(dist - uMagRadius) &lt; 2.0 * uTexel.y)
+        c = vec3(0.0);                          <span class="c">// 黑色外框</span>
+    return c;
+}</code></pre>
+<pre><code>void scroll_callback(GLFWwindow* window, double xoff, double yoff)
+{
+	if (ImGui::GetIO().WantCaptureMouse) return;
+	magRadius = std::clamp(magRadius + (float)yoff * 0.02f, 0.05f, 0.5f);
+}</code></pre>
+<ul>
+<li>距離乘上 <code>aspect</code>（寬 / 高）：uv 的 x、y 單位長度在螢幕上不一樣，不修正會變橢圓。</li>
+<li>圓內 <code>uv = c + (uv − c) / zoom</code>：離中心的距離縮成 1/zoom → 等比例放大、不扭曲（不是 fisheye）。</li>
+<li>中心 <code>uMouse</code> 在 <code>renderPost</code> 每幀由 <code>glfwGetCursorPos</code> 換算（y 要翻轉）。</li>
+</ul></details>
+
+<details class="step" id="s10"><summary><input type="checkbox"><span>10. Bloom</span></summary>
+<pre><code><span class="c">// 4. Bloom：亮部 → 兩次不同範圍的 blur → 加權疊回原圖</span>
+vec3 brightBlur(vec2 uv, int r, float step)
+{
+    vec3 sum = vec3(0.0);
+    for (int x = -r; x &lt;= r; x++)
+        for (int y = -r; y &lt;= r; y++)
+        {
+            vec3 c = texture(uTex, uv + vec2(x, y) * uTexel * step).rgb;
+            sum += max(c - 0.6, 0.0);           <span class="c">// 只留比門檻亮的部分</span>
+        }
+    return sum / float((2 * r + 1) * (2 * r + 1));
+}
+
+vec3 bloom(vec2 uv)
+{
+    vec3 b1 = brightBlur(uv, 4, 2.0);           <span class="c">// 第一次 blur（範圍小）</span>
+    vec3 b2 = brightBlur(uv, 4, 6.0);           <span class="c">// 第二次 blur（範圍大）</span>
+    return texture(uTex, uv).rgb + 1.0 * b1 + 1.0 * b2;
+}</code></pre>
+<p>對應講義 p.17：Input → First blur → Second blur → 加權合成。這裡兩次 blur 都在同一個 shader 裡做（取樣間隔 2 px 和 6 px）。更有效率的做法是 ping-pong：亮部先畫進 FBO A、水平 blur 到 FBO B、垂直 blur 回 A，最後合成。</p></details>
+
+<details class="step" id="s11"><summary><input type="checkbox"><span>11. Pixelization</span></summary>
+<pre><code><span class="c">// 5. Pixelization：同一格內所有像素取平均</span>
+vec3 pixelize()
+{
+    int size = int(uPixelSize);
+    ivec2 texSize = textureSize(uTex, 0);
+    ivec2 base = (ivec2(gl_FragCoord.xy) / size) * size;   <span class="c">// 這一格左下角的像素</span>
+    vec3 sum = vec3(0.0);
+    for (int x = 0; x &lt; size; x++)
+        for (int y = 0; y &lt; size; y++)
+            sum += texelFetch(uTex, min(base + ivec2(x, y), texSize - 1), 0).rgb;
+    return sum / float(size * size);
+}</code></pre>
+<ul>
+<li>講義 p.19：① 用格子把像素分組 ② 每組取平均。<code>(p / size) * size</code> 是整數除法，得到這一格左下角。</li>
+<li><code>texelFetch</code> 用整數像素座標讀、不做 filtering；<code>min(…, texSize − 1)</code> 防止最右 / 最上一格讀到畫面外。</li>
+<li>只取格子中心一點也能做出馬賽克，但不是「平均」，可能被問。</li>
+</ul></details>
+
+<details class="step" id="s12"><summary><input type="checkbox"><span>12. Sine wave（動畫）</span></summary>
+<pre><code><span class="c">// 6. Sine wave：uv.x 依 y 做正弦位移，offset 隨時間變</span>
+vec3 sineWave(vec2 uv)
+{
+    uv.x += 0.01 * sin(uv.y * 8.0 * PI + uTime * 3.0);
+    return texture(uTex, uv).rgb;
+}</code></pre>
+<p>講義 p.20：<code>texcoord.x += power1 * sin(texcoord.y * power2 * PI + offset)</code>，offset = 時間。這裡 power1 = 0.01（振幅，畫面寬的 1%）、power2 = 8（畫面高度內 4 個完整波）、時間 ×3 加快。<code>uTime</code> 每幀由 <code>glfwGetTime()</code> 傳入。</p></details>
+
+<details class="step" id="s13"><summary><input type="checkbox"><span>13. ImGui 選單</span></summary>
+<pre><code>void on_gui()
+{
+	ImGui::Begin("AS2 Post Effects", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+	ImGui::RadioButton("Diffuse", &amp;sceneMode, 0); ImGui::SameLine();
+	ImGui::RadioButton("Normal", &amp;sceneMode, 1);
+	const char* names[] = { "None", "Image Abstraction", "Watercolor", "Magnifier", "Bloom", "Pixelization", "Sine Wave" };
+	ImGui::Combo("Effect", &amp;effect, names, IM_ARRAYSIZE(names));
+	ImGui::SliderFloat("Bar", &amp;barPos, 0.0f, 1.0f);
+	if (effect == 3) { ImGui::SliderFloat("Radius", &amp;magRadius, 0.05f, 0.5f); ImGui::SliderFloat("Zoom", &amp;magZoom, 1.0f, 5.0f); }
+	if (effect == 5) ImGui::SliderFloat("Pixel size", &amp;pixelSize, 2.0f, 32.0f, "%.0f");
+	ImGui::End();
+}</code></pre>
+<p><code>effect</code> 的順序要和 post shader 的 <code>uEffect</code> 編號一致（0 None … 6 Sine）。</p></details>
+
+<details class="step" id="s14"><summary><input type="checkbox"><span>14. 報告 PDF（5%）</span></summary>
+<ul>
+<li>檔名 <code>學號_AS2_Report.pdf</code>，放在 <code>學號_AS2/</code> 根目錄。</li>
+<li>必要內容（寫多不加分）：① 視窗截圖，含場景與<b>不同的後製效果</b>（每個效果一張）② 程式功能與操作方式 ③ 使用的 IDE 與版本。</li>
+<li>建議另註明 AI 使用情形、各效果用的參數。</li>
+</ul></details>
+
+<details class="step" id="s15"><summary><input type="checkbox"><span>15. 最終檢查 → 打包 → MD5 → 上傳</span></summary>
+<p>照 <a href="#submit">9. 繳交</a> 做。打包前從乾淨的 build 重建一次，確認在專案根目錄執行能載入場景。</p></details>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="api">8. 用到的 API</h2>
+<p class="mut">AS1 已用過的 GLFW / shader / VAO / texture / ImGui 基本函式見 <a href="as1-robot.html#api">AS1 用到的 API</a>，這裡只列 AS2 新增的。點名稱跳到 <a href="04-api.html">API 參考</a>。</p>
+<table>
+<tr><th style="width:24%">類別 / 用在哪</th><th>函式</th></tr>
+<tr><td><b>Assimp</b><br><span class="mut">步驟 2</span></td><td class="apil"><div><a href="04-api.html#Assimp::Importer::ReadFile"><code>Assimp::Importer::ReadFile</code></a> <span class="mut">讀場景 + 後處理旗標</span></div><div><a href="04-api.html#aiMaterial::GetTexture"><code>aiMaterial::GetTexture</code></a> <span class="mut">DIFFUSE / OPACITY 貼圖路徑</span></div></td></tr>
+<tr><td><b>EBO / 繪製</b><br><span class="mut">步驟 2–3</span></td><td class="apil"><div><a href="04-api.html#glBufferData"><code>glBufferData(GL_ELEMENT_ARRAY_BUFFER)</code></a> <span class="mut">上傳 index</span></div><div><a href="04-api.html#glDrawElements"><code>glDrawElements</code></a> <span class="mut">依 index 畫每個 mesh</span></div><div><a href="04-api.html#glDrawArrays"><code>glDrawArrays(GL_TRIANGLE_FAN)</code></a> <span class="mut">全螢幕 quad</span></div></td></tr>
+<tr><td><b>FBO</b><br><span class="mut">步驟 5</span></td><td class="apil"><div><a href="04-api.html#glGenFramebuffers"><code>glGenFramebuffers</code></a> <span class="mut">建 FBO</span></div><div><a href="04-api.html#glBindFramebuffer"><code>glBindFramebuffer</code></a> <span class="mut">切換畫到 FBO / 螢幕（0）</span></div><div><a href="04-api.html#glFramebufferTexture2D"><code>glFramebufferTexture2D</code></a> <span class="mut">接 color texture</span></div><div><a href="04-api.html#glGenRenderbuffers"><code>glGenRenderbuffers</code></a> <span class="mut">建 depth buffer</span></div><div><a href="04-api.html#glBindRenderbuffer"><code>glBindRenderbuffer</code></a> <span class="mut">綁定</span></div><div><a href="04-api.html#glRenderbufferStorage"><code>glRenderbufferStorage</code></a> <span class="mut">配置 depth 大小</span></div><div><a href="04-api.html#glFramebufferRenderbuffer"><code>glFramebufferRenderbuffer</code></a> <span class="mut">接 depth</span></div><div><a href="04-api.html#glCheckFramebufferStatus"><code>glCheckFramebufferStatus</code></a> <span class="mut">檢查完整</span></div></td></tr>
+<tr><td><b>多張 texture</b><br><span class="mut">步驟 3、5、8</span></td><td class="apil"><div><a href="04-api.html#glActiveTexture"><code>glActiveTexture</code></a> <span class="mut">選 unit 0 / 1</span></div><div><a href="04-api.html#glBindTexture"><code>glBindTexture</code></a> <span class="mut">綁到該 unit</span></div><div><a href="04-api.html#glUniform1f"><code>glUniform1i / 1f / 2f</code></a> <span class="mut">sampler unit、效果參數</span></div></td></tr>
+<tr><td><b>GLSL</b><br><span class="mut">步驟 6–12</span></td><td class="apil"><div><a href="04-api.html#texture"><code>texture</code></a> <span class="mut">用 uv 取樣</span></div><div><a href="04-api.html#texelFetch"><code>texelFetch / textureSize</code></a> <span class="mut">用整數像素座標讀（Pixelization）</span></div><div><a href="04-api.html#gl_FragCoord"><code>gl_FragCoord</code></a> <span class="mut">目前像素座標</span></div><div><a href="04-api.html#mix"><code>exp / tanh / floor / clamp</code></a> <span class="mut">Gaussian、DoG、量化</span></div></td></tr>
+<tr><td><b>相機 / 輸入</b><br><span class="mut">步驟 4、6、9</span></td><td class="apil"><div><a href="04-api.html#glm::lookAt"><code>glm::lookAt</code></a> <span class="mut">eye、eye + 方向、up</span></div><div><a href="04-api.html#cross"><code>glm::cross / normalize</code></a> <span class="mut">算右方向</span></div><div><a href="04-api.html#glfwSetScrollCallback"><code>glfwSetScrollCallback</code></a> <span class="mut">滾輪調放大鏡</span></div><div><a href="04-api.html#glfwGetCursorPos"><code>glfwGetCursorPos</code></a> <span class="mut">放大鏡中心</span></div><div><a href="04-api.html#ImGui::Combo"><code>ImGui::Combo / SliderFloat</code></a> <span class="mut">選效果、調參數</span></div></td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="submit">9. 繳交</h2>
+<div class="grid2">
+<div><b>必須的檔案結構（其他結構不收）</b>
+<div class="tree">104062517_AS2/<br>
+├─ assets/ <span class="mut">← 場景、貼圖</span><br>
+├─ shaders/<br>
+├─ src/<br>
+├─ <s>builder/</s> <span class="mut">← 不要上傳</span><br>
+├─ <s>build/</s> <span class="mut">← 不要上傳</span><br>
+└─ 104062517_AS2_Report.pdf
+</div>
+<p class="mut">助教會照<a href="https://youtu.be/2BzYKibIsX4">影片</a>步驟用自己的 builder 建置。</p></div>
+<div class="card"><b>檔名檢查</b>
+<div class="ctrl">學號 <input type="text" id="sid" placeholder="113000107" size="12"></div>
+<div id="names" class="mut">輸入學號產生正確檔名。</div>
+<div class="ctrl">檢查你的 zip 檔名 <input type="text" id="fname" placeholder="113000107_AS2.zip" size="22"></div>
+<div id="fcheck"></div></div>
+</div>
+
+<h3>流程</h3>
+<ol class="steps">
+<li><b>打包</b>（排除 builder、build、.git、.vs）：
+<pre><code>cd &lt;學號_AS2 的上一層&gt;
+ID=113000107
+zip -r ${ID}_AS2.zip ${ID}_AS2 -x "${ID}_AS2/builder/*" "${ID}_AS2/build/*" "*/.git/*" "*.DS_Store"
+unzip -l ${ID}_AS2.zip | tail -1     <span class="c"># 確認大小；Sponza 全部貼圖約 90 MB</span></code></pre>
+Windows 做法同 <a href="as1-robot.html#submit">AS1</a>（資料夾名稱改成 <code>_AS2</code>）。</li>
+<li><b>算 MD5</b>：<code>md5sum</code>（Linux）／<code>certutil -hashfile 檔名 MD5</code>（Windows）／<code>md5</code>（macOS）。之後 zip 不能再動。</li>
+<li><b>期限前</b>填 MD5 checksum 登記表單（連結同 <a href="as1-robot.html#submit">AS1</a>），多筆以時間最晚的為準。</li>
+<li><b>FTP 上傳</b>：
+<div class="card kv" style="max-width:420px"><b>Host</b><span><code>cgv.cs.nthu.edu.tw</code></span><b>Account</b><span><code>GPA2026</code></span><b>Password</b><span><code>2026GPA</code></span><b>Directory</b><span><code>Assignment_02/</code></span></div>
+<div class="warn">伺服器<b>不能下載、不能刪除</b>。要交新版本就另取名 <code>學號_AS2_v2.zip</code>，並<b>重新登記 MD5</b>。講義另寫「用學號建立資料夾放檔案」，和 AS1 的放法不同，上傳前留意助教公告。</div></li>
+<li><b>Demo</b>：準備好解釋每一行（禁用 AI、禁止上網）。</li>
+</ol>
+</main>
+<script src="common.js"></script>
+<script src="img/as2-scene.js"></script>
+<script type="x-shader/x-fragment" id="postFs">#version 410 core
+
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uTex;     // unit 0：FBO 的 color texture（整個場景）
+uniform sampler2D uNoise;   // unit 1：noise texture（watercolor）
+
+uniform int uEffect;        // 0 none, 1 abstraction, 2 watercolor, 3 magnifier, 4 bloom, 5 pixel, 6 sine
+uniform float uBar;         // 比較線位置（0 ~ 1）；左邊原圖、右邊效果
+uniform vec2 uTexel;        // 1 / 解析度：uv 空間中一個像素的大小
+uniform float uTime;
+uniform vec2 uMouse;        // 放大鏡中心（uv）
+uniform float uMagRadius;   // 放大鏡半徑（以畫面高度為 1）
+uniform float uMagZoom;     // 放大倍率
+uniform float uPixelSize;   // 馬賽克格子邊長（像素）
+
+const float PI = 3.14159265;
+
+float gray(vec3 c)
+{
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// (2r+1)^2 的 box blur；step = 取樣間隔（像素）
+vec3 blur(vec2 uv, int r, float step)
+{
+    vec3 sum = vec3(0.0);
+    for (int x = -r; x <= r; x++)
+        for (int y = -r; y <= r; y++)
+            sum += texture(uTex, uv + vec2(x, y) * uTexel * step).rgb;
+    float n = float((2 * r + 1) * (2 * r + 1));
+    return sum / n;
+}
+
+// 只量化亮度、保留色相（每個 channel 各自量化會讓米色偏粉紅 / 偏綠）
+vec3 quantize(vec3 c, float levels)
+{
+    float g = gray(c);
+    float q = floor(g * levels + 0.5) / levels;
+    return c * (q / max(g, 0.001));
+}
+
+// 灰階 Gaussian blur（DoG 用）
+float gaussGray(vec2 uv, float sigma)
+{
+    int r = int(ceil(2.0 * sigma));
+    float sum = 0.0, wsum = 0.0;
+    for (int x = -r; x <= r; x++)
+        for (int y = -r; y <= r; y++)
+        {
+            float w = exp(-float(x * x + y * y) / (2.0 * sigma * sigma));
+            sum += w * gray(texture(uTex, uv + vec2(x, y) * uTexel).rgb);
+            wsum += w;
+        }
+    return sum / wsum;
+}
+
+// 1. Image abstraction = (blur + quantization) × DoG 邊緣
+vec3 abstraction(vec2 uv)
+{
+    vec3 c = quantize(blur(uv, 2, 1.0), 5.0);
+    float d = gaussGray(uv, 1.0) - 0.99 * gaussGray(uv, 1.6);   // DoG：小 σ − τ × 大 σ
+    float edge = d >= 0.0 ? 1.0 : clamp(1.0 + tanh(80.0 * d), 0.0, 1.0);
+    return c * edge;
+}
+
+// 2. Watercolor：noise 扭曲 uv → 取模糊後的顏色 → quantization
+vec3 watercolor(vec2 uv)
+{
+    vec2 n = texture(uNoise, uv).rg;            // 0 ~ 1
+    vec2 duv = uv + (n - 0.5) * 0.015;          // 扭曲後的 uv
+    return quantize(blur(duv, 2, 2.0), 8.0);
+}
+
+// 3. Magnifier：圓內把 uv 往中心縮（等比例放大，不扭曲）
+vec3 magnifier(vec2 uv)
+{
+    float aspect = uTexel.y / uTexel.x;         // 寬 / 高
+    float dist = length((uv - uMouse) * vec2(aspect, 1.0));
+    if (dist < uMagRadius)
+        uv = uMouse + (uv - uMouse) / uMagZoom;
+    vec3 c = texture(uTex, uv).rgb;
+    if (abs(dist - uMagRadius) < 2.0 * uTexel.y)
+        c = vec3(0.0);                          // 黑色外框
+    return c;
+}
+
+// 4. Bloom：亮部 → 兩次不同範圍的 blur → 加權疊回原圖
+vec3 brightBlur(vec2 uv, int r, float step)
+{
+    vec3 sum = vec3(0.0);
+    for (int x = -r; x <= r; x++)
+        for (int y = -r; y <= r; y++)
+        {
+            vec3 c = texture(uTex, uv + vec2(x, y) * uTexel * step).rgb;
+            sum += max(c - 0.6, 0.0);           // 只留比門檻亮的部分
+        }
+    return sum / float((2 * r + 1) * (2 * r + 1));
+}
+
+vec3 bloom(vec2 uv)
+{
+    vec3 b1 = brightBlur(uv, 4, 2.0);           // 第一次 blur（範圍小）
+    vec3 b2 = brightBlur(uv, 4, 6.0);           // 第二次 blur（範圍大）
+    return texture(uTex, uv).rgb + 1.0 * b1 + 1.0 * b2;
+}
+
+// 5. Pixelization：同一格內所有像素取平均
+vec3 pixelize()
+{
+    int size = int(uPixelSize);
+    ivec2 texSize = textureSize(uTex, 0);
+    ivec2 base = (ivec2(gl_FragCoord.xy) / size) * size;   // 這一格左下角的像素
+    vec3 sum = vec3(0.0);
+    for (int x = 0; x < size; x++)
+        for (int y = 0; y < size; y++)
+            sum += texelFetch(uTex, min(base + ivec2(x, y), texSize - 1), 0).rgb;
+    return sum / float(size * size);
+}
+
+// 6. Sine wave：uv.x 依 y 做正弦位移，offset 隨時間變
+vec3 sineWave(vec2 uv)
+{
+    uv.x += 0.01 * sin(uv.y * 8.0 * PI + uTime * 3.0);
+    return texture(uTex, uv).rgb;
+}
+
+void main()
+{
+    vec3 before = texture(uTex, vUV).rgb;
+    vec3 after = before;
+    if (uEffect == 1) after = abstraction(vUV);
+    else if (uEffect == 2) after = watercolor(vUV);
+    else if (uEffect == 3) after = magnifier(vUV);
+    else if (uEffect == 4) after = bloom(vUV);
+    else if (uEffect == 5) after = pixelize();
+    else if (uEffect == 6) after = sineWave(vUV);
+
+    vec3 c = vUV.x < uBar ? before : after;
+    if (abs(vUV.x - uBar) < 1.5 * uTexel.x)
+        c = vec3(1.0, 0.0, 0.0);                // 紅色比較線
+    fragColor = vec4(c, 1.0);
+}
+</script>
+<script>
+// ---------- 倒數 ----------
+const DUE = new Date('2026-11-02T23:59:00+08:00');
+function tick() {
+  const ms = DUE - Date.now(), el = document.getElementById('cd');
+  if (ms <= 0) { el.textContent = '已截止'; return; }
+  const d = Math.floor(ms / 864e5), h = Math.floor(ms % 864e5 / 36e5), m = Math.floor(ms % 36e5 / 6e4);
+  el.textContent = `${d} 天 ${h} 時 ${m} 分`;
+}
+tick(); setInterval(tick, 30000);
+
+// ---------- 截圖放大 ----------
+const lb = document.getElementById('lightbox');
+document.querySelectorAll('.gal img').forEach(im => im.onclick = () => { lb.querySelector('img').src = im.src; lb.style.display = 'flex'; });
+lb.onclick = () => lb.style.display = 'none';
+
+// ---------- 評分自評 ----------
+const SC = [['場景幾何正確', 10], ['貼圖場景正確 + Normal 顏色', 10], ['Trackball', 10], ['Comparison bar（可拖曳）', 10],
+  ['Image Abstraction（blur + 量化 + DoG）', 10], ['Watercolor', 10], ['Magnifier', 10], ['Bloom', 10], ['Pixelization', 5],
+  ['Sine wave distortion', 10], ['報告 PDF', 5]];
+const scEl = document.getElementById('score'), scSt = JSON.parse(localStorage.getItem('gpa-as2-score') || '{}');
+SC.forEach(([t, w], i) => {
+  const l = document.createElement('label');
+  l.innerHTML = `<span><input type="checkbox" data-i="${i}" ${scSt[i] ? 'checked' : ''}> ${t}</span><span>${w}%</span>`;
+  scEl.appendChild(l);
+});
+function calc() {
+  scEl.querySelectorAll('input').forEach(c => scSt[c.dataset.i] = c.checked);
+  localStorage.setItem('gpa-as2-score', JSON.stringify(scSt));
+  const prog = SC.reduce((a, [, w], i) => a + (scSt[i] ? w : 0), 0);
+  const qa = +document.getElementById('qa').value;
+  document.getElementById('qaV').textContent = qa + ' / 100';
+  let ded = 0;
+  if (document.getElementById('dedConsole').checked) ded += 10;
+  if (document.getElementById('dedRule').checked) ded += 10;
+  const total = Math.max(0, prog * 0.7 + qa * 0.3 - ded);
+  document.getElementById('total').textContent = `${total.toFixed(1)} / 100`;
+  document.getElementById('totalBar').style.width = total + '%';
+  document.getElementById('totalNote').textContent = `Program&Report ${prog} × 0.7 + Q&A ${qa} × 0.3` + (ded ? ` − ${ded}` : '') + '（扣分套用方式以助教為準）';
+}
+document.querySelectorAll('#score input, #qa, #dedConsole, #dedRule').forEach(e => e.oninput = calc);
+calc();
+
+// ---------- 步驟進度 ----------
+const stSt = JSON.parse(localStorage.getItem('gpa-as2-steps') || '{}'), steps = [...document.querySelectorAll('.step')];
+function stRender() {
+  steps.forEach(d => { const c = d.querySelector('summary input'); c.checked = !!stSt[d.id]; d.classList.toggle('done', c.checked); });
+  document.getElementById('stBar').style.width = (steps.filter(d => stSt[d.id]).length / steps.length * 100) + '%';
+}
+steps.forEach(d => {
+  const c = d.querySelector('summary input');
+  c.onclick = e => e.stopPropagation();
+  c.onchange = () => { stSt[d.id] = c.checked; localStorage.setItem('gpa-as2-steps', JSON.stringify(stSt)); stRender(); };
+});
+document.getElementById('stReset').onclick = () => { for (const k in stSt) delete stSt[k]; localStorage.removeItem('gpa-as2-steps'); stRender(); };
+stRender();
+
+// ---------- 檔名檢查 ----------
+const sidEl = document.getElementById('sid'), fnEl = document.getElementById('fname');
+function names() {
+  const id = sidEl.value.trim();
+  document.getElementById('names').innerHTML = /^\w+$/.test(id)
+    ? `資料夾 <code>${id}_AS2/</code><br>zip <code>${id}_AS2.zip</code>（新版本 <code>${id}_AS2_v2.zip</code>）<br>報告 <code>${id}_AS2/${id}_AS2_Report.pdf</code>`
+    : '輸入學號產生正確檔名。';
+  const f = fnEl.value.trim(), out = document.getElementById('fcheck');
+  if (!f) { out.innerHTML = ''; return; }
+  const m = f.match(/^(\w+)_AS2(_v(\d+))?\.zip$/);
+  if (!m) out.innerHTML = '<span class="bad">✗ 格式應為 學號_AS2.zip 或 學號_AS2_v2.zip</span>';
+  else if (id && m[1] !== id) out.innerHTML = `<span class="bad">✗ 學號不符（${m[1]} ≠ ${id}）</span>`;
+  else if (m[3] === '1') out.innerHTML = '<span class="bad">✗ 第一版不加 _v1；新版本從 _v2 開始</span>';
+  else out.innerHTML = `<span class="ok">✓ 格式正確${m[2] ? '（第 ' + m[3] + ' 版，記得重新登記 MD5）' : ''}</span>`;
+}
+sidEl.oninput = fnEl.oninput = names;
+
+// ---------- WebGL 互動示範：同一份 post.fs.glsl ----------
+(function () {
+  const cv = document.getElementById('fxCv'), msg = document.getElementById('fxMsg');
+  const gl = cv.getContext('webgl2');
+  if (!gl) { msg.textContent = '這個瀏覽器不支援 WebGL2，看上面的截圖即可。'; return; }
+  const FX = ['None', 'Image Abstraction', 'Watercolor', 'Magnifier', 'Bloom', 'Pixelization', 'Sine Wave'];
+  const st = { effect: 1, bar: 0.5, mouse: [0.6, 0.5], radius: 0.2, zoom: 2, pix: 8, drag: false };
+  const btns = document.getElementById('fxBtns');
+  btns.innerHTML = FX.map((n, i) => `<button class="b" data-i="${i}">${n}</button>`).join('');
+  const syncBtns = () => btns.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.i === st.effect));
+  btns.querySelectorAll('button').forEach(b => b.onclick = () => { st.effect = +b.dataset.i; syncBtns(); });
+  syncBtns();
+
+  const vsSrc = `#version 300 es
+in vec2 aPos;
+out vec2 vUV;
+void main() { vUV = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+  const fsSrc = document.getElementById('postFs').textContent.trim()
+    .replace('#version 410 core', '#version 300 es\nprecision highp float;\nprecision highp int;');
+  function sh(type, src) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  let prog;
+  try {
+    prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vsSrc)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fsSrc));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  } catch (e) { msg.textContent = 'shader 編譯失敗：' + e.message; return; }
+  const U = n => gl.getUniformLocation(prog, n);
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  function tex(unit, w, h, data, repeat) {
+    const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+    if (data instanceof Uint8Array) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    const wrap = repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+  }
+  const noise = new Uint8Array(256 * 256 * 4).map(() => Math.random() * 256);
+  tex(1, 256, 256, noise, true);
+  const img = new Image();
+  img.onload = () => {
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);   // 同 stbi_set_flip_vertically_on_load
+    tex(0, img.width, img.height, img, false);
+    requestAnimationFrame(frame);
+  };
+  img.src = window.AS2_SCENE;
+
+  function frame(ts) {
+    gl.viewport(0, 0, cv.width, cv.height);
+    gl.useProgram(prog);
+    gl.uniform1i(U('uTex'), 0); gl.uniform1i(U('uNoise'), 1);
+    gl.uniform1i(U('uEffect'), st.effect); gl.uniform1f(U('uBar'), st.bar);
+    gl.uniform2f(U('uTexel'), 1 / cv.width, 1 / cv.height); gl.uniform1f(U('uTime'), ts / 1000);
+    gl.uniform2f(U('uMouse'), st.mouse[0], st.mouse[1]);
+    gl.uniform1f(U('uMagRadius'), st.radius); gl.uniform1f(U('uMagZoom'), st.zoom); gl.uniform1f(U('uPixelSize'), st.pix);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+  }
+  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height, r.width]; };
+  cv.onpointerdown = e => { const [x, , w] = pos(e); if (Math.abs(x - st.bar) * w < 10) { st.drag = true; cv.setPointerCapture(e.pointerId); } };
+  cv.onpointermove = e => {
+    const [x, y, w] = pos(e);
+    st.mouse = [x, y];
+    if (st.drag) st.bar = Math.min(1, Math.max(0, x));
+    cv.style.cursor = st.drag || Math.abs(x - st.bar) * w < 10 ? 'ew-resize' : 'default';
+  };
+  cv.onpointerup = () => st.drag = false;
+  cv.addEventListener('wheel', e => {
+    if (st.effect !== 3) return;
+    e.preventDefault();
+    st.radius = Math.min(0.5, Math.max(0.05, st.radius - Math.sign(e.deltaY) * 0.02));
+  }, { passive: false });
+  const z = document.getElementById('fxZoom'), p = document.getElementById('fxPix');
+  z.oninput = () => { st.zoom = +z.value; document.getElementById('fxZoomV').textContent = st.zoom.toFixed(1); };
+  p.oninput = () => { st.pix = +p.value; document.getElementById('fxPixV').textContent = st.pix; };
+})();
+</script></body></html>

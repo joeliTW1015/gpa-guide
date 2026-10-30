@@ -6,7 +6,7 @@ from html.parser import HTMLParser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGES = ['l01-transform', 'l02-overview', '01-pipeline', 'l04-objects', '05-vertex-draw', '06-fragment-fbo', '07-mesh-rendering',
-         '03-env-git', '02-project-syntax', 'as1-robot', '04-api']
+         '03-env-git', '02-project-syntax', 'as1-robot', 'as2-postfx', '04-api']
 
 def dump(page):
     prof = tempfile.mkdtemp()
