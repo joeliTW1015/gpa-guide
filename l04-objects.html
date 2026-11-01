@@ -842,8 +842,73 @@ void main(void)
 <p class="mut">OpenGL 預設每一列從 4 的倍數 byte 開始讀；RGB（3 bytes）且寬度不是 4 的倍數時，每列結尾會錯位 → 影像歪斜。</p>
 <div class="ctrl">寬度 <input type="number" id="alW" value="301" style="width:70px"> channel <select id="alC"><option>1</option><option selected>3</option><option>4</option></select></div>
 <div id="alTxt" style="font-size:13.5px"></div></div></div>
-<div class="ex"><b>從檔案載入貼圖的模型（Simple Textured Model）</b>
-<div class="grid2"><pre><code><span class="c">// GLSL：Vertex Shader</span>
+<div class="ex" id="stm"><b>從檔案載入貼圖的模型（Simple Textured Model）</b>
+<p>這個範例要從<b>兩個檔案</b>拿資料：<b>模型檔</b>（頂點位置 + 貼圖座標 <code>tc</code>）和<b>圖檔</b>（貼圖本身）。講義只給了 shader，下面把 C++ 端補齊。</p>
+
+<h4>① <code>tc</code> 從哪裡來：模型檔 → C++ → buffer → <code>location = 4</code></h4>
+<div class="flow">
+<div><b>模型檔（.obj）</b><code>vt 0.0 1.0</code> 這種行<br>美術在建模軟體裡攤好的 UV</div><i>→</i>
+<div><b>C++ 陣列</b>tinyobjloader / Assimp 讀出來，和位置交錯排</div><i>→</i>
+<div><b>VBO + VAO</b><code>glVertexAttribPointer(4, 2, …)</code></div><i>→</i>
+<div><b>Vertex shader</b><code>layout(location = 4) in vec2 tc;</code></div>
+</div>
+<pre><code><span class="c">// 模型檔 cube.obj 的片段：v = 位置、vt = 貼圖座標、f = 三角形用哪些 v/vt</span>
+v  -1.0 -1.0  1.0
+v   1.0 -1.0  1.0
+v   1.0  1.0  1.0
+vt  0.0  0.0
+vt  1.0  0.0
+vt  1.0  1.0
+f   1/1  2/2  3/3          <span class="c">// 第 1 個角：v1 + vt1，第 2 個角：v2 + vt2 …</span></code></pre>
+<pre><code><span class="c">// C++：假設已從 OBJ 讀出 data，每個頂點 5 個 float：x y z u v</span>
+glGenBuffers(1, &amp;vbo);
+glBindBuffer(GL_ARRAY_BUFFER, vbo);
+glBufferData(GL_ARRAY_BUFFER, data.size() * sizeof(float),
+             data.data(), GL_STATIC_DRAW);
+
+GLsizei stride = 5 * sizeof(float);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride,
+                      (void*)0);                     <span class="c">// → position</span>
+glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, stride,
+                      (void*)(3 * sizeof(float)));   <span class="c">// → tc</span>
+glEnableVertexAttribArray(0);
+glEnableVertexAttribArray(4);</code></pre>
+<ul>
+<li><b>為什麼是 4</b>：location 編號是自己選的，講義剛好用 4（1~3 可能保留給 normal、顏色等）。只要 C++ 的 <code>glVertexAttribPointer(4, …)</code> 和 GLSL 的 <code>layout(location = 4)</code> 一致即可。</li>
+<li><code>tc</code> 是 <b>vertex attribute</b>：每個頂點各有一組，VS 原封不動傳給 <code>vs_out.tc</code>，rasterizer 再把三角形內部的 <code>tc</code> 內插出來給 FS。</li>
+<li>完整的 OBJ 讀取（展開 v / vt index）見 <a href="as1-robot.html#s3">AS1 步驟 3</a>，用 Assimp 見 <a href="07-mesh-rendering.html#load">講義 07</a>。</li>
+</ul>
+
+<h4>② 「從檔案」的路徑：圖檔怎麼變成 <code>tex_object</code></h4>
+<pre><code><span class="c">// C++：初始化，讀圖檔 → 建 texture</span>
+int w, h, n;
+stbi_set_flip_vertically_on_load(true);
+unsigned char* pixels = stbi_load("assets/brick.png", &amp;w, &amp;h, &amp;n, 4);
+<span class="c">// 路徑是相對於「執行時的工作目錄」，不是 .cpp 或執行檔所在的位置</span>
+
+glGenTextures(1, &amp;tex);
+glBindTexture(GL_TEXTURE_2D, tex);
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+             GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);   <span class="c">// u 超出 0~1 時重複</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);   <span class="c">// v 超出 0~1 時重複</span>
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+stbi_image_free(pixels);
+
+<span class="c">// render：texture 接到 unit 0，sampler tex_object = 0</span>
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, tex);
+glUniform1i(glGetUniformLocation(program, "tex_object"), 0);</code></pre>
+<ul>
+<li><b>圖檔路徑</b>：自己在程式裡寫（如上），相對於工作目錄；作業 template 的工作目錄是專案根目錄，所以寫 <code>"assets/xxx.png"</code>。</li>
+<li><b>模型檔指定的路徑</b>：OBJ 旁邊的 <code>.mtl</code> 會寫 <code>map_Kd textures/brick.png</code>，這個路徑是<b>相對於 .obj 所在的資料夾</b>，C++ 要自己接上資料夾名稱（見 <a href="as2-postfx.html#files">AS2 的 Sponza 說明</a>）。</li>
+<li>Shader 完全不知道檔案路徑；它只透過 <code>tex_object</code>（texture unit 編號）讀 GPU 上的 texture。</li>
+</ul>
+
+<h4>③ 不是正規化座標嗎？為什麼可以乘 <code>vec2(3.0, 1.0)</code></h4>
+<div class="grid2">
+<pre><code><span class="c">// GLSL：Vertex Shader</span>
 #version 410 core
 layout (location = 0) in vec4 position;
 layout (location = 4) in vec2 tc;
@@ -853,7 +918,7 @@ out VS_OUT { vec2 tc; } vs_out;
 void main(void)
 {
     vec4 pos_vs = mv_matrix * position;
-    vs_out.tc = tc;          <span class="c">// 貼圖座標原封傳下去</span>
+    vs_out.tc = tc;      <span class="c">// 原封傳下去</span>
     gl_Position = proj_matrix * pos_vs;
 }</code></pre>
 <pre><code><span class="c">// GLSL：Fragment Shader</span>
@@ -863,10 +928,40 @@ in VS_OUT { vec2 tc; } fs_in;
 out vec4 color;
 void main(void)
 {
-    <span class="c">// u 乘 3 → 橫向重複 3 次（要配合 GL_REPEAT）</span>
-    color = texture(tex_object, fs_in.tc * vec2(3.0, 1.0));
+    <span class="c">// (u, v) → (3u, v)</span>
+    vec2 uv = fs_in.tc * vec2(3.0, 1.0);
+    color = texture(tex_object, uv);
 }</code></pre></div>
-<p class="mut">講義 FS 寫成 <code>layout uniform sampler2D</code> 且漏了 <code>out vec4 color;</code>，這裡已修正。讀圖檔用 stb_image，見 <a href="02-project-syntax.html#stb">Appendix - Image Loading</a>。</p></div>
+<ul>
+<li><b>「正規化」的意思</b>：0 ~ 1 剛好對應圖的一整份（u = 0 左邊、u = 1 右邊），和圖是 256 還是 1024 寬無關。它<b>不是</b>限制只能用 0 ~ 1。</li>
+<li><b><code>tc</code> 只是一個普通的 <code>vec2</code></b>：<code>vec2 * vec2</code> 是逐分量相乘 → <code>(u × 3, v × 1)</code>。u 原本 0 ~ 1，乘完變 0 ~ 3。</li>
+<li><b>超出 0 ~ 1 怎麼辦，由 wrap mode 決定</b>（上面的 <code>GL_TEXTURE_WRAP_S / T</code>）：
+<ul>
+<li><code>GL_REPEAT</code>（預設）：只看小數部分 → u = 1.3 讀到 0.3 的位置 → 橫向重複 3 次。</li>
+<li><code>GL_MIRRORED_REPEAT</code>：每過一份就左右翻轉一次。</li>
+<li><code>GL_CLAMP_TO_EDGE</code>：超出就一直用邊緣那一排 texel → 右邊 2/3 被拉成條紋。</li>
+</ul></li>
+<li>所以「乘 3 → 重複 3 次」<b>要配合 <code>GL_REPEAT</code></b>；換成 <code>CLAMP_TO_EDGE</code> 就不會重複。</li>
+</ul>
+
+<h4>互動：調整 tc 的倍率和 wrap mode</h4>
+<p class="mut">用 WebGL 實際跑上面的 FS（左下角是 tc = (0, 0)）。滑鼠移到圖上看該點原本的 <code>tc</code>、乘完後的 <code>uv</code>、以及 wrap 之後真正讀的位置。</p>
+<div class="card">
+<div class="ctrl">u 倍率 <input type="range" id="stmU" min="0.5" max="5" step="0.5" value="3"> <span id="stmUV"></span>
+v 倍率 <input type="range" id="stmV" min="0.5" max="5" step="0.5" value="1"> <span id="stmVV"></span></div>
+<div class="ctrl"><label><input type="radio" name="stmW" value="repeat" checked> GL_REPEAT</label>
+<label><input type="radio" name="stmW" value="mirror"> GL_MIRRORED_REPEAT</label>
+<label><input type="radio" name="stmW" value="clamp"> GL_CLAMP_TO_EDGE</label>
+<label><input type="checkbox" id="stmG" checked> 標出 0~1 一份的範圍</label></div>
+<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;justify-content:center">
+<div style="text-align:center"><canvas id="stmSrc" width="128" height="128" style="border:1px solid var(--line);border-radius:6px"></canvas><div class="mut">圖檔（一份 = 0~1）</div></div>
+<div style="text-align:center"><canvas id="stmCv" width="420" height="280" style="border:1px solid var(--line);border-radius:6px;max-width:100%;height:auto;cursor:crosshair"></canvas><div class="mut">畫在 quad 上（tc 從 (0,0) 到 (1,1)）</div></div>
+</div>
+<pre><code id="stmCode"></code></pre>
+<p id="stmInfo" style="margin:4px 0 0"></p>
+</div>
+<p class="mut">講義 FS 寫成 <code>layout uniform sampler2D</code> 且漏了 <code>out vec4 color;</code>，這裡已修正。讀圖檔細節見 <a href="02-project-syntax.html#stb">Appendix - Image Loading</a>。</p></div>
+
 
 <!-- ================================================================ -->
 <h2 id="texops">Texture 操作：filtering、mipmap、wrapping、comparison</h2>
@@ -1229,6 +1324,84 @@ void main(void) { color = vec4(vColor.rgb, 1.0); }`;
   $('txScr').onmouseleave = () => { hover = null; draw(); };
   $('txS').oninput = $('txG').onchange = draw;
   document.querySelectorAll('input[name=txF]').forEach(r => r.onchange = draw);
+  draw();
+})();
+
+// ---------- Simple Textured Model：tc 倍率與 wrap mode ----------
+(() => {
+  const src = $('stmSrc'), sc = src.getContext('2d'), cv = $('stmCv');
+  // 圖檔：磚牆 + 大寫 F（看得出左右翻轉）+ 左紅、右藍邊（看得出 clamp）
+  function paintSrc() {
+    sc.fillStyle = '#b5603a'; sc.fillRect(0, 0, 128, 128);
+    sc.strokeStyle = '#e8dccb'; sc.lineWidth = 3;
+    for (let r = 0; r < 4; r++) { const y = r * 32; sc.beginPath(); sc.moveTo(0, y); sc.lineTo(128, y); sc.stroke(); for (let c = 0; c < 3; c++) { const x = c * 48 + (r % 2 ? 24 : 0); sc.beginPath(); sc.moveTo(x, y); sc.lineTo(x, y + 32); sc.stroke(); } }
+    sc.fillStyle = '#c2412d'; sc.fillRect(0, 0, 10, 128); sc.fillStyle = '#3557c9'; sc.fillRect(118, 0, 10, 128);
+    sc.fillStyle = '#fff'; sc.font = 'bold 80px sans-serif'; sc.textAlign = 'center'; sc.textBaseline = 'middle'; sc.fillText('F', 64, 68);
+  }
+  paintSrc();
+  const img = sc.getImageData(0, 0, 128, 128);
+  const gl = cv.getContext('webgl2');
+  if (!gl) { $('stmInfo').textContent = '這個瀏覽器不支援 WebGL2。'; return; }
+  const VS = `#version 300 es
+in vec2 aPos;
+out vec2 tc;
+void main() { tc = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+  const FS = `#version 300 es
+precision highp float;
+uniform sampler2D tex_object;
+uniform vec2 uScale;
+uniform bool uGrid;
+in vec2 tc;
+out vec4 color;
+void main() {
+    vec2 uv = tc * uScale;                       // 講義的 fs_in.tc * vec2(3.0, 1.0)
+    color = texture(tex_object, uv);
+    if (uGrid) {                                 // 在 uv 為整數的地方畫黃線
+        vec2 g = abs(fract(uv - 0.5) - 0.5) / fwidth(uv);
+        if (min(g.x, g.y) < 1.2) color = vec4(1.0, 0.85, 0.1, 1.0);
+    }
+}`;
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+  gl.bindVertexArray(gl.createVertexArray());
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const tex = gl.createTexture(); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);   // 同 stbi_set_flip_vertically_on_load
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 128, 128, 0, gl.RGBA, gl.UNSIGNED_BYTE, img.data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  const WR = { repeat: [gl.REPEAT, 'GL_REPEAT'], mirror: [gl.MIRRORED_REPEAT, 'GL_MIRRORED_REPEAT'], clamp: [gl.CLAMP_TO_EDGE, 'GL_CLAMP_TO_EDGE'] };
+  let hover = null;
+  const wrap1 = (x, m) => m === 'repeat' ? x - Math.floor(x) : m === 'mirror' ? (t => t > 1 ? 2 - t : t)(x - 2 * Math.floor(x / 2)) : Math.min(1, Math.max(0, x));
+  function draw() {
+    const su = +$('stmU').value, sv = +$('stmV').value, m = document.querySelector('input[name=stmW]:checked').value;
+    $('stmUV').textContent = su.toFixed(1); $('stmVV').textContent = sv.toFixed(1);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, WR[m][0]); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, WR[m][0]);
+    gl.viewport(0, 0, cv.width, cv.height); gl.useProgram(prog);
+    gl.uniform1i(gl.getUniformLocation(prog, 'tex_object'), 0);
+    gl.uniform2f(gl.getUniformLocation(prog, 'uScale'), su, sv);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uGrid'), $('stmG').checked ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    $('stmCode').textContent =
+`glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, ${WR[m][1]});
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, ${WR[m][1]});
+// FS
+color = texture(tex_object, fs_in.tc * vec2(${su.toFixed(1)}, ${sv.toFixed(1)}));   // u: 0 ~ ${su}，v: 0 ~ ${sv}`;
+    paintSrc();
+    if (hover) {
+      const [tu, tv] = hover, u = tu * su, v = tv * sv, wu = wrap1(u, m), wv = wrap1(v, m);
+      const x = wu * 128, y = (1 - wv) * 128;
+      sc.strokeStyle = '#ffeb3b'; sc.lineWidth = 2; sc.beginPath(); sc.arc(x, y, 6, 0, 7); sc.stroke();
+      $('stmInfo').innerHTML = `原本 tc = <b>(${tu.toFixed(2)}, ${tv.toFixed(2)})</b> → 乘完 uv = <b>(${u.toFixed(2)}, ${v.toFixed(2)})</b> → ${WR[m][1]} 之後實際讀圖上的 <b>(${wu.toFixed(2)}, ${wv.toFixed(2)})</b>（左邊黃圈）` +
+        (m === 'clamp' && (u > 1 || v > 1) ? '：超出 1 的部分全部讀邊緣那排 texel。' : m === 'mirror' && (Math.floor(u) % 2 || Math.floor(v) % 2) ? '：落在奇數份，被翻轉。' : '');
+    } else $('stmInfo').innerHTML = `<span class="mut">quad 上 tc 從 0 到 1，乘完後 u 是 0 ~ ${su}、v 是 0 ~ ${sv}；黃線是 uv 為整數的位置（每一格 = 一份圖）。滑鼠移到右圖看單點。</span>`;
+  }
+  cv.onmousemove = e => { const r = cv.getBoundingClientRect(); hover = [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height]; draw(); };
+  cv.onmouseleave = () => { hover = null; draw(); };
+  ['stmU', 'stmV'].forEach(id => $(id).oninput = draw); $('stmG').onchange = draw;
+  document.querySelectorAll('input[name=stmW]').forEach(r => r.onchange = draw);
   draw();
 })();
 
