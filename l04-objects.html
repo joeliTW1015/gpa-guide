@@ -492,33 +492,122 @@ glUniformMatrix4fv(loc_var2, 1, GL_FALSE, mat);</code></pre>
 
 <!-- ================================================================ -->
 <h2 id="ubo">Buffer-backed Uniform Block（UBO）</h2>
-<div class="grid2">
-<div class="card">
-<ul><li>把一組 uniform 組成一個 <b>uniform block</b>，整個 block 存在一個 buffer object 裡（buffer-backed）</li>
-<li>宣告方式像 interface block，但用 <code>uniform</code> 修飾</li>
-<li>各 stage 的 block 對應規則和 default block 一樣：同樣的宣告指向同一份資料（同一個 buffer）</li>
-<li>Program 中的 block 用 <b>uniform block index</b> 識別（<code>glGetUniformBlockIndex</code>）</li>
-<li>Block 和 buffer 透過綁到<b>同一個 uniform binding point</b> 連起來</li></ul></div>
-<pre><code><span class="c">// GLSL：宣告名為 TransformBlock 的 uniform block</span>
-uniform TransformBlock
+<p class="lead">把一組 uniform 打包成一個 <b>uniform block</b>，資料改放在一個 <b>buffer object</b> 裡。好處：一次更新全部、多個 program 共用同一份。</p>
+
+<h3 id="ubo-why">為什麼需要：default uniform 的麻煩</h3>
+<p>假設有兩個 program（畫場景的 <code>sceneProg</code>、畫天空的 <code>skyProg</code>），都要用到相機的 <code>view</code>、<code>proj</code>。用一般 uniform 時，每個 program 各有一份，要各自查 location、各自寫：</p>
+<pre><code><span class="c">// 一般 uniform：每幀要對每個 program 各寫一次</span>
+glUseProgram(sceneProg);
+glUniformMatrix4fv(sceneViewLoc, 1, GL_FALSE, glm::value_ptr(V));
+glUniformMatrix4fv(sceneProjLoc, 1, GL_FALSE, glm::value_ptr(P));
+glUseProgram(skyProg);
+glUniformMatrix4fv(skyViewLoc, 1, GL_FALSE, glm::value_ptr(V));
+glUniformMatrix4fv(skyProjLoc, 1, GL_FALSE, glm::value_ptr(P));
+<span class="c">// program 越多、uniform 越多，這段就越長，也容易漏寫一個</span></code></pre>
+<table>
+<tr><th style="width:22%"></th><th>一般 uniform（default block）</th><th>Uniform block（UBO）</th></tr>
+<tr><td>資料存在</td><td>每個 <b>program 裡</b>各一份</td><td>一個 <b>buffer object</b>，大家讀同一份</td></tr>
+<tr><td>C++ 怎麼找到它</td><td><code>glGetUniformLocation</code>（每個 uniform、每個 program 各查）</td><td><code>glGetUniformBlockIndex</code>（每個 block 查一次）</td></tr>
+<tr><td>怎麼更新</td><td><code>glUniform*</code> 一個一個寫，要先 <code>glUseProgram</code></td><td><code>glBufferSubData</code> 寫進 buffer，<b>不用</b> <code>glUseProgram</code></td></tr>
+<tr><td>上例每幀呼叫次數</td><td>2 次 <code>glUseProgram</code> + 4 次 <code>glUniformMatrix4fv</code></td><td>1 次 <code>glBufferSubData</code></td></tr>
+<tr><td>記憶體排列</td><td>不用管</td><td>C++ 端要照 <a href="#std140">std140</a> 規則排</td></tr>
+</table>
+
+<h3 id="ubo-three">三層關係：block ↔ binding point ↔ buffer</h3>
+<p>Block 和 buffer <b>不是直接連起來</b>，中間隔著一排編號的 <b>uniform binding point</b>（0, 1, 2, …）。可以把 binding point 想成<b>插座</b>：</p>
+<div class="flow">
+<div><b>Buffer object</b>真正放資料的地方<br><code>glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo)</code><br>= 把 buffer 插進 0 號插座</div><i>→</i>
+<div><b>Binding point 0</b>只是一個編號（插座）</div><i>←</i>
+<div><b>Program 的 uniform block</b>shader 裡宣告的 block<br><code>glUniformBlockBinding(prog, idx, 0)</code><br>= block 說「我去 0 號插座拿資料」</div>
+</div>
+<p class="mut">兩邊各自指定編號，<b>編號一樣才接得上</b>。好處：換資料只要把另一個 buffer 插進同一個插座，program 完全不用改。</p>
+
+<h3 id="ubo-example">完整例子：兩個 program 共用相機資料</h3>
+<p><b>① GLSL</b>：兩個 shader 都宣告<b>一模一樣</b>的 block（名稱、成員、順序都要相同）。</p>
+<pre><code><span class="c">// GLSL：scene.vs.glsl 和 sky.vs.glsl 都寫這段</span>
+layout(std140) uniform Camera      <span class="c">// block 名稱：C++ 用它查 index</span>
 {
-    float scale;
-    vec3  translation;
-    float rotation[3];
-    mat4  projection_matrix;
-} transform;
+    mat4  view;                     <span class="c">// offset   0，64 bytes</span>
+    mat4  proj;                     <span class="c">// offset  64，64 bytes</span>
+    vec3  eyePos;                   <span class="c">// offset 128，12 bytes</span>
+    float time;                     <span class="c">// offset 140， 4 bytes（剛好塞進 vec3 後面）</span>
+};                                  <span class="c">// 總共 144 bytes</span>
 
 void main()
 {
-    <span class="c">// 用 instance 名稱存取</span>
-    float s = transform.scale;
-}</code></pre></div>
-<h3>互動：Uniform binding point</h3>
+    <span class="c">// 沒寫 instance 名稱時，成員直接當一般變數用</span>
+    <span class="c">// （model、aPos 照常用一般 uniform / attribute 宣告，這裡省略）</span>
+    gl_Position = proj * view * model * vec4(aPos, 1.0);
+}</code></pre>
+
+<p><b>② C++：用一個 struct 對應 block 的排列</b></p>
+<pre><code>struct CameraData                   <span class="c">// 欄位順序、大小都和 GLSL 的 block 一致</span>
+{
+    glm::mat4 view;                 <span class="c">// 0</span>
+    glm::mat4 proj;                 <span class="c">// 64</span>
+    glm::vec3 eyePos;               <span class="c">// 128</span>
+    float     time;                 <span class="c">// 140</span>
+};
+static_assert(sizeof(CameraData) == 144, "要和 std140 的大小一樣");</code></pre>
+<p class="mut">這個例子剛好不需要 padding（vec3 後面接 float）。如果把 <code>time</code> 拿掉、或 vec3 後面接 vec3，就要自己補空位，規則見 <a href="#std140">std140</a>。</p>
+
+<p><b>③ C++：初始化（只做一次）</b></p>
+<pre><code>GLuint ubo;
+glGenBuffers(1, &amp;ubo);
+glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+glBufferData(GL_UNIFORM_BUFFER, sizeof(CameraData),
+             nullptr, GL_DYNAMIC_DRAW);       <span class="c">// 只配置 144 bytes，先不放資料</span>
+
+<span class="c">// buffer → 插進 0 號 binding point</span>
+glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+
+<span class="c">// 每個 program 的 Camera block → 去 0 號拿</span>
+GLuint sceneIdx = glGetUniformBlockIndex(sceneProg, "Camera");
+glUniformBlockBinding(sceneProg, sceneIdx, 0);
+GLuint skyIdx = glGetUniformBlockIndex(skyProg, "Camera");
+glUniformBlockBinding(skyProg, skyIdx, 0);</code></pre>
+
+<p><b>④ C++：每一幀更新</b></p>
+<pre><code>CameraData cam;
+cam.view   = V;
+cam.proj   = P;
+cam.eyePos = eye;
+cam.time   = (float)glfwGetTime();
+
+glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(cam), &amp;cam);   <span class="c">// 一次寫完 144 bytes</span>
+
+glUseProgram(sceneProg);   <span class="c">// 畫場景：Camera 已經是新的</span>
+<span class="c">// … draw …</span>
+glUseProgram(skyProg);     <span class="c">// 畫天空：讀的是同一份，不用再設</span>
+<span class="c">// … draw …</span></code></pre>
+<ul>
+<li>只想改其中一個欄位，可以只寫那段：<code>glBufferSubData(GL_UNIFORM_BUFFER, 140, 4, &amp;time);</code>（offset 140、4 bytes）。</li>
+<li><code>glBindBufferBase</code> 也會順便把 buffer 綁到一般的 <code>GL_UNIFORM_BUFFER</code>，所以上面的 <code>glBindBuffer</code> 嚴格說可以省略；寫出來比較清楚。</li>
+<li>GLSL 4.20 以上可以寫 <code>layout(std140, binding = 0) uniform Camera</code>，直接在 shader 裡指定 binding point，省掉 <code>glUniformBlockBinding</code>；但 macOS 只到 4.1，作業 template 也是 4.1。</li>
+</ul>
+
+<h3 id="ubo-play">互動：改綁定，看每個 block 讀到什麼</h3>
+<p class="mut">兩個 buffer：<code>uboCamera</code>（view、proj…）、<code>uboLight</code>（光源位置、顏色）。兩個 program：<code>sceneProg</code> 有 <code>Camera</code> 和 <code>Light</code> 兩個 block，<code>skyProg</code> 只有 <code>Camera</code>。改下拉選單，看連線、右邊的結果和產生的程式碼。</p>
+<div class="card">
+<div class="ctrl"><b style="min-width:92px">buffer 插哪</b>
+<span><code>uboCamera</code> → <select id="upCamBuf"></select></span>
+<span><code>uboLight</code> → <select id="upLitBuf"></select></span></div>
+<div class="ctrl"><b style="min-width:92px">block 讀哪</b>
+<span><code>sceneProg.Camera</code> ← <select id="upScCam"></select></span>
+<span><code>sceneProg.Light</code> ← <select id="upScLit"></select></span>
+<span><code>skyProg.Camera</code> ← <select id="upSkCam"></select></span></div>
+<div class="ctrl"><button class="b" id="upOk">正確設定</button><button class="b" id="upSwap">兩個 buffer 插反</button><button class="b" id="upMiss">sky 讀錯插座</button></div>
+<svg id="upSvg" viewBox="0 0 900 250" width="100%" font-size="13" text-anchor="middle"></svg>
+<table id="upRes"></table>
+<pre><code id="upCode"></code></pre>
+</div>
+
+<h3 id="ubo-lecture">講義的例子：X、Y、Z 三個 block</h3>
+<p>講義的設定：Uniform Block X 用 Buffer C、Y 用 A、Z 用 B。重點是 binding point <b>不必連續</b>（2 沒用到），也不必和 block 宣告的順序一樣。點右邊的 block 看路徑。</p>
 <figure class="fig">
 <svg id="ubSvg" viewBox="0 0 900 230" width="100%" font-size="13" text-anchor="middle"></svg>
-<figcaption>講義的例子：Uniform Block X 用 Buffer C、Y 用 A、Z 用 B。Binding point 不必連續（2 沒用到）。點右邊的 block 看路徑。</figcaption>
 </figure>
-<div class="grid2">
 <pre><code><span class="c">// GLSL</span>
 uniform X { float a; mat4 b; };
 uniform Y { int c; ivec4 d; };
@@ -530,17 +619,20 @@ GLuint Z_index = glGetUniformBlockIndex(program, "Z");
 glUniformBlockBinding(program, X_index, 1);
 glUniformBlockBinding(program, Y_index, 3);
 glUniformBlockBinding(program, Z_index, 0);
+
 <span class="c">// C++：buffer → binding point</span>
 glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer_b);   <span class="c">// Z 的資料</span>
 glBindBufferBase(GL_UNIFORM_BUFFER, 1, buffer_c);   <span class="c">// X 的資料</span>
-glBindBufferBase(GL_UNIFORM_BUFFER, 3, buffer_a);   <span class="c">// Y 的資料</span></code></pre></div>
-<div class="tw"><table>
-<tr><th>函式</th><th>做什麼</th></tr>
-<tr><td><a href="04-api.html#glGetUniformBlockIndex"><code>glGetUniformBlockIndex(program, name)</code></a></td><td>查 uniform block 在 program 中的 index</td></tr>
-<tr><td><a href="04-api.html#glUniformBlockBinding"><code>glUniformBlockBinding(program, blockIndex, binding)</code></a></td><td>指定這個 block 讀哪個 uniform binding point</td></tr>
-<tr><td><a href="04-api.html#glBindBufferBase"><code>glBindBufferBase(target, index, buffer)</code></a></td><td>把 buffer 綁到 indexed binding point（<code>GL_UNIFORM_BUFFER</code> 或 <code>GL_TRANSFORM_FEEDBACK_BUFFER</code>）的第 index 個；同時也綁到該 target 的一般 binding point，之後 glBufferSubData / glMapBuffer 會作用在它上面</td></tr>
-</table></div>
-<div class="note"><b>為什麼用 UBO</b>：更新所有 uniform 只要<b>一次 <code>glBufferSubData()</code></b>；多個 program 共用同一份資料（例如相機矩陣）時，綁到同一個 binding point 就好。</div>
+glBindBufferBase(GL_UNIFORM_BUFFER, 3, buffer_a);   <span class="c">// Y 的資料</span></code></pre>
+
+<h3>用到的函式</h3>
+<table>
+<tr><th style="width:38%">函式</th><th>做什麼</th></tr>
+<tr><td><a href="04-api.html#glGetUniformBlockIndex"><code>glGetUniformBlockIndex(program, name)</code></a></td><td>用 block 名稱查它在 program 裡的 index（類似 <code>glGetUniformLocation</code>，但對象是整個 block）</td></tr>
+<tr><td><a href="04-api.html#glUniformBlockBinding"><code>glUniformBlockBinding(program, blockIndex, binding)</code></a></td><td>指定這個 block 去哪個 binding point 讀資料（存在 program 裡，設一次就好）</td></tr>
+<tr><td><a href="04-api.html#glBindBufferBase"><code>glBindBufferBase(GL_UNIFORM_BUFFER, binding, buffer)</code></a></td><td>把 buffer 插進第 binding 號插座；同時也綁到一般的 <code>GL_UNIFORM_BUFFER</code>，之後的 <code>glBufferSubData</code> / <code>glMapBuffer</code> 會作用在它</td></tr>
+<tr><td><a href="04-api.html#glBufferSubData"><code>glBufferSubData(GL_UNIFORM_BUFFER, offset, size, data)</code></a></td><td>更新 UBO 的內容（全部或其中一段），所有讀這個 buffer 的 program 都會看到新值</td></tr>
+</table>
 
 <!-- ================================================================ -->
 <h2 id="std140">Uniform buffer 的記憶體排列：std140</h2>
@@ -1018,10 +1110,66 @@ void main(void) { color = vec4(vColor.rgb, 1.0); }`;
   requestAnimationFrame(t0 => { last = t0; frame(t0); });
 })();
 
+// ---------- UBO playground：buffer → binding point ← block ----------
+(() => {
+  const BP = [0, 1, 2, 3];
+  const sel = { camBuf: $('upCamBuf'), litBuf: $('upLitBuf'), scCam: $('upScCam'), scLit: $('upScLit'), skCam: $('upSkCam') };
+  Object.values(sel).forEach(s => s.innerHTML = BP.map(i => `<option value="${i}">binding point ${i}</option>`).join(''));
+  const preset = p => { Object.entries(p).forEach(([k, v]) => sel[k].value = v); draw(); };
+  const OK = { camBuf: 0, litBuf: 1, scCam: 0, scLit: 1, skCam: 0 };
+  $('upOk').onclick = () => preset(OK);
+  $('upSwap').onclick = () => preset({ ...OK, camBuf: 1, litBuf: 0 });
+  $('upMiss').onclick = () => preset({ ...OK, skCam: 2 });
+  Object.values(sel).forEach(s => s.onchange = draw);
+
+  const BUF = { uboCamera: { y: 75, col: '#dbeafe', st: '#9fb2f0', txt: 'view, proj, eyePos, time' }, uboLight: { y: 175, col: '#fff3d6', st: '#e6c27a', txt: 'lightPos, lightColor' } };
+  const BPY = [40, 95, 150, 205];
+  const BLK = [['scCam', 'sceneProg.Camera', 'uboCamera', 55], ['scLit', 'sceneProg.Light', 'uboLight', 125], ['skCam', 'skyProg.Camera', 'uboCamera', 205]];
+
+  function draw() {
+    const v = Object.fromEntries(Object.entries(sel).map(([k, s]) => [k, +s.value]));
+    // 同一個插座插兩個 buffer：後呼叫的 glBindBufferBase（uboLight）蓋掉前面的
+    const at = bp => v.litBuf === bp ? 'uboLight' : v.camBuf === bp ? 'uboCamera' : null;
+    let s = '<defs><marker id="upa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>';
+    s += '<text x="110" y="16" font-weight="700">Buffer object</text><text x="450" y="16" font-weight="700">Uniform binding point</text><text x="770" y="16" font-weight="700">Program 裡的 block</text>';
+    [['uboCamera', v.camBuf], ['uboLight', v.litBuf]].forEach(([b, bp]) => {
+      const lost = at(bp) !== b, col = lost ? '#c3c8cf' : BUF[b].st;
+      s += `<path d="M190 ${BUF[b].y} C290 ${BUF[b].y},290 ${BPY[bp]},372 ${BPY[bp]}" stroke="${col}" stroke-width="2.5" fill="none" ${lost ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#upa)"/>`;
+    });
+    BLK.forEach(([k, , want, y]) => {
+      const got = at(v[k]), ok = got === want;
+      s += `<path d="M680 ${y} C610 ${y},610 ${BPY[v[k]]},530 ${BPY[v[k]]}" stroke="${ok ? '#2f8a5b' : '#c2412d'}" stroke-width="2.5" fill="none" marker-end="url(#upa)"/>`;
+    });
+    Object.entries(BUF).forEach(([b, o]) => s += `<rect x="30" y="${o.y - 24}" width="160" height="48" rx="8" fill="${o.col}" stroke="${o.st}"/><text x="110" y="${o.y - 3}" font-weight="700">${b}</text><text x="110" y="${o.y + 14}" font-size="11" fill="#555">${o.txt}</text>`);
+    BPY.forEach((y, i) => { const b = at(i); s += `<rect x="375" y="${y - 16}" width="152" height="32" rx="7" fill="${b ? BUF[b].col : '#f3f2ed'}" stroke="#ccc"/><text x="451" y="${y + 5}" fill="${b ? '#111' : '#999'}">${i} 號${b ? '：' + b : '（空）'}</text>`; });
+    BLK.forEach(([k, name, want, y]) => { const ok = at(v[k]) === want; s += `<rect x="684" y="${y - 18}" width="190" height="36" rx="7" fill="${ok ? '#e3f4ea' : '#fde2dc'}" stroke="${ok ? '#8fd1a8' : '#c2412d'}"/><text x="779" y="${y + 5}">${name}</text>`; });
+    $('upSvg').innerHTML = s;
+
+    $('upRes').innerHTML = '<tr><th>block</th><th>讀 binding point</th><th>那裡插的是</th><th>結果</th></tr>' + BLK.map(([k, name, want]) => {
+      const got = at(v[k]);
+      const res = got === want ? '<span class="ok">✓ 讀到正確資料</span>'
+        : !got ? '<span class="bad">✗ 插座是空的 → 讀到的值是 0 / 未定義，畫面通常整個消失</span>'
+        : `<span class="bad">✗ 讀到 ${got} 的 bytes，被當成 ${name.split('.')[1]} 解讀 → 矩陣 / 顏色錯亂</span>`;
+      return `<tr><td><code>${name}</code></td><td>${v[k]}</td><td>${got ? '<code>' + got + '</code>' : '（空）'}</td><td>${res}</td></tr>`;
+    }).join('') + (v.camBuf === v.litBuf ? `<tr><td colspan="4" class="bad">兩個 buffer 插在同一個插座 ${v.camBuf}：後呼叫的 glBindBufferBase（uboLight）會蓋掉前一個，一個插座只能插一個 buffer。</td></tr>` : '');
+
+    $('upCode').textContent =
+`// buffer → binding point（插座）
+glBindBufferBase(GL_UNIFORM_BUFFER, ${v.camBuf}, uboCamera);
+glBindBufferBase(GL_UNIFORM_BUFFER, ${v.litBuf}, uboLight);
+
+// block → binding point（設一次，存在 program 裡）
+glUniformBlockBinding(sceneProg, glGetUniformBlockIndex(sceneProg, "Camera"), ${v.scCam});
+glUniformBlockBinding(sceneProg, glGetUniformBlockIndex(sceneProg, "Light"),  ${v.scLit});
+glUniformBlockBinding(skyProg,   glGetUniformBlockIndex(skyProg,   "Camera"), ${v.skCam});`;
+  }
+  preset(OK);
+})();
+
 // ---------- UBO binding ----------
 const UB = { X: ['C', 1], Y: ['A', 3], Z: ['B', 0] };
 function ubDraw(sel) {
-  const bufY = { A: 50, B: 115, C: 180 }, bpY = [30, 80, 130, 180], blkY = { X: 50, Y: 115, Z: 180 };
+  const bufY = { A: 50, B: 115, C: 180 }, bpY = [42, 90, 138, 186], blkY = { X: 50, Y: 115, Z: 180 };
   let s = '<defs><marker id="ua" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>';
   s += '<text x="110" y="16" font-weight="700">Buffer Object</text><text x="450" y="16" font-weight="700">Uniform Binding Point</text><text x="790" y="16" font-weight="700">Shader Program</text>';
   Object.entries(UB).forEach(([b, [buf, bp]]) => {
