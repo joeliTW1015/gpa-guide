@@ -696,7 +696,55 @@ float d;</textarea>
 <rect x="310" y="30" width="100" height="100" rx="4" fill="#fff" stroke="#999"/><path d="M335 70 L385 58 L395 100 L345 112 Z" fill="url(#chk)" stroke="#999"/><text x="360" y="150">display（螢幕）</text>
 <g stroke="#555" stroke-width="2" marker-end="url(#tm)"><path d="M112 80 h52"/><path d="M272 80 h34"/></g>
 </svg><figcaption>概念簡單，但牽涉 3、4 個座標系：影像 → 3D 表面 → 螢幕</figcaption></figure></div></div>
-<div class="note"><b>Texture</b>：像影像一樣的一塊記憶體，最小元素叫 <b>texel</b>；常用來提供表面細節；GPU 有額外的專用硬體處理某些 texture 運算（過濾、取樣）。</div>
+<div class="note"><b>Texture</b>：像影像一樣的一塊記憶體，最小元素叫 <b>texel</b>；常用來提供表面細節；GPU 有額外的專用硬體處理某些 texture 運算（過濾、取樣）。 texel 和圖片 pixel、螢幕 pixel 的關係見 <a href="#texel">下方</a>。</div>
+
+<h3 id="texel">texel 和 pixel 的關係：是一一對應嗎？</h3>
+<p>常被混在一起的有<b>三種</b>「格子」，答案要分兩段看：</p>
+<div class="flow">
+<div><b>圖檔的 pixel</b><code>nailong.png</code> 512 × 512<br>存在硬碟 / CPU 記憶體</div><i>→ 一一對應 →</i>
+<div><b>texture 的 texel</b>level 0 也是 512 × 512<br>存在 GPU 記憶體</div><i>→ <b>不是</b>一一對應 →</i>
+<div><b>螢幕的 pixel（fragment）</b>看物體在畫面上多大<br>每個 fragment 取樣一次</div>
+</div>
+
+<table>
+<tr><th style="width:24%">關係</th><th style="width:16%">一一對應？</th><th>說明</th></tr>
+<tr><td>圖檔 pixel → texel<br><span class="mut">（上傳時）</span></td><td><b class="ok">是</b>（level 0）</td><td><code>glTexImage2D</code> / <code>glTexSubImage2D</code> 把圖的每個 pixel 複製成一個 texel：寬 × 高相同、第 (i, j) 個 pixel 就是第 (i, j) 個 texel。只有這些細節會變：
+<ul style="margin:4px 0">
+<li><b>上下順序</b>：圖檔第一列在最上面，texel 的第 0 列在最下面 → 所以要 <code>stbi_set_flip_vertically_on_load(true)</code>。</li>
+<li><b>格式</b>：<code>stbi_load(…, 4)</code> 把 RGB 補成 RGBA；internal format（如 <code>GL_RGBA8</code>、<code>GL_R8</code>）決定每個 texel 存幾個 channel、幾 bit。</li>
+<li><b>Mipmap</b>：level 1、2… 的 texel 是 <code>glGenerateMipmap</code> 把 2×2 平均算出來的，圖檔裡沒有對應的 pixel。</li>
+</ul></td></tr>
+<tr><td>texel → 螢幕 pixel<br><span class="mut">（畫的時候）</span></td><td><b class="bad">不是</b></td><td>貼了 texture 的三角形在螢幕上可大可小、可以斜著看，所以：
+<ul style="margin:4px 0">
+<li><b>放大（magnification）</b>：一個 texel 蓋住很多螢幕 pixel → 靠 <code>MAG_FILTER</code>（NEAREST 方塊、LINEAR 平滑）。</li>
+<li><b>縮小（minification）</b>：一個螢幕 pixel 跨過很多 texel → 靠 <code>MIN_FILTER</code> 與 mipmap，不然會閃爍。</li>
+<li>每個 fragment 只用它的 <b>uv</b> 去取樣<b>一次</b>（texture 函式），不是「把 texel 一格一格搬到螢幕上」。</li>
+</ul></td></tr>
+<tr><td>剛好 1:1 的特例</td><td>只有特定情況</td><td>全螢幕 quad、texture 和 viewport 一樣大（例如作業 2 的 FBO 後製），而且取樣點落在 texel 中心 → 一個螢幕 pixel 剛好對到一個 texel。這時可以直接用 <code>texelFetch(tex, ivec2(gl_FragCoord.xy), 0)</code>。</td></tr>
+</table>
+
+<div class="card"><b>座標怎麼對：uv vs texel 編號</b>
+<ul>
+<li>texel 用<b>整數編號</b> (i, j)：i = 0 ~ 寬−1、j = 0 ~ 高−1（<code>texelFetch</code> 用這個）。</li>
+<li>uv 是 <b>0 ~ 1 的連續座標</b>（<code>texture</code> 用這個）：uv (0, 0) 是 texel (0, 0) 的<b>左下角</b>，不是中心。</li>
+<li>texel (i, j) 的<b>中心</b>在 uv = ((i + 0.5) / 寬, (j + 0.5) / 高)。</li>
+<li>反過來：uv → <code>uv × 尺寸 − 0.5</code>，整數部分決定 LINEAR 用哪 2×2 個 texel，小數部分是權重；NEAREST 則取 <code>floor(uv × 尺寸)</code> 那一格。</li>
+</ul>
+<p class="mut" style="margin:0">例：寬 4 的 texture，4 個 texel 的中心在 u = 0.125、0.375、0.625、0.875；u = 0.5 剛好在 texel 1 和 2 的交界，LINEAR 會各取一半。</p></div>
+
+<h4>互動：同一張 8×8 texture 畫在螢幕上</h4>
+<p class="mut">左邊是原圖（8×8 = 64 個 pixel，上傳後就是 64 個 texel）。右邊每一小格是一個<b>螢幕 pixel</b>，紅線是 <b>texel 的邊界</b>。拖動「畫面上的大小」看放大 / 縮小；滑鼠移到右邊任一格，看那個螢幕 pixel 的 uv 和取樣到哪些 texel。</p>
+<div class="card">
+<div class="ctrl">畫面上的大小 <input type="range" id="txS" min="-3" max="2" step="0.25" value="1"> <span id="txSV"></span>
+<label><input type="radio" name="txF" value="n" checked> GL_NEAREST</label><label><input type="radio" name="txF" value="l"> GL_LINEAR</label><label><input type="radio" name="txF" value="m"> GL_LINEAR_MIPMAP_NEAREST</label>
+<label><input type="checkbox" id="txG" checked> 顯示 texel 邊界</label></div>
+<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;justify-content:center">
+<div style="text-align:center"><canvas id="txSrc" width="128" height="128" style="border:1px solid var(--line);border-radius:6px;image-rendering:pixelated"></canvas><div class="mut">原圖 8 × 8</div></div>
+<div style="text-align:center"><canvas id="txScr" width="480" height="288" style="border:1px solid var(--line);border-radius:6px;max-width:100%;height:auto;cursor:crosshair"></canvas><div class="mut">螢幕（40 × 24 個 pixel，放大顯示）</div></div>
+</div>
+<p id="txInfo" style="margin:8px 0 0"></p>
+</div>
+
 
 <!-- ================================================================ -->
 <h2 id="unit">Texture Image Unit：texture 怎麼接到 shader</h2>
@@ -1110,6 +1158,80 @@ void main(void) { color = vec4(vColor.rgb, 1.0); }`;
   requestAnimationFrame(t0 => { last = t0; frame(t0); });
 })();
 
+// ---------- texel vs 螢幕 pixel ----------
+(() => {
+  // 8×8 圖檔（由上往下一列一列），字母對應顏色
+  const IMG = ['..yyyy..', '.yyyyyy.', 'yykyykyy', 'yyyyyyyy', 'yrryyrry', 'yyrrrryy', '.yyyyyy.', '..yyyy..'];
+  const PAL = { '.': [52, 120, 200], y: [250, 204, 21], k: [30, 30, 40], r: [210, 60, 60] };
+  const N = 8, SW = 40, SH = 24, C = 12;
+  // texel[j][i]：j 由下往上（= 已做過 flip vertically）
+  const L0 = []; for (let j = 0; j < N; j++) L0.push([...IMG[N - 1 - j]].map(ch => PAL[ch]));
+  const levels = [L0];   // mipmap：每層 2×2 平均
+  while (levels[levels.length - 1].length > 1) {
+    const p = levels[levels.length - 1], n = p.length / 2, q = [];
+    for (let j = 0; j < n; j++) { q.push([]); for (let i = 0; i < n; i++) q[j].push([0, 1, 2].map(c => (p[2 * j][2 * i][c] + p[2 * j][2 * i + 1][c] + p[2 * j + 1][2 * i][c] + p[2 * j + 1][2 * i + 1][c]) / 4)); }
+    levels.push(q);
+  }
+  const src = $('txSrc').getContext('2d'), scr = $('txScr').getContext('2d');
+  let hover = null;
+  const clampI = (x, n) => Math.max(0, Math.min(n - 1, x));
+  function sample(u, v, mode, size) {   // 回傳 { col, used: [[i, j, w]], level }
+    let lv = 0;
+    if (mode === 'm') lv = Math.min(levels.length - 1, Math.max(0, Math.round(Math.log2(N / size))));
+    const T = levels[lv], n = T.length;
+    if (mode === 'n') { const i = clampI(Math.floor(u * n), n), j = clampI(Math.floor(v * n), n); return { col: T[j][i], used: [[i, j, 1]], level: 0 }; }
+    const x = u * n - 0.5, y = v * n - 0.5, i0 = Math.floor(x), j0 = Math.floor(y), fx = x - i0, fy = y - j0;
+    const used = [[i0, j0, (1 - fx) * (1 - fy)], [i0 + 1, j0, fx * (1 - fy)], [i0, j0 + 1, (1 - fx) * fy], [i0 + 1, j0 + 1, fx * fy]].map(([i, j, w]) => [clampI(i, n), clampI(j, n), w]);
+    const col = [0, 1, 2].map(c => used.reduce((s, [i, j, w]) => s + T[j][i][c] * w, 0));
+    return { col, used, level: lv };
+  }
+  function draw() {
+    const s = +$('txS').value, size = N * Math.pow(2, s), mode = document.querySelector('input[name=txF]:checked').value;
+    $('txSV').textContent = size >= N ? `${size.toFixed(size % 1 ? 1 : 0)} × ${size.toFixed(size % 1 ? 1 : 0)} 個螢幕 pixel（1 texel ≈ ${(size / N).toFixed(2)} × ${(size / N).toFixed(2)} pixel，放大）`
+      : `${size.toFixed(size % 1 ? 1 : 0)} × ${size.toFixed(size % 1 ? 1 : 0)} 個螢幕 pixel（1 pixel 跨 ${(N / size).toFixed(1)} × ${(N / size).toFixed(1)} 個 texel，縮小）`;
+    const x0 = (SW - size) / 2, y0 = (SH - size) / 2;
+    scr.fillStyle = '#e8ebf0'; scr.fillRect(0, 0, SW * C, SH * C);
+    let info = null;
+    for (let py = 0; py < SH; py++) for (let px = 0; px < SW; px++) {
+      const u = (px + 0.5 - x0) / size, v = (py + 0.5 - y0) / size;
+      const X = px * C, Y = (SH - 1 - py) * C;
+      if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+        const r = sample(u, v, mode, size);
+        scr.fillStyle = `rgb(${r.col.map(Math.round)})`; scr.fillRect(X, Y, C, C);
+        if (hover && hover[0] === px && hover[1] === py) info = { px, py, u, v, ...r };
+      }
+      scr.strokeStyle = 'rgba(0,0,0,.12)'; scr.strokeRect(X + .5, Y + .5, C - 1, C - 1);
+    }
+    if ($('txG').checked && size / N * C >= 2) {           // texel 邊界
+      scr.strokeStyle = 'rgba(200,30,30,.75)'; scr.lineWidth = 1; scr.beginPath();
+      for (let k = 0; k <= N; k++) {
+        const gx = (x0 + k * size / N) * C, gy = (SH - (y0 + k * size / N)) * C;
+        scr.moveTo(gx, (SH - y0) * C); scr.lineTo(gx, (SH - y0 - size) * C);
+        scr.moveTo(x0 * C, gy); scr.lineTo((x0 + size) * C, gy);
+      }
+      scr.stroke();
+    }
+    if (hover) { scr.strokeStyle = '#000'; scr.lineWidth = 2; scr.strokeRect(hover[0] * C + 1, (SH - 1 - hover[1]) * C + 1, C - 2, C - 2); scr.lineWidth = 1; }
+    // 原圖 + 標出用到的 texel
+    const S = 16;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { src.fillStyle = `rgb(${L0[j][i]})`; src.fillRect(i * S, (N - 1 - j) * S, S, S); }
+    src.strokeStyle = 'rgba(0,0,0,.15)'; for (let k = 0; k <= N; k++) { src.beginPath(); src.moveTo(k * S, 0); src.lineTo(k * S, N * S); src.moveTo(0, k * S); src.lineTo(N * S, k * S); src.stroke(); }
+    if (info && info.level === 0) { src.lineWidth = 2; src.strokeStyle = '#c2412d'; info.used.forEach(([i, j, w]) => { if (w > 0.001) src.strokeRect(i * S + 1, (N - 1 - j) * S + 1, S - 2, S - 2); }); src.lineWidth = 1; }
+    $('txInfo').innerHTML = !hover ? '<span class="mut">把滑鼠移到右邊的方塊上。</span>'
+      : !info ? `螢幕 pixel (${hover[0]}, ${hover[1]}) 不在貼圖範圍內。`
+      : `螢幕 pixel <b>(${info.px}, ${info.py})</b>，中心 (${info.px + 0.5}, ${info.py + 0.5}) → uv = <b>(${info.u.toFixed(3)}, ${info.v.toFixed(3)})</b>（左下為原點）<br>` +
+        (mode === 'n' ? `NEAREST：<code>floor(uv × 8)</code> = texel <b>(${info.used[0][0]}, ${info.used[0][1]})</b>，直接拿它的顏色。`
+          : `${mode === 'm' ? `MIPMAP：這個大小挑 <b>level ${info.level}</b>（${levels[info.level].length}×${levels[info.level].length}，每個 texel 是原圖 ${Math.pow(2, info.level)}×${Math.pow(2, info.level)} 的平均），再在該層做 LINEAR：` : 'LINEAR：<code>uv × 8 − 0.5</code> 找到 2×2 個 texel，依距離加權：'}` +
+            info.used.map(([i, j, w]) => `(${i}, ${j}) × ${w.toFixed(2)}`).join('、') + (info.level ? '' : '（左邊紅框）'));
+  }
+  const pos = e => { const r = $('txScr').getBoundingClientRect(); const x = (e.clientX - r.left) / r.width * SW, y = (e.clientY - r.top) / r.height * SH; return [Math.floor(x), SH - 1 - Math.floor(y)]; };
+  $('txScr').onmousemove = e => { hover = pos(e); draw(); };
+  $('txScr').onmouseleave = () => { hover = null; draw(); };
+  $('txS').oninput = $('txG').onchange = draw;
+  document.querySelectorAll('input[name=txF]').forEach(r => r.onchange = draw);
+  draw();
+})();
+
 // ---------- UBO playground：buffer → binding point ← block ----------
 (() => {
   const BP = [0, 1, 2, 3];
@@ -1225,7 +1347,7 @@ $('stIn').oninput = stCalc; stCalc();
 // ---------- texture unit 圖 ----------
 const TU = { X: ['C', 0], Y: ['A', 1], Z: ['B', 3] };
 function tuDraw(sel) {
-  const tY = { A: 45, B: 100, C: 155 }, uY = [30, 75, 120, 165], sY = { X: 45, Y: 100, Z: 155 };
+  const tY = { A: 50, B: 105, C: 160 }, uY = [42, 84, 126, 168], sY = { X: 50, Y: 105, Z: 160 };
   let s = '<defs><marker id="tu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>';
   s += '<text x="110" y="16" font-weight="700">Texture Object</text><text x="450" y="16" font-weight="700">Texture Image Unit</text><text x="790" y="16" font-weight="700">Shader Program</text>';
   Object.entries(TU).forEach(([k, [t, u]]) => { const on = k === sel, col = on ? '#c2412d' : '#c3c8cf', w = on ? 3 : 1.5;
