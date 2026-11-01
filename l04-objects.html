@@ -13,6 +13,11 @@ canvas.pl{border:1px solid var(--line);border-radius:8px;background:#fff;display
 .uni span.on{background:#c2412d;color:#fff}
 .bstate td{font:12.5px var(--mono);text-align:center}
 .bstate td.y{background:#e3f4ea}.bstate td.n{color:#aaa}
+.flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;font-size:13.5px;margin:10px 0}
+.flow div{flex:1;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.flow div b{display:block;color:var(--acc-ink)}
+.flow i{align-self:center;font-style:normal;color:var(--mut)}
+#rsP td,#rsM td{padding:2px 8px}
 </style></head>
 <body><main>
 <p class="kicker">講義 04 · OpenGL Objects</p>
@@ -245,56 +250,192 @@ uniform MyType type_uniform;</code></pre>
 
 <!-- ================================================================ -->
 <h2 id="cube">範例：Spinning Cube 與 Many Spinning Cubes</h2>
-<div class="grid2">
-<div>
+<p class="lead">一個立方體的頂點資料只上傳<b>一次</b>到 buffer；每一幀只改 uniform（矩陣）再 draw，立方體就會轉。Many Spinning Cubes 則是同一份資料、在一個迴圈裡換 24 次矩陣、draw 24 次。</p>
+
+<div class="key"><b>這個範例要看懂的三件事</b>
+<ul>
+<li><b><code>position</code> 是 vertex attribute</b>：資料在 buffer object 裡，VAO 記住「location 0 從這個 buffer 讀 3 個 float」，VS 的 <code>in vec4 position</code> 每次拿到一個頂點。→ <a href="#cube-data">①</a></li>
+<li><b>兩個 uniform 更新頻率不同</b>：<code>proj_matrix</code> 只跟視窗寬高比有關，<b>視窗大小改變時</b>才重算；<code>mv_matrix</code> 跟時間有關，<b>每幀</b>都要重算。→ <a href="#cube-uni">②</a></li>
+<li><b><code>glUniformMatrix4fv</code> 只寫值、不建立</b>：uniform 在 GLSL 宣告、link 時誕生；C++ 只能查 location、寫值。→ <a href="#cube-glu">說明</a></li>
+<li><b>for 迴圈的 24 = 畫 24 個立方體</b>：每圈換一個 <code>mv_matrix</code>、呼叫一次 <code>glDrawArrays</code>（36 個頂點）。和 36 無關。→ <a href="#cube-many">③</a></li>
+</ul></div>
+
+<h3 id="cube-data">① <code>position</code> 從哪裡來：buffer → VAO → <code>in</code></h3>
+<div class="flow">
+<div><b>CPU 陣列</b><code>vertex_positions[108]</code><br>36 個頂點 × 3 float</div><i>→</i>
+<div><b>Buffer object</b><code>glBufferData</code><br>複製到 GPU（432 bytes）</div><i>→</i>
+<div><b>VAO</b><code>glVertexAttribPointer(0, 3, …)</code><br>location 0 每次讀 3 float</div><i>→</i>
+<div><b>Vertex shader</b><code>in vec4 position;</code><br>每個頂點執行一次</div>
+</div>
+
+<pre><code><span class="c">// C++：初始化（只做一次）</span>
+<span class="c">// 立方體 6 面 × 2 三角形 × 3 頂點 = 36 個頂點，每個 (x, y, z)</span>
+<span class="c">// 講義寫 my_generate_data()，內容大致如下（座標都是 ±0.25）</span>
+static const GLfloat vertex_positions[] = {
+    -0.25f,  0.25f, -0.25f,      <span class="c">// 第 1 個三角形</span>
+    -0.25f, -0.25f, -0.25f,
+     0.25f, -0.25f, -0.25f,
+     0.25f, -0.25f, -0.25f,      <span class="c">// 第 2 個三角形</span>
+     0.25f,  0.25f, -0.25f,
+    -0.25f,  0.25f, -0.25f,
+    <span class="c">// … 其餘 5 個面，共 108 個 float</span>
+};
+
+<span class="c">// ① 建 buffer、把頂點資料複製進去</span>
+glGenBuffers(1, &amp;buffer);
+glBindBuffer(GL_ARRAY_BUFFER, buffer);
+glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_positions),
+             vertex_positions, GL_STATIC_DRAW);
+
+<span class="c">// ② 建 VAO，告訴它 location 0 怎麼從 buffer 讀</span>
+glGenVertexArrays(1, &amp;vao);
+glBindVertexArray(vao);
+glVertexAttribPointer(0,          <span class="c">// location 0</span>
+                      3,          <span class="c">// 每個頂點 3 個分量</span>
+                      GL_FLOAT,   <span class="c">// 型別</span>
+                      GL_FALSE,   <span class="c">// 不 normalize</span>
+                      0,          <span class="c">// stride 0 = 緊密排列</span>
+                      NULL);      <span class="c">// 從 buffer 開頭讀</span>
+glEnableVertexAttribArray(0);</code></pre>
+
 <pre><code><span class="c">// GLSL：Vertex Shader</span>
 #version 410 core
-in vec4 position;
+in vec4 position;                 <span class="c">// ← location 0，從 buffer 來</span>
 out VS_OUT { vec4 color; } vs_out;
-uniform mat4 mv_matrix;
-uniform mat4 proj_matrix;
+uniform mat4 mv_matrix;           <span class="c">// ← glUniformMatrix4fv，每幀改</span>
+uniform mat4 proj_matrix;         <span class="c">// ← glUniformMatrix4fv，resize 時改</span>
 void main(void)
 {
     gl_Position = proj_matrix * mv_matrix * position;
     vs_out.color = position * 2.0 + vec4(0.5, 0.5, 0.5, 0.0);
 }</code></pre>
-<pre><code><span class="c">// C++：初始化</span>
-GLuint vao, program, buffer;
-GLint  mv_location, proj_location;      <span class="c">// 全域：location 存起來</span>
-glm::mat4 proj_matrix;
 
-glGenBuffers(1, &amp;buffer);
-glBindBuffer(GL_ARRAY_BUFFER, buffer);
-glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_positions), vertex_positions, GL_STATIC_DRAW);
-glGenVertexArrays(1, &amp;vao);
-glBindVertexArray(vao);
-glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
-glEnableVertexAttribArray(0);
-program = my_compile_and_link_program();
-mv_location   = glGetUniformLocation(program, "mv_matrix");
-proj_location = glGetUniformLocation(program, "proj_matrix");
+<table>
+<tr><th style="width:30%">疑問</th><th>答案</th></tr>
+<tr><td><code>position</code> 是 buffer object 嗎？</td><td>不是 buffer 本身，是 <b>vertex attribute</b>（VS 的輸入變數）。它的<b>值</b>來自 buffer：<code>glDrawArrays(GL_TRIANGLES, 0, 36)</code> 讓 VS 跑 36 次，第 k 次拿到 buffer 裡第 k 組 (x, y, z)。</td></tr>
+<tr><td>VS 沒寫 <code>layout(location = 0)</code>，怎麼知道是 0？</td><td>沒寫時由 linker 自己分配 location。只有一個 attribute 時通常是 0，但<b>不保證</b>。穩妥的寫法：<code>layout(location = 0) in vec4 position;</code>，或 C++ 用 <code>glGetAttribLocation(program, "position")</code> 查。</td></tr>
+<tr><td>buffer 給 3 個 float，VS 卻宣告 <code>vec4</code>？</td><td>可以。缺的分量自動補上預設值 <code>(0, 0, 0, 1)</code> 裡對應的那個 → <code>w = 1</code>。所以 <code>position = (x, y, z, 1)</code>，剛好是矩陣平移需要的齊次座標。</td></tr>
+<tr><td>顏色怎麼來？</td><td><code>position * 2.0 + 0.5</code>：座標 −0.25 → 0、+0.25 → 1，所以每個角的 (R, G, B) = 它的 (x, y, z) 是正或負。例如角 (+0.25, −0.25, +0.25) → 洋紅色 (1, 0, 1)。</td></tr>
+</table>
 
-<span class="c">// C++：視窗大小改變時才更新 projection</span>
-void OnReshape(int w, int h) {
-    float aspect = (float)w / (float)h;
-    proj_matrix = glm::perspective(glm::radians(50.0f), aspect, 0.1f, 1000.0f);
-}</code></pre></div>
-<div>
-<canvas id="cubeCv" class="pl" width="420" height="300" style="background:#0d2b0d"></canvas>
-<div class="ctrl">立方體數量 <input type="range" id="ncube" min="1" max="24" value="1"> <span id="ncubeV"></span></div>
+<h3 id="cube-uni">② 兩個 uniform 什麼時候更新</h3>
+<h4 id="cube-glu"><code>glUniformMatrix4fv</code> 是在「建立」uniform 還是「更新」它的值？</h4>
+<p><b>只是寫入值（更新）。</b>OpenGL 沒有「建立 uniform」的函式：uniform 是在 <b>GLSL 裡宣告</b>、在 <b>link 時</b>由 program 配置好空間的。C++ 端只能查它的編號、寫它的值。</p>
+<table>
+<tr><th style="width:6%">#</th><th style="width:30%">步驟</th><th style="width:28%">誰做</th><th>發生什麼事</th></tr>
+<tr><td>1</td><td>宣告 <code>uniform mat4 mv_matrix;</code></td><td>GLSL 原始碼</td><td>只是說「這個 shader 需要一個叫 mv_matrix 的 mat4」</td></tr>
+<tr><td>2</td><td><code>glLinkProgram(program)</code></td><td>C++ → driver</td><td><b>uniform 在這裡誕生</b>：program 裡配置 16 個 float 的空間、分配一個 location 編號，初始值全為 0</td></tr>
+<tr><td>3</td><td><code>glGetUniformLocation(program, "mv_matrix")</code></td><td>C++，link 後一次</td><td><b>查</b>編號（例如 0）。不會建立任何東西；名字打錯或 shader 沒用到 → 回傳 −1</td></tr>
+<tr><td>4</td><td><code>glUseProgram(program)</code></td><td>C++</td><td>選定「目前的 program」；下一步寫入的就是這個 program 的 uniform</td></tr>
+<tr><td>5</td><td><code>glUniformMatrix4fv(mv_location, 1, GL_FALSE, ptr)</code></td><td>C++，需要改值時</td><td><b>把 16 個 float 複製進 program 裡那格空間</b>（覆蓋舊值）</td></tr>
+<tr><td>6</td><td><code>glDrawArrays(…)</code></td><td>C++ → GPU</td><td>這次 draw 的每個頂點都讀到同一個 mv_matrix</td></tr>
+</table>
+<pre><code><span class="c">// glUniformMatrix4fv 的 4 個參數</span>
+glUniformMatrix4fv(mv_location,    <span class="c">// 寫到哪個 uniform（步驟 3 查到的編號）</span>
+                   1,              <span class="c">// 寫幾個 mat4（不是陣列就填 1）</span>
+                   GL_FALSE,       <span class="c">// 要不要轉置；GLM 已是 column-major → 不用</span>
+                   glm::value_ptr(mv_matrix));   <span class="c">// 16 個 float 的起點</span></code></pre>
+<ul>
+<li><b>值會一直留著</b>：寫入後存在 program 裡，直到下次再寫。所以 <code>proj_matrix</code> 不變時可以不用每幀重寫。</li>
+<li><b>寫給「目前的 program」</b>：沒先 <code>glUseProgram</code>（或用了別的 program）就會寫錯對象，或產生 <code>GL_INVALID_OPERATION</code>。</li>
+<li><b>location = −1 時</b>：呼叫會被<b>默默忽略</b>，不報錯 → 畫面不對時先印出 location 檢查。</li>
+<li>每個 program 各有一份：兩個 program 都宣告 <code>mv_matrix</code>，要各自寫（共用要用 <a href="#ubo">UBO</a>）。</li>
+</ul>
+
+<table>
+<tr><th style="width:18%">uniform</th><th style="width:28%">跟什麼有關</th><th style="width:22%">什麼時候重算</th><th>原因</th></tr>
+<tr><td><code>proj_matrix</code></td><td>視角、<b>視窗寬高比</b>、near / far</td><td><b>視窗大小改變時</b>（OnReshape）</td><td>視窗沒變，它就不會變，不用每幀算</td></tr>
+<tr><td><code>mv_matrix</code></td><td>時間（旋轉角度、位置）</td><td><b>每一幀</b></td><td>每幀時間都不同</td></tr>
+</table>
+
+<pre><code><span class="c">// C++：視窗大小改變時呼叫（講義的 OnReshape）</span>
+void OnReshape(int w, int h)
+{
+    glViewport(0, 0, w, h);
+    float aspect = (float)w / (float)h;   <span class="c">// 講義寫成 / (float)f，是筆誤</span>
+    proj_matrix = glm::perspective(glm::radians(50.0f),
+                                   aspect, 0.1f, 1000.0f);
+}
+
+<span class="c">// 用 GLFW 的話：註冊成 framebuffer size callback</span>
+glfwSetFramebufferSizeCallback(window,
+    [](GLFWwindow*, int w, int h) { OnReshape(w, h); });</code></pre>
+
+<pre><code><span class="c">// C++：render（每幀，一個立方體）</span>
+float f = (float)currentTime * 0.3f;
+glm::mat4 mv_matrix = my_compute_mv_matrix(f);   <span class="c">// 每幀重算</span>
+
+glUseProgram(program);
+glUniformMatrix4fv(mv_location, 1, GL_FALSE,
+                   glm::value_ptr(mv_matrix));
+glUniformMatrix4fv(proj_location, 1, GL_FALSE,    <span class="c">// 值是 OnReshape 算好的</span>
+                   glm::value_ptr(proj_matrix));
+glDrawArrays(GL_TRIANGLES, 0, 36);</code></pre>
+<p class="mut">講義的寫法是「<b>計算</b>只在 reshape 做、<b>上傳</b>仍每幀做」。也可以連上傳都移到 OnReshape（先 <code>glUseProgram</code>）：uniform 的值存在 program 裡，不改就一直保留。</p>
+
+<div class="card">
+<b>互動：改變視窗大小</b>
+<p class="mut" style="margin:2px 0 8px">拖動寬 / 高模擬使用者拉視窗（示範的立方體固定在中央，方便看變形）。看 <code>OnReshape</code> 被呼叫幾次、<code>proj_matrix</code> 哪些值改變。勾「忘了更新」看看沒重算的後果。</p>
+<div class="ctrl">寬 <input type="range" id="rsW" min="200" max="560" value="420"> <span id="rsWV"></span>
+高 <input type="range" id="rsH" min="160" max="360" value="300"> <span id="rsHV"></span>
+<label><input type="checkbox" id="rsBug"> 忘了在 OnReshape 更新 proj_matrix</label></div>
+<canvas id="rsCv" class="pl" width="420" height="300" style="background:#0d400d"></canvas>
+<div class="ctrl" style="justify-content:center"><span id="rsCnt"></span></div>
+<div class="grid2">
+<div><b>proj_matrix</b>（每格四捨五入到小數 3 位）<table id="rsP" style="font:12.5px var(--mono);text-align:right"></table></div>
+<div><b>mv_matrix</b>（每幀都變）<table id="rsM" style="font:12.5px var(--mono);text-align:right"></table></div>
+</div>
+<p class="mut" id="rsTxt"></p>
+</div>
+
+<h3 id="cube-many">③ Many Spinning Cubes：for 迴圈的 24</h3>
 <pre><code><span class="c">// C++：render（Many Spinning Cubes）</span>
 glUseProgram(program);
-<span class="c">// proj_matrix 在 reshape 時更新就好，不用每幀設</span>
-glUniformMatrix4fv(proj_location, 1, GL_FALSE, glm::value_ptr(proj_matrix));
-for (int i = 0; i &lt; 24; ++i)
+glUniformMatrix4fv(proj_location, 1, GL_FALSE,
+                   glm::value_ptr(proj_matrix));
+
+for (int i = 0; i &lt; 24; ++i)              <span class="c">// 24 = 要畫幾個立方體</span>
 {
-    <span class="c">// 每個立方體用不同的時間偏移算 model-view</span>
-    float f = (float)i + (float)currentTime * 0.3f;
+    float f = (float)i + (float)currentTime * 0.3f;   <span class="c">// 每個差 1</span>
     glm::mat4 mv_matrix = my_compute_mv_matrix(f);
-    glUniformMatrix4fv(mv_location, 1, GL_FALSE, glm::value_ptr(mv_matrix));
-    glDrawArrays(GL_TRIANGLES, 0, 36);   <span class="c">// 6 面 × 2 三角形 × 3 頂點</span>
+    glUniformMatrix4fv(mv_location, 1, GL_FALSE,
+                       glm::value_ptr(mv_matrix));
+    glDrawArrays(GL_TRIANGLES, 0, 36);    <span class="c">// 畫 1 個立方體</span>
 }</code></pre>
-<p class="mut">同一個 VAO、同一個 program，只換 uniform 再 draw。24 個立方體 = 24 次 draw call（減少 draw call 的方法見 <a href="07-mesh-rendering.html#overhead">講義 07</a>）。</p></div></div>
+
+<pre><code><span class="c">// 講義沒給 my_compute_mv_matrix 的內容，本頁示範用這個寫法：</span>
+<span class="c">// f 決定立方體的位置與旋轉角度</span>
+glm::mat4 my_compute_mv_matrix(float f)
+{
+    glm::mat4 m(1.0f);
+    m = glm::translate(m, glm::vec3(0.0f, 0.0f, -6.0f));  <span class="c">// 推到相機前方</span>
+    float x = std::sin(2.1f * f) * 2.0f;
+    float y = std::cos(1.7f * f) * 2.0f;
+    float z = std::sin(1.3f * f) * std::cos(1.5f * f) * 2.0f;
+    m = glm::translate(m, glm::vec3(x, y, z));          <span class="c">// 依 f 決定位置</span>
+    m = glm::rotate(m, f * 3.0f, glm::vec3(0, 1, 0));    <span class="c">// 繞 y 轉</span>
+    m = glm::rotate(m, f * 2.0f, glm::vec3(1, 0, 0));    <span class="c">// 繞 x 轉</span>
+    return m;
+}</code></pre>
+
+<table>
+<tr><th style="width:24%">數字</th><th>意思</th></tr>
+<tr><td><code>24</code></td><td>立方體的<b>個數</b>，範例自己選的，改成 10 就畫 10 個。每一圈 = 一次 draw call = 一個立方體。</td></tr>
+<tr><td><code>36</code></td><td>一個立方體的<b>頂點數</b>（6 面 × 2 三角形 × 3 頂點），每次 draw 都一樣，因為用的是同一份 buffer。</td></tr>
+<tr><td><code>f = i + time × 0.3</code></td><td>每個立方體的參數差 1 → 位置、角度都不同；時間一走，全部沿著同一條曲線前進（像一列火車）。</td></tr>
+<tr><td>一幀總共</td><td>24 次 <code>glDrawArrays</code>，24 × 36 = 864 次 VS 執行；<code>proj_matrix</code> 只設 1 次、<code>mv_matrix</code> 設 24 次。</td></tr>
+</table>
+<p class="mut">uniform「在一次 draw 內不變」，但兩次 draw 之間可以改，所以同一份頂點資料能畫在 24 個地方。24 次 draw call 的負擔與 instancing 改法見 <a href="07-mesh-rendering.html#overhead">講義 07</a>。</p>
+
+<div class="card">
+<b>互動：一圈一圈看 for 迴圈</b>
+<p class="mut" style="margin:2px 0 8px">「立方體數量」= 迴圈上限（講義是 24）。「畫到第幾圈」= 這一幀只執行到第 k 次 <code>glDrawArrays</code>，白框是最後畫的那個。可以暫停時間，看清楚每個 <code>f</code>。</p>
+<div class="ctrl">立方體數量 <input type="range" id="ncube" min="1" max="24" value="24"> <span id="ncubeV"></span>
+畫到第 <input type="range" id="kcube" min="1" max="24" value="24"> <span id="kcubeV"></span> 圈
+<button class="b" id="cubePause">⏸ 暫停時間</button></div>
+<canvas id="cubeCv" class="pl" width="420" height="300" style="background:#0d400d"></canvas>
+<pre><code id="cubeTrace"></code></pre>
+</div>
 
 <!-- ================================================================ -->
 <h2 id="uloc">Uniform location 的排列</h2>
@@ -749,31 +890,97 @@ $('uniG').innerHTML = UG.map(([n, us]) => `<div class="card" style="margin:0;pad
 const uniPick = u => { document.querySelectorAll('[data-u]').forEach(s => s.classList.toggle('on', s.dataset.u === u)); const n = UG.filter(([, us]) => us.includes(u)).map(([x]) => x); $('uniTxt').innerHTML = `<b>${u}</b> 出現在 ${n.join('、')}，${n.length > 1 ? '都指向<b>同一個</b>值' : '只有這個 stage 用到'}。整個 program 共有 6 個不同的 uniform：A、B、C、D、E、F。`; };
 document.querySelectorAll('[data-u]').forEach(s => s.onclick = () => uniPick(s.dataset.u)); uniPick('D');
 
-// ---------- many spinning cubes ----------
-(() => {
-  const c = $('cubeCv').getContext('2d'), W = 420, H = 300;
-  const V = []; for (let i = 0; i < 8; i++) V.push([i & 1 ? .25 : -.25, i & 2 ? .25 : -.25, i & 4 ? .25 : -.25]);
-  const F = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
-  const rot = (p, ax, a) => { const [x, y, z] = p, cs = Math.cos(a), s = Math.sin(a); return ax === 'y' ? [x * cs + z * s, y, -x * s + z * cs] : [x, y * cs - z * s, y * s + z * cs]; };
-  function frame(now) {
-    const t = now / 1000, n = +$('ncube').value; $('ncubeV').textContent = `${n} 個 → ${n} 次 glDrawArrays`;
-    c.fillStyle = '#0d400d'; c.fillRect(0, 0, W, H);
-    const polys = [];
-    for (let i = 0; i < n; i++) {
-      const f = (n === 1 ? 0 : i) + t * 0.3;
-      const off = n === 1 ? [0, 0, -4] : [Math.sin(2.1 * f) * 2.0, Math.cos(1.7 * f) * 2.0, Math.sin(1.3 * f) * Math.cos(1.5 * f) * 2.0 - 8];
-      const P = V.map(v => { let p = rot(v, 'y', t * 0.785 + i); p = rot(p, 'x', t * 1.414 + i); p = [p[0] + off[0], p[1] + off[1], p[2] + off[2]]; return { p, s: [W / 2 + p[0] / -p[2] * 330, H / 2 - p[1] / -p[2] * 330], col: v.map(x => x * 2 + .5) }; });
-      F.forEach(q => { const pts = q.map(k => P[k]); const z = pts.reduce((s, p) => s + p.p[2], 0) / 4; const col = [0, 1, 2].map(k => pts.reduce((s, p) => s + p.col[k], 0) / 4); polys.push({ pts, z, col }); });
-    }
-    polys.sort((a, b) => a.z - b.z);
-    polys.forEach(({ pts, col }) => {
-      const s = pts.map(p => p.s), area = (s[1][0] - s[0][0]) * (s[2][1] - s[0][1]) - (s[1][1] - s[0][1]) * (s[2][0] - s[0][0]);
-      if (area > 0) return;
-      c.fillStyle = `rgb(${col.map(v => Math.max(0, Math.min(255, v * 255)))})`; c.beginPath(); s.forEach((p, i) => c[i ? 'lineTo' : 'moveTo'](...p)); c.closePath(); c.fill();
+// ---------- spinning cube：共用的小型 renderer（column-major，同 glm） ----------
+const CubeR = (() => {
+  const mul = (a, b) => { const r = new Array(16).fill(0); for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) for (let k = 0; k < 4; k++) r[c * 4 + rr] += a[k * 4 + rr] * b[c * 4 + k]; return r; };
+  const I = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const T = (m, x, y, z) => mul(m, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
+  const R = (m, a, ax) => { const c = Math.cos(a), s = Math.sin(a); return mul(m, ax === 'y' ? [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1] : [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]); };
+  const persp = (fovy, asp, n, f) => { const t = 1 / Math.tan(fovy / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]; };
+  const ap = (m, v) => [0, 1, 2, 3].map(r => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r] * v[3]);
+  // 和頁面上 my_compute_mv_matrix 同一個公式
+  const mvOf = f => { let m = T(I(), 0, 0, -6); m = T(m, Math.sin(2.1 * f) * 2, Math.cos(1.7 * f) * 2, Math.sin(1.3 * f) * Math.cos(1.5 * f) * 2); m = R(m, f * 3, 'y'); return R(m, f * 2, 'x'); };
+  // 8 個角、6 個面（每面兩個三角形 → 36 個頂點）
+  const V = []; for (let i = 0; i < 8; i++) V.push([i & 1 ? .25 : -.25, i & 2 ? .25 : -.25, i & 4 ? .25 : -.25, 1]);
+  const F = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  // 把多個立方體畫進 canvas；mvs = [{ mv, hl }]
+  function draw(ctx, W, H, P, mvs) {
+    ctx.fillStyle = '#0d400d'; ctx.fillRect(0, 0, W, H);
+    const tris = [];
+    mvs.forEach(({ mv, hl }) => {
+      const S = V.map(v => { const c = ap(mul(P, mv), v); return { x: (c[0] / c[3] * .5 + .5) * W, y: (1 - (c[1] / c[3] * .5 + .5)) * H, z: c[2] / c[3], col: v.slice(0, 3).map(x => x * 2 + .5) }; });
+      F.forEach(q => {
+        const p = q.map(k => S[k]);
+        const area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);
+        if (area < 0) return;                                  // 背面不畫
+        tris.push({ p, z: p.reduce((s, v) => s + v.z, 0) / 4, hl });
+      });
     });
+    tris.sort((a, b) => b.z - a.z);                           // 遠的先畫
+    tris.forEach(({ p, hl }) => {
+      const g = ctx.createLinearGradient(p[0].x, p[0].y, p[2].x, p[2].y);
+      g.addColorStop(0, `rgb(${p[0].col.map(v => v * 255)})`); g.addColorStop(1, `rgb(${p[2].col.map(v => v * 255)})`);
+      ctx.fillStyle = g; ctx.beginPath(); p.forEach((v, i) => ctx[i ? 'lineTo' : 'moveTo'](v.x, v.y)); ctx.closePath(); ctx.fill();
+      if (hl) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    });
+  }
+  const matHtml = m => [0, 1, 2, 3].map(r => '<tr>' + [0, 1, 2, 3].map(c => `<td>${(Math.abs(m[c * 4 + r]) < 5e-4 ? 0 : m[c * 4 + r]).toFixed(3)}</td>`).join('') + '</tr>').join('');
+  // 置中、只旋轉（看 resize 變形用）
+  const mvCenter = t => R(R(T(I(), 0, 0, -2.2), t * 0.9, 'y'), t * 0.6, 'x');
+  return { draw, persp, mvOf, mvCenter, matHtml };
+})();
+
+// ---------- ② 改變視窗大小：OnReshape 才重算 proj_matrix ----------
+(() => {
+  const cv = $('rsCv'), ctx = cv.getContext('2d');
+  let reshapes = 0, frames = 0, proj = null, lastW = 0, lastH = 0;
+  function OnReshape(w, h) {           // 對應 C++ 的 OnReshape
+    reshapes++;
+    if (!$('rsBug').checked || !proj) proj = CubeR.persp(50 * Math.PI / 180, w / h, 0.1, 1000);
+  }
+  function frame(now) {
+    const w = +$('rsW').value, h = +$('rsH').value;
+    $('rsWV').textContent = w; $('rsHV').textContent = h;
+    if (w !== lastW || h !== lastH) {  // 視窗大小變了 → GLFW 呼叫 callback
+      cv.width = w; cv.height = h; cv.style.width = w + 'px'; lastW = w; lastH = h;
+      OnReshape(w, h);
+      $('rsP').innerHTML = CubeR.matHtml(proj);
+    }
+    frames++;
+    const mv = CubeR.mvCenter(now / 1000);
+    CubeR.draw(ctx, w, h, proj, [{ mv }]);
+    if (frames % 6 === 1) $('rsM').innerHTML = CubeR.matHtml(mv);
+    $('rsCnt').innerHTML = `已畫 <b>${frames}</b> 幀（mv_matrix 重算 ${frames} 次）｜OnReshape 呼叫 <b>${reshapes}</b> 次（proj_matrix 重算 ${$('rsBug').checked ? '<span class="bad">0</span>' : reshapes} 次）`;
+    $('rsTxt').innerHTML = $('rsBug').checked
+      ? `<span class="bad">proj_matrix 停在舊的寬高比</span>：視窗現在是 ${(w / h).toFixed(2)}，矩陣還用舊值 → 立方體被拉長或壓扁。`
+      : `寬高比 = ${w} / ${h} = <b>${(w / h).toFixed(3)}</b>。只有第一列第一格 <code>1 / (aspect·tan 25°)</code> 會跟著變，其他格固定。`;
     requestAnimationFrame(frame);
   }
+  $('rsBug').onchange = () => { lastW = 0; };   // 切換時當作一次 resize，看差別
   requestAnimationFrame(frame);
+})();
+
+// ---------- ③ Many spinning cubes：一圈一圈看 ----------
+(() => {
+  const cv = $('cubeCv'), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+  const P = CubeR.persp(50 * Math.PI / 180, W / H, 0.1, 1000);
+  let paused = false, t = 0, last = 0;
+  $('cubePause').onclick = () => { paused = !paused; $('cubePause').textContent = paused ? '▶ 繼續' : '⏸ 暫停時間'; $('cubePause').classList.toggle('on', paused); };
+  $('ncube').oninput = () => { const k = $('kcube'); const n = +$('ncube').value; const follow = +k.value === +k.max; k.max = n; if (follow || +k.value > n) k.value = n; };
+  function frame(now) {
+    if (!paused) t += (now - last) / 1000; last = now;
+    const n = +$('ncube').value, k = Math.min(+$('kcube').value, n);
+    $('ncubeV').textContent = n; $('kcubeV').textContent = k;
+    const list = [];
+    for (let i = 0; i < k; i++) list.push({ mv: CubeR.mvOf(i + t * 0.3), hl: i === k - 1 && k < n });
+    CubeR.draw(ctx, W, H, P, list);
+    const rows = [];
+    for (let i = Math.max(0, k - 4); i < k; i++) rows.push(`i = ${String(i).padStart(2)}   f = ${i} + ${(t * 0.3).toFixed(2)} = ${(i + t * 0.3).toFixed(2)}   → glDrawArrays(GL_TRIANGLES, 0, 36)`);
+    $('cubeTrace').textContent = `for (int i = 0; i < ${n}; ++i)   // 這一幀執行到第 ${k} 圈\n` + (k > 4 ? '  …\n' : '') + rows.map(r => '  ' + r).join('\n') +
+      `\n\n// 合計：glDrawArrays ${k} 次、頂點 ${k} × 36 = ${k * 36} 個；mv_matrix 設 ${k} 次、proj_matrix 設 1 次`;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(t0 => { last = t0; frame(t0); });
 })();
 
 // ---------- UBO binding ----------
