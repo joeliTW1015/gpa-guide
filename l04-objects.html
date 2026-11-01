@@ -2,7 +2,7 @@
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>講義 04：OpenGL Objects</title><link rel="stylesheet" href="style.css">
 <style>
-canvas.pl{border:1px solid var(--line);border-radius:8px;background:#fff;display:block;margin:0 auto;max-width:100%}
+canvas.pl{border:1px solid var(--line);border-radius:8px;background:#fff;display:block;margin:0 auto;max-width:100%;height:auto}
 .mem{display:flex;flex-wrap:wrap;gap:2px;margin:6px 0}
 .mem div{min-width:46px;padding:2px 4px;text-align:center;font:11.5px var(--mono);border-radius:4px;border:1px solid #d6d3cb;background:#fff;position:relative}
 .mem div small{display:block;font-size:9.5px;color:#8a919a}
@@ -375,7 +375,7 @@ glDrawArrays(GL_TRIANGLES, 0, 36);</code></pre>
 
 <div class="card">
 <b>互動：改變視窗大小</b>
-<p class="mut" style="margin:2px 0 8px">拖動寬 / 高模擬使用者拉視窗（示範的立方體固定在中央，方便看變形）。看 <code>OnReshape</code> 被呼叫幾次、<code>proj_matrix</code> 哪些值改變。勾「忘了更新」看看沒重算的後果。</p>
+<p class="mut" style="margin:2px 0 8px">用 WebGL 實際跑上面的 vertex shader（顏色 = <code>position * 2.0 + 0.5</code>，各角顏色在面上內插）。拖動寬 / 高模擬使用者拉視窗（示範的立方體固定在中央，方便看變形）。看 <code>OnReshape</code> 被呼叫幾次、<code>proj_matrix</code> 哪些值改變。勾「忘了更新」看看沒重算的後果。</p>
 <div class="ctrl">寬 <input type="range" id="rsW" min="200" max="560" value="420"> <span id="rsWV"></span>
 高 <input type="range" id="rsH" min="160" max="360" value="300"> <span id="rsHV"></span>
 <label><input type="checkbox" id="rsBug"> 忘了在 OnReshape 更新 proj_matrix</label></div>
@@ -890,49 +890,83 @@ $('uniG').innerHTML = UG.map(([n, us]) => `<div class="card" style="margin:0;pad
 const uniPick = u => { document.querySelectorAll('[data-u]').forEach(s => s.classList.toggle('on', s.dataset.u === u)); const n = UG.filter(([, us]) => us.includes(u)).map(([x]) => x); $('uniTxt').innerHTML = `<b>${u}</b> 出現在 ${n.join('、')}，${n.length > 1 ? '都指向<b>同一個</b>值' : '只有這個 stage 用到'}。整個 program 共有 6 個不同的 uniform：A、B、C、D、E、F。`; };
 document.querySelectorAll('[data-u]').forEach(s => s.onclick = () => uniPick(s.dataset.u)); uniPick('D');
 
-// ---------- spinning cube：共用的小型 renderer（column-major，同 glm） ----------
+// ---------- spinning cube：用 WebGL 跑講義的 vertex shader（column-major 矩陣，同 glm） ----------
 const CubeR = (() => {
   const mul = (a, b) => { const r = new Array(16).fill(0); for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) for (let k = 0; k < 4; k++) r[c * 4 + rr] += a[k * 4 + rr] * b[c * 4 + k]; return r; };
   const I = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const T = (m, x, y, z) => mul(m, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
   const R = (m, a, ax) => { const c = Math.cos(a), s = Math.sin(a); return mul(m, ax === 'y' ? [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1] : [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]); };
   const persp = (fovy, asp, n, f) => { const t = 1 / Math.tan(fovy / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]; };
-  const ap = (m, v) => [0, 1, 2, 3].map(r => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r] * v[3]);
   // 和頁面上 my_compute_mv_matrix 同一個公式
   const mvOf = f => { let m = T(I(), 0, 0, -6); m = T(m, Math.sin(2.1 * f) * 2, Math.cos(1.7 * f) * 2, Math.sin(1.3 * f) * Math.cos(1.5 * f) * 2); m = R(m, f * 3, 'y'); return R(m, f * 2, 'x'); };
-  // 8 個角、6 個面（每面兩個三角形 → 36 個頂點）
-  const V = []; for (let i = 0; i < 8; i++) V.push([i & 1 ? .25 : -.25, i & 2 ? .25 : -.25, i & 4 ? .25 : -.25, 1]);
-  const F = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
-  // 把多個立方體畫進 canvas；mvs = [{ mv, hl }]
-  function draw(ctx, W, H, P, mvs) {
-    ctx.fillStyle = '#0d400d'; ctx.fillRect(0, 0, W, H);
-    const tris = [];
-    mvs.forEach(({ mv, hl }) => {
-      const S = V.map(v => { const c = ap(mul(P, mv), v); return { x: (c[0] / c[3] * .5 + .5) * W, y: (1 - (c[1] / c[3] * .5 + .5)) * H, z: c[2] / c[3], col: v.slice(0, 3).map(x => x * 2 + .5) }; });
-      F.forEach(q => {
-        const p = q.map(k => S[k]);
-        const area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);
-        if (area < 0) return;                                  // 背面不畫
-        tris.push({ p, z: p.reduce((s, v) => s + v.z, 0) / 4, hl });
-      });
-    });
-    tris.sort((a, b) => b.z - a.z);                           // 遠的先畫
-    tris.forEach(({ p, hl }) => {
-      const g = ctx.createLinearGradient(p[0].x, p[0].y, p[2].x, p[2].y);
-      g.addColorStop(0, `rgb(${p[0].col.map(v => v * 255)})`); g.addColorStop(1, `rgb(${p[2].col.map(v => v * 255)})`);
-      ctx.fillStyle = g; ctx.beginPath(); p.forEach((v, i) => ctx[i ? 'lineTo' : 'moveTo'](v.x, v.y)); ctx.closePath(); ctx.fill();
-      if (hl) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
-    });
+  // 置中、只旋轉（看 resize 變形用）
+  const mvCenter = t => R(R(T(I(), 0, 0, -3), t * 0.9, 'y'), t * 0.6, 'x');
+
+  // vertex_positions：8 個角 → 6 面 × 2 三角形 × 3 頂點 = 36 個頂點（座標 ±0.25）
+  const C = []; for (let i = 0; i < 8; i++) C.push([i & 1 ? .25 : -.25, i & 2 ? .25 : -.25, i & 4 ? .25 : -.25]);
+  const FACES = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  const tris = FACES.flatMap(([a, b, c, d]) => [a, b, c, a, c, d]).flatMap(k => C[k]);
+  const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]].flat().flatMap(k => C[k].map(v => v * 1.02));
+
+  // 講義的 VS，改成 WebGL 版：interface block 改成一般的 out 變數
+  const VS = `#version 300 es
+in vec4 position;
+out vec4 vColor;
+uniform mat4 mv_matrix;
+uniform mat4 proj_matrix;
+uniform float uWhite;                 // 只有白框用（講義沒有）
+void main(void)
+{
+    gl_Position = proj_matrix * mv_matrix * position;
+    vColor = mix(position * 2.0 + vec4(0.5, 0.5, 0.5, 0.0), vec4(1.0), uWhite);
+}`;
+  const FS = `#version 300 es
+precision mediump float;
+in vec4 vColor;
+out vec4 color;
+void main(void) { color = vec4(vColor.rgb, 1.0); }`;
+
+  function create(cv) {
+    const gl = cv.getContext('webgl2', { alpha: false, antialias: true });
+    if (!gl) return null;
+    const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+    gl.bindAttribLocation(prog, 0, 'position');           // 等同 layout(location = 0)
+    gl.linkProgram(prog);
+    const mvLoc = gl.getUniformLocation(prog, 'mv_matrix'), projLoc = gl.getUniformLocation(prog, 'proj_matrix'), whiteLoc = gl.getUniformLocation(prog, 'uWhite');
+    const mkVao = data => {                               // glGenBuffers + glBufferData + VAO + glVertexAttribPointer(0, 3, …)
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0); gl.enableVertexAttribArray(0);
+      return vao;
+    };
+    const cubeVao = mkVao(tris), edgeVao = mkVao(EDGES);
+    gl.enable(gl.DEPTH_TEST);
+    return {
+      // cubes = [{ mv, hl }]：每個立方體 = 設一次 mv_matrix + 一次 glDrawArrays(36)
+      draw(P, cubes) {
+        gl.viewport(0, 0, cv.width, cv.height);
+        gl.clearColor(0.0, 0.25, 0.0, 1.0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.useProgram(prog);
+        gl.uniformMatrix4fv(projLoc, false, P);
+        cubes.forEach(({ mv, hl }) => {
+          gl.uniformMatrix4fv(mvLoc, false, mv);
+          gl.uniform1f(whiteLoc, 0); gl.bindVertexArray(cubeVao); gl.drawArrays(gl.TRIANGLES, 0, 36);
+          if (hl) { gl.uniform1f(whiteLoc, 1); gl.bindVertexArray(edgeVao); gl.drawArrays(gl.LINES, 0, 24); }
+        });
+      }
+    };
   }
   const matHtml = m => [0, 1, 2, 3].map(r => '<tr>' + [0, 1, 2, 3].map(c => `<td>${(Math.abs(m[c * 4 + r]) < 5e-4 ? 0 : m[c * 4 + r]).toFixed(3)}</td>`).join('') + '</tr>').join('');
-  // 置中、只旋轉（看 resize 變形用）
-  const mvCenter = t => R(R(T(I(), 0, 0, -2.2), t * 0.9, 'y'), t * 0.6, 'x');
-  return { draw, persp, mvOf, mvCenter, matHtml };
+  return { create, persp, mvOf, mvCenter, matHtml };
 })();
 
 // ---------- ② 改變視窗大小：OnReshape 才重算 proj_matrix ----------
 (() => {
-  const cv = $('rsCv'), ctx = cv.getContext('2d');
+  const cv = $('rsCv'), r = CubeR.create(cv);
+  if (!r) { $('rsTxt').textContent = '這個瀏覽器不支援 WebGL2。'; return; }
   let reshapes = 0, frames = 0, proj = null, lastW = 0, lastH = 0;
   function OnReshape(w, h) {           // 對應 C++ 的 OnReshape
     reshapes++;
@@ -948,7 +982,7 @@ const CubeR = (() => {
     }
     frames++;
     const mv = CubeR.mvCenter(now / 1000);
-    CubeR.draw(ctx, w, h, proj, [{ mv }]);
+    r.draw(proj, [{ mv }]);
     if (frames % 6 === 1) $('rsM').innerHTML = CubeR.matHtml(mv);
     $('rsCnt').innerHTML = `已畫 <b>${frames}</b> 幀（mv_matrix 重算 ${frames} 次）｜OnReshape 呼叫 <b>${reshapes}</b> 次（proj_matrix 重算 ${$('rsBug').checked ? '<span class="bad">0</span>' : reshapes} 次）`;
     $('rsTxt').innerHTML = $('rsBug').checked
@@ -962,8 +996,9 @@ const CubeR = (() => {
 
 // ---------- ③ Many spinning cubes：一圈一圈看 ----------
 (() => {
-  const cv = $('cubeCv'), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
-  const P = CubeR.persp(50 * Math.PI / 180, W / H, 0.1, 1000);
+  const cv = $('cubeCv'), r = CubeR.create(cv);
+  if (!r) { $('cubeTrace').textContent = '這個瀏覽器不支援 WebGL2。'; return; }
+  const P = CubeR.persp(50 * Math.PI / 180, cv.width / cv.height, 0.1, 1000);
   let paused = false, t = 0, last = 0;
   $('cubePause').onclick = () => { paused = !paused; $('cubePause').textContent = paused ? '▶ 繼續' : '⏸ 暫停時間'; $('cubePause').classList.toggle('on', paused); };
   $('ncube').oninput = () => { const k = $('kcube'); const n = +$('ncube').value; const follow = +k.value === +k.max; k.max = n; if (follow || +k.value > n) k.value = n; };
@@ -973,7 +1008,7 @@ const CubeR = (() => {
     $('ncubeV').textContent = n; $('kcubeV').textContent = k;
     const list = [];
     for (let i = 0; i < k; i++) list.push({ mv: CubeR.mvOf(i + t * 0.3), hl: i === k - 1 && k < n });
-    CubeR.draw(ctx, W, H, P, list);
+    r.draw(P, list);
     const rows = [];
     for (let i = Math.max(0, k - 4); i < k; i++) rows.push(`i = ${String(i).padStart(2)}   f = ${i} + ${(t * 0.3).toFixed(2)} = ${(i + t * 0.3).toFixed(2)}   → glDrawArrays(GL_TRIANGLES, 0, 36)`);
     $('cubeTrace').textContent = `for (int i = 0; i < ${n}; ++i)   // 這一幀執行到第 ${k} 圈\n` + (k > 4 ? '  …\n' : '') + rows.map(r => '  ' + r).join('\n') +
