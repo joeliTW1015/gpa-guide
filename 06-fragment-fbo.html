@@ -201,6 +201,49 @@ sfactor <select id="bSf"></select> dfactor <select id="bDf"></select></div>
 
 <div class="warn"><b>FBO 不是 buffer object！</b>VBO（vertex buffer object）、UBO（uniform buffer object）是存資料的 buffer；FBO 是 OpenGL <b>object</b>，只記錄「attachment 接到哪些 image」，本身不存像素。</div>
 
+<h3 id="fbo-faq">三個常卡住的問題</h3>
+<div class="card"><b>① Attachment 在幹嘛？→ 決定「畫的結果寫到哪塊記憶體」</b>
+<ul>
+<li>FBO 本身是一張<b>接線表</b>，有幾個插槽：顏色輸出 0 號、1 號…、depth、stencil。</li>
+<li><b>attach</b> = 把一塊已經配置好的 image（texture 或 renderbuffer）插到某個插槽。</li>
+<li>之後 FS 輸出的顏色寫進 color 插槽那塊、depth test 讀寫 depth 插槽那塊。</li>
+</ul>
+<pre><code>glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,   <span class="c">// 插槽：顏色 0 號</span>
+                       GL_TEXTURE_2D, fboColor, 0);            <span class="c">// 插上 fboColor 的 mip level 0</span>
+glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, <span class="c">// 插槽：depth</span>
+                          GL_RENDERBUFFER, fboDepth);</code></pre>
+<p class="mut" style="margin:0">沒接 depth → depth test 沒地方存深度，等於沒開，後面的牆會蓋到前面的柱子。</p></div>
+
+<div class="card"><b>② Stencil 是什麼？→ 每個 pixel 一個整數的「遮罩」</b>
+<ul>
+<li>和 color、depth 一樣大的一張圖，每個 pixel 存一個 <b>8-bit 整數</b>（0 ~ 255）。</li>
+<li>用法分兩步：先畫一次<b>只寫 stencil</b>（例如鏡框範圍寫 1）→ 之後的 draw 開 stencil test，只在符合條件的 pixel 才寫入。</li>
+<li>常見用途：鏡子 / 傳送門只在框內畫、物體描邊、限制後製範圍。</li>
+<li>通常和 depth 合在一起：<code>GL_DEPTH24_STENCIL8</code> 接到 <code>GL_DEPTH_STENCIL_ATTACHMENT</code>。<b>AS2 用不到</b>。</li>
+</ul>
+<div class="ctrl"><span>stencil test：</span>
+<label><input type="radio" name="stT" value="off"> 關閉</label>
+<label><input type="radio" name="stT" value="eq" checked> <code>GL_EQUAL, 1</code></label>
+<label><input type="radio" name="stT" value="ne"> <code>GL_NOTEQUAL, 1</code></label>
+<span class="mut">拖曳左圖的圓移動遮罩</span></div>
+<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">
+<div style="text-align:center"><canvas id="stS" width="240" height="160" style="cursor:move;max-width:100%;height:auto"></canvas><div class="mut">Stencil buffer（白 = 1、黑 = 0）</div></div>
+<div style="text-align:center"><canvas id="stC" width="240" height="160" style="max-width:100%;height:auto"></canvas><div class="mut">Color buffer（畫完場景後）</div></div>
+</div>
+<pre><code id="stCode"></code></pre></div>
+
+<div class="card"><b>③ Draw 完怎麼就變成 texture？→ 沒有「變成」，本來就寫在 texture 裡</b>
+<div class="flow">
+<div><b>建立</b><code>glTexImage2D(…, nullptr)</code><br>在 GPU 配置一塊空的 texture 記憶體</div><i>→</i>
+<div><b>Pass 1：當寫入目標</b><code>glBindFramebuffer(fbo)</code> + draw<br>pixel 直接寫進<b>這塊</b>記憶體</div><i>→</i>
+<div><b>Pass 2：當貼圖</b><code>glBindFramebuffer(0)</code><br><code>glBindTexture(fboColor)</code> 取樣同一塊</div>
+</div>
+<ul>
+<li>同一塊記憶體、兩種身份：attach 在 FBO 上是「畫布」，bind 到 texture unit 是「貼圖」。中間<b>沒有複製</b>，所以很快。</li>
+<li>畫到螢幕時也一樣，只是那塊記憶體（default framebuffer，ID 0）由視窗系統配置。</li>
+<li>不能同時當畫布又當貼圖（feedback loop，結果未定義）→ Pass 2 一定要先 <code>glBindFramebuffer(GL_FRAMEBUFFER, 0)</code>。</li>
+</ul></div>
+
 <h3>Attachment 種類</h3>
 <table>
 <tr><th>Attachment</th><th>接上的 image</th></tr>
@@ -674,5 +717,49 @@ function ssDraw() {
     requestAnimationFrame(f);
   }
   requestAnimationFrame(f);
+})();
+
+// ---------- Stencil 遮罩 ----------
+(() => {
+  const S = $('stS'), C = $('stC'), sc = S.getContext('2d'), cc = C.getContext('2d'), W = 240, H = 160;
+  let cx = 90, cy = 80, R = 46, drag = false;
+  const inside = (x, y) => (x - cx) ** 2 + (y - cy) ** 2 < R * R;
+  function scene(x, y) {                          // 「場景」：天空、地面、紅色三角形
+    if (y > 110) return (Math.floor(x / 20) + Math.floor(y / 20)) % 2 ? [120, 170, 90] : [95, 145, 70];
+    const tx = Math.abs(x - 170), top = 30;
+    if (y > top && tx < (y - top) * 0.6) return [210, 70, 60];
+    return [150, 195, 240];
+  }
+  function draw() {
+    const m = document.querySelector('input[name=stT]:checked').value;
+    const si = sc.createImageData(W, H), ci = cc.createImageData(W, H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const k = (y * W + x) * 4, st = inside(x, y) ? 1 : 0;
+      si.data.set(st ? [255, 255, 255, 255] : [0, 0, 0, 255], k);
+      const pass = m === 'off' || (m === 'eq' ? st === 1 : st !== 1);
+      ci.data.set(pass ? [...scene(x, y), 255] : [235, 235, 235, 255], k);   // 沒通過 → 保留 clear 的淺灰
+    }
+    sc.putImageData(si, 0, 0); cc.putImageData(ci, 0, 0);
+    $('stCode').innerHTML =
+`<span class="c">// 第一次 draw：只寫 stencil（圓形範圍寫 1），不寫顏色</span>
+glEnable(GL_STENCIL_TEST);
+glStencilFunc(GL_ALWAYS, 1, 0xFF);           <span class="c">// 一律通過</span>
+glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);   <span class="c">// 通過就把 stencil 改成 1</span>
+glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+drawCircle();
+
+<span class="c">// 第二次 draw：畫場景，依 stencil 決定哪些 pixel 能寫</span>
+glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);      <span class="c">// 這次不改 stencil</span>
+` + (m === 'off' ? 'glDisable(GL_STENCIL_TEST);                  <span class="c">// 關掉 → 整個畫面都畫</span>'
+      : `glStencilFunc(${m === 'eq' ? 'GL_EQUAL' : 'GL_NOTEQUAL'}, 1, 0xFF);        <span class="c">// stencil ${m === 'eq' ? '==' : '!='} 1 才通過 → 只畫圓${m === 'eq' ? '內' : '外'}</span>`) + `
+drawScene();`;
+  }
+  const pos = e => { const r = S.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H]; };
+  S.onpointerdown = e => { drag = true; S.setPointerCapture(e.pointerId); [cx, cy] = pos(e); draw(); };
+  S.onpointermove = e => { if (drag) { [cx, cy] = pos(e); draw(); } };
+  S.onpointerup = () => drag = false;
+  document.querySelectorAll('input[name=stT]').forEach(r => r.onchange = draw);
+  draw();
 })();
 </script></body></html>

@@ -583,7 +583,7 @@ glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBufferHandle);</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="gpudriven">GPU-driven Rendering：Instance Culling</h2>
-<div class="card"><b>Compute Shader</b>：通用的 shader，用 OpenGL API + GLSL 寫 GPU 平行程式；限制比 vertex / fragment shader 少；<b>不屬於 graphics pipeline</b>；OpenGL 4.3+；細節之後的講義會講。</div>
+<div class="card"><b>Compute Shader</b>：通用的 shader，用 OpenGL API + GLSL 寫 GPU 平行程式；限制比 vertex / fragment shader 少；<b>不屬於 graphics pipeline</b>；OpenGL 4.3+；細節見 <a href="08-compute.html">講義 08：Compute Shader</a>（含 race condition、atomicAdd、memory barrier）。</div>
 <p><b>情境</b>：草地有 131,072 根草，每根只差在位置（一個 vec3 offset）。看不到的草想跳過——但 <b>vertex shader 無法「丟掉」某個 instance</b>，只能在 draw 之前決定畫哪些。</p>
 <svg viewBox="0 0 960 170" style="width:100%" font-size="12" text-anchor="middle" id="flowSvg"></svg>
 <h3>互動：GPU 收集可見 instance</h3>

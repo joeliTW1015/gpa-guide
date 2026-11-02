@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compute Shader 與 GPU-driven Rendering</title><link rel="stylesheet" href="style.css">
+<style>
+canvas{border:1px solid var(--line);border-radius:6px;background:#fff;max-width:100%;height:auto}
+.flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;font-size:13.5px;margin:10px 0}
+.flow div{flex:1;min-width:130px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.flow div b{display:block;color:var(--acc-ink)}
+.flow div.gpu{background:#e3f4ea}.flow div.cpu{background:#fff3d6}
+.flow i{align-self:center;font-style:normal;color:var(--mut)}
+.ok{color:var(--prog);font-weight:600}.bad{color:var(--warn);font-weight:600}
+.cells{display:flex;gap:2px;flex-wrap:wrap;margin:4px 0}
+.cells div{min-width:34px;height:28px;padding:0 4px;display:flex;align-items:center;justify-content:center;font:12px ui-monospace,monospace;border:1px solid #999;border-radius:3px;background:#fff;position:relative}
+.cells div small{position:absolute;top:-13px;font-size:9px;color:#888}
+.cells .w{background:#fde7b6}.cells .x{background:#fecaca}.cells .g{background:#c6f0d6}
+.lay{display:grid;grid-template-columns:repeat(16,1fr);gap:1px;margin:4px 0 2px;font:10px ui-monospace,monospace}
+.lay div{height:24px;display:flex;align-items:center;justify-content:center;border-radius:2px;overflow:hidden;white-space:nowrap}
+.lay .pad{background:repeating-linear-gradient(45deg,#eee,#eee 3px,#fff 3px,#fff 6px);color:#999}
+.inv td{font:12px ui-monospace,monospace;text-align:center;padding:2px 6px}
+.inv tr.on td{background:#fde7b6}
+textarea{width:100%;font:12.5px/1.5 ui-monospace,monospace;border:1px solid var(--line);border-radius:6px;padding:6px}
+svg text{font-family:system-ui,sans-serif}
+</style></head>
+<body><main>
+<p class="kicker">講義 08 · Compute Shader and GPU Driven Rendering</p>
+<h1>Compute Shader 與 GPU-driven Rendering</h1>
+<p class="mut">對應講義 08。重點：compute shader 是什麼、怎麼切工作（invocation / work group / dispatch）、讀寫的資源（image、SSBO）、同步（memory barrier、atomic），最後用它做 GPU-driven rendering。本頁的 C++ / GLSL 都已在 RTX 5060 Ti（OpenGL 4.6）上實測。</p>
+<div class="key"><b>本章重點</b>
+<ul>
+<li>Compute shader：用 GLSL 寫的<b>通用平行程式</b>，<b>不在 graphics pipeline 裡</b>；OpenGL <b>4.3+</b>，<b>macOS 不支援</b>。</li>
+<li>工作切法：<b>invocation</b>（一個執行緒）→ <b>work group</b>（<code>local_size</code>，編譯時固定）→ <b>dispatch</b>（<code>glDispatchCompute</code> 給幾個 group）。每個 invocation 用 <code>gl_GlobalInvocationID</code> 找自己的資料。</li>
+<li>輸出只能寫進 <b>image</b>（<code>imageStore</code>）或 <b>SSBO</b>（可讀寫、可放不定長陣列，用 <b>std430</b> 排列）。</li>
+<li>這些寫入是 incoherent：下一步要讀之前必須 <code>glMemoryBarrier</code>，bit 選「<b>之後怎麼讀</b>」。</li>
+<li>多個 invocation 寫同一個變數 → race condition → 用 <code>atomicAdd</code>。實測：不用 atomic 時 22109 個可見 instance 只數到 22 個。</li>
+<li>GPU-driven rendering：compute shader 自己做 culling、填 indirect command，CPU 只下一個 <code>glDrawElementsIndirect</code>。</li>
+</ul></div>
+<div class="toc"><a href="#what">Compute Shader 是什麼</a><a href="#usage">使用流程</a><a href="#space">Compute Space</a><a href="#image">Image</a><a href="#barrier">Memory Barrier</a><a href="#ssbo">SSBO</a><a href="#std430">std430</a><a href="#ssbo-vs">SSBO 給 VS 用</a><a href="#particle">粒子模擬</a><a href="#gpudriven">GPU-driven</a><a href="#race">Race / Atomic</a><a href="#template">在 template 上用</a><a href="#errata">講義程式小錯</a></div>
+
+<!-- ============================================================ -->
+<h2 id="what">Compute Shader 是什麼</h2>
+<ul>
+<li>讓你用 OpenGL API + GLSL 寫 <b>GPU 平行程式</b>的通用 shader，限制比 vertex / fragment shader 少。</li>
+<li><b>不是 graphics pipeline 的一部分</b>：沒有頂點、沒有 rasterizer、沒有 fragment，自己決定要算什麼、寫到哪裡。</li>
+<li>OpenGL <b>4.3</b>（2012）起支援。<b>Mac 最高只有 4.1 → 不能用</b>。</li>
+</ul>
+<table>
+<tr><th style="width:22%"></th><th>Compute shader</th><th>Vertex / Fragment shader</th></tr>
+<tr><td>輸入</td><td>任意位置讀</td><td>任意位置讀（uniform、texture…）</td></tr>
+<tr><td>輸出</td><td><b>任意位置寫</b>：buffer 或 image</td><td>只能寫固定的地方：VS → 下一個 stage、FS → framebuffer 的 pixel</td></tr>
+<tr><td>在 pipeline 裡？</td><td>不在</td><td>固定的 stage</td></tr>
+<tr><td>平行度</td><td><b>自己決定</b>（work group 大小、數量）</td><td>GPU 和 driver 決定</td></tr>
+<tr><td>執行緒間共享資料 / 同步</td><td>可以（同一個 work group 內）</td><td>不行</td></tr>
+</table>
+<p class="mut">講義的程式碼慣例：黃色框 = C++（CPU）、藍色框 = shader（GPU），本頁用註解 <code>// C++</code>、<code>// GLSL</code> 標示；shader 都從 <code>#version 430 core</code> 開始。</p>
+
+<!-- ============================================================ -->
+<h2 id="usage">使用流程</h2>
+<div class="flow">
+<div><b>① 寫 compute shader</b>用 <code>layout(local_size_x = …) in;</code> 定義一個 work group 有幾個 invocation</div><i>→</i>
+<div><b>② 初始化</b>編譯成 <code>GL_COMPUTE_SHADER</code>，attach 到<b>自己一個</b> program</div><i>→</i>
+<div><b>③ 執行</b>綁好資源（buffer、image、uniform）→ <code>glDispatchCompute(…)</code></div>
+</div>
+<div>
+<pre><code><span class="c">// C++：編譯，和 VS / FS 一樣，只差 shader 種類</span>
+GLuint setup_shaders()
+{
+    GLuint cs = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(cs, 1, &amp;src, NULL);
+    glCompileShader(cs);
+
+    GLuint program = glCreateProgram();
+    glAttachShader(program, cs);
+    glLinkProgram(program);
+    glDeleteShader(cs);
+    return program;
+}</code></pre>
+<div class="card"><b>Program 要分開</b>
+<p style="margin:4px 0">同一個 program 裡<b>不能同時有</b> compute shader 和其他種類的 shader，否則 link 失敗。</p>
+<table>
+<tr><th>Program</th><th>內容</th><th></th></tr>
+<tr><td>A</td><td>Vertex + Fragment</td><td class="ok">✓</td></tr>
+<tr><td>B</td><td>Compute</td><td class="ok">✓</td></tr>
+<tr><td>C</td><td>Vertex + Compute</td><td class="bad">✗ link error</td></tr>
+</table>
+<p class="mut" style="margin:0">所以一個效果通常有兩個 program：compute 算資料、render（VS + FS）畫出來。</p></div></div>
+
+<!-- ============================================================ -->
+<h2 id="space">Compute Space：Invocation、Work Group、Dispatch</h2>
+<div>
+<div>
+<ul>
+<li><b>Invocation</b>：最小的執行單位（一個執行緒），每個有唯一的 global index，用來找自己要處理的資料。</li>
+<li><b>Work group</b>：一格 invocation（1D / 2D / 3D）。<b>同一個 group 內</b>同時執行、可以互相同步；不同 group 彼此獨立。大小寫在 shader 裡，<b>編譯時固定</b>。</li>
+<li><b>Dispatch</b>：一格 work group，<code>glDispatchCompute(x, y, z)</code> 每一維至少 1。group 的<b>執行順序不保證</b>。</li>
+<li>1D 常用在訊號、2D 在影像、3D 在體積資料——只是方便，不是規定。</li>
+</ul>
+<pre><code><span class="c">// GLSL：一個 work group 1024 × 1 × 1 個 invocation</span>
+#version 430 core
+layout (local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+
+<span class="c">// C++：上限（超過的話 compute shader 編譯失敗）</span>
+int maxInv;
+glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &amp;maxInv);</code></pre>
+</div>
+<div>
+<table>
+<tr><th>OpenGL / Vulkan</th><th>Direct3D</th><th>Metal</th><th>CUDA</th><th>OpenCL</th></tr>
+<tr><td>Dispatch</td><td>Dispatch</td><td>Grid</td><td>Grid</td><td>NDRange</td></tr>
+<tr><td>Work group</td><td>Thread group</td><td>Thread group</td><td>Block</td><td>Work-group</td></tr>
+<tr><td>Invocation</td><td>Thread</td><td>Thread</td><td>Thread</td><td>Work-item</td></tr>
+</table>
+<table>
+<tr><th colspan="2">實測上限（RTX 5060 Ti，OpenGL 4.6）</th></tr>
+<tr><td><code>GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS</code></td><td>1024（x·y·z 的乘積）</td></tr>
+<tr><td><code>GL_MAX_COMPUTE_WORK_GROUP_SIZE</code></td><td>1024, 1024, 64</td></tr>
+<tr><td><code>GL_MAX_COMPUTE_WORK_GROUP_COUNT</code></td><td>2147483647, 65535, 65535</td></tr>
+</table>
+<p class="mut">後兩個用 <code>glGetIntegeri_v(name, 0/1/2, &amp;v)</code> 分別查 x / y / z。</p></div></div>
+
+<h3>每個 invocation 怎麼知道自己是誰</h3>
+<table>
+<tr><th style="width:28%">內建變數（uvec3）</th><th>意思</th></tr>
+<tr><td><code>gl_WorkGroupSize</code></td><td>一個 work group 每一維幾個 invocation（= layout 寫的值）</td></tr>
+<tr><td><code>gl_NumWorkGroups</code></td><td>這次 dispatch 每一維幾個 work group（= <code>glDispatchCompute</code> 的參數）</td></tr>
+<tr><td><code>gl_WorkGroupID</code></td><td>我在第幾個 work group</td></tr>
+<tr><td><code>gl_LocalInvocationID</code></td><td>我在 work group 裡的第幾個</td></tr>
+<tr><td><code>gl_GlobalInvocationID</code></td><td>我在整個 dispatch 裡的位置 = <code>gl_WorkGroupID * gl_WorkGroupSize + gl_LocalInvocationID</code>（逐分量）</td></tr>
+</table>
+
+<h3>互動：點一個 invocation 看它的 ID</h3>
+<p class="mut">預設就是講義的例子：<code>local_size = (4, 3, 1)</code>、<code>glDispatchCompute(2, 1, 2)</code>，點到的是 global (2, 1, 1)。顏色 = 不同 work group，粗線 = work group 邊界。</p>
+<div class="card">
+<div class="ctrl"><b>local_size</b> x <input type="number" id="spLx" min="1" max="8" value="4" style="width:44px"> y <input type="number" id="spLy" min="1" max="8" value="3" style="width:44px"> z <input type="number" id="spLz" min="1" max="4" value="1" style="width:44px">
+<b>glDispatchCompute</b>( <input type="number" id="spDx" min="1" max="4" value="2" style="width:44px">, <input type="number" id="spDy" min="1" max="4" value="1" style="width:44px">, <input type="number" id="spDz" min="1" max="4" value="2" style="width:44px"> )
+<span>看 global z = <select id="spZ"></select></span></div>
+<div class="grid2">
+<canvas id="spCv" width="420" height="300" style="cursor:pointer"></canvas>
+<div><table id="spTbl"></table><p id="spSum" class="mut"></p></div></div></div>
+
+<!-- ============================================================ -->
+<h2 id="image">Image：在 compute shader 裡讀寫貼圖</h2>
+<div>
+<ul>
+<li><b>Image</b> = texture 的<b>某一層 mipmap</b>，當成 2D 陣列用：</li>
+<li>用<b>整數 pixel 座標</b>存取：<code>imageLoad(img, ivec2)</code>、<code>imageStore(img, ivec2, vec4)</code>。</li>
+<li>沒有 filtering、沒有 mipmap（和 <code>texture()</code> 取樣不同）。</li>
+<li><b>不支援 3 個 channel</b>：要用 <code>GL_RGBA32F</code>、<code>GL_RGBA8</code> 這類 4 channel 格式。</li>
+<li>不是 <code>writeonly</code> 的 image 一定要寫 format（如 <code>rgba32f</code>）。</li>
+</ul>
+<pre><code><span class="c">// GLSL：把 binding 2 的圖複製到 binding 3</span>
+#version 430 core
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout (binding = 2, rgba32f) uniform readonly  image2D srcTex;
+layout (binding = 3)          uniform writeonly image2D dstTex;
+void main()
+{
+    ivec2 uv = ivec2(gl_GlobalInvocationID.xy);   <span class="c">// 一個 invocation 處理一個 pixel</span>
+    vec4 srcPixel = imageLoad(srcTex, uv);
+    imageStore(dstTex, uv, srcPixel);
+}
+
+<span class="c">// C++：把 texture 接到 image unit（binding = 第一個參數）</span>
+glBindImageTexture(2, srcTex, 0, GL_FALSE, 0, GL_READ_ONLY,  GL_RGBA32F);
+glBindImageTexture(3, dstTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+<span class="c">//                 unit  tex  level layered layer  access    format</span></code></pre></div>
+
+<h3>範例：滑鼠聚光燈（compute 產生圖 → 全螢幕 quad 畫出來）</h3>
+<div class="flow">
+<div><b>source texture</b>512 × 512 原圖</div><i>→</i>
+<div class="gpu"><b>Compute shader</b>依和滑鼠的距離混合原圖與灰色</div><i>→</i>
+<div><b>target texture</b>空的 512 × 512</div><i>→</i>
+<div class="gpu"><b>VS + FS</b>全螢幕 quad 取樣 target</div>
+</div>
+<p>每個 invocation 處理一個 pixel：<code>local_size = 16 × 16</code>，所以 512 × 512 要 <code>glDispatchCompute(32, 32, 1)</code>（512 / 16 = 32）。</p>
+<div>
+<pre><code><span class="c">// GLSL：compute shader</span>
+#version 430 core
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout (binding = 2, rgba32f) uniform readonly  image2D srcTex;
+layout (binding = 3)          uniform writeonly image2D dstTex;
+layout (location = 1) uniform vec4 mouseCursor;   <span class="c">// pixel 座標</span>
+void main()
+{
+    ivec2 uv = ivec2(gl_GlobalInvocationID.xy);
+    vec4 srcPixel = imageLoad(srcTex, uv);
+    float d = length(uv - mouseCursor.xy);         <span class="c">// 到滑鼠的距離</span>
+    float m = max(100.0 - d, 0.0) / 100.0;         <span class="c">// 0 ~ 100 px：1 → 0</span>
+    vec4 color = mix(vec4(0.2, 0.2, 0.2, 1.0), srcPixel, m);
+    imageStore(dstTex, uv, color);
+}</code></pre>
+<pre><code><span class="c">// C++：初始化</span>
+<span class="c">// source：讀圖，internal format 一定要 4 channel</span>
+glBindTexture(GL_TEXTURE_2D, srcTex);
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0,
+             GL_RGB, GL_UNSIGNED_BYTE, img);
+<span class="c">// target：只配置空間（immutable）</span>
+glBindTexture(GL_TEXTURE_2D, dstTex);
+glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, 512, 512);
+glBindImageTexture(3, dstTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+glBindImageTexture(2, srcTex, 0, GL_FALSE, 0, GL_READ_ONLY,  GL_RGBA32F);
+
+<span class="c">// C++：每幀</span>
+glUseProgram(csProgram);
+glUniform4fv(1, 1, mouseCursor);           <span class="c">// 要在 glUseProgram 之後</span>
+glDispatchCompute(32, 32, 1);
+glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);   <span class="c">// FS 接著要用 texture() 讀</span>
+glUseProgram(renderProgram);
+<span class="c">// … 畫全螢幕 quad，sampler 綁 dstTex</span></code></pre></div>
+
+<h3>互動：同一段 compute shader（在瀏覽器用 JS 逐 pixel 跑）</h3>
+<p class="mut">WebGL 沒有 compute shader，這裡用 JS 對 512 × 512 個 pixel 各跑一次上面的 <code>main()</code>。滑鼠移到圖上：看那個 pixel 由哪個 work group、哪個 invocation 處理。</p>
+<div class="card">
+<div class="ctrl"><label><input type="checkbox" id="imGrid" checked> 顯示 work group 邊界（16 × 16）</label><label><input type="checkbox" id="imFlip" checked> 滑鼠 y 有翻轉</label></div>
+<div class="grid2">
+<canvas id="imCv" width="512" height="512" style="cursor:crosshair"></canvas>
+<div id="imInfo" class="card" style="margin:0"></div></div></div>
+<p class="mut">「滑鼠 y 有翻轉」：GLFW 的滑鼠座標原點在<b>左上</b>，image 的 (0, 0) 是第一列資料，用 <code>stbi_set_flip_vertically_on_load</code> 或畫到 quad 上時在<b>左下</b>。不翻轉的話，亮圈會出現在滑鼠的上下鏡像位置。</p>
+
+<!-- ============================================================ -->
+<h2 id="barrier">Memory Barrier</h2>
+<ul>
+<li>Compute shader 透過 <b>image store</b>、<b>SSBO</b> 寫的資料是 <b>incoherent</b> 的：之後的讀取<b>不保證</b>看得到新值（甚至之後的寫入也不保證蓋得掉它）。</li>
+<li><code>glMemoryBarrier(bits)</code>：保證在它之前發出的 incoherent 寫入，對之後指定種類的讀取可見。</li>
+<li><b>bit 選「之後要怎麼用這份資料」</b>，不是「之前怎麼寫的」。</li>
+</ul>
+<table>
+<tr><th style="width:44%">之後要這樣用</th><th>bit</th><th>講義哪裡用到</th></tr>
+<tr><td>shader 用 SSBO 讀寫</td><td><code>GL_SHADER_STORAGE_BARRIER_BIT</code></td><td>粒子、reset → collect</td></tr>
+<tr><td>shader 用 <code>imageLoad / imageStore</code></td><td><code>GL_SHADER_IMAGE_ACCESS_BARRIER_BIT</code></td><td></td></tr>
+<tr><td>shader 用 <code>texture()</code>（sampler）取樣</td><td><code>GL_TEXTURE_FETCH_BARRIER_BIT</code></td><td>聚光燈範例</td></tr>
+<tr><td>當 vertex attribute（VBO）讀</td><td><code>GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT</code></td><td>GPU-driven（可見 instance 當 attribute）</td></tr>
+<tr><td>當 indirect draw / dispatch 的參數</td><td><code>GL_COMMAND_BARRIER_BIT</code></td><td>GPU-driven（instanceCount）</td></tr>
+<tr><td>當 index buffer</td><td><code>GL_ELEMENT_ARRAY_BARRIER_BIT</code></td><td></td></tr>
+<tr><td>當 uniform buffer</td><td><code>GL_UNIFORM_BARRIER_BIT</code></td><td></td></tr>
+<tr><td>讀回 CPU：<code>glGetBufferSubData</code>、map</td><td><code>GL_BUFFER_UPDATE_BARRIER_BIT</code></td><td></td></tr>
+<tr><td>讀回 CPU：<code>glGetTexImage</code></td><td><code>GL_TEXTURE_UPDATE_BARRIER_BIT</code></td><td></td></tr>
+<tr><td>全部</td><td><code>GL_ALL_BARRIER_BITS</code></td><td>除錯時先用它，確定是同步問題再縮小</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="ssbo">Shader Storage Buffer Object（SSBO）</h2>
+<div>
+<div>
+<ul>
+<li>一大塊連續的 GPU 記憶體，shader <b>可讀也可寫</b>（還能 atomic 寫）。</li>
+<li>可以有<b>不定長陣列</b> <code>data[]</code>，長度看 buffer 實際多大。</li>
+<li>和 UBO 比：UBO 唯讀、大小有上限（常見 64 KB）、用 std140；SSBO 可寫、大很多、用 <b>std430</b>。</li>
+<li>每個 block <b>只能有一個不定長陣列，而且要放最後</b>。</li>
+</ul>
+<table>
+<tr><th>block 內容</th><th></th></tr>
+<tr><td><code>int foo; float data[]; float data1[];</code></td><td class="bad">✗ 兩個不定長</td></tr>
+<tr><td><code>int foo; float data[]; float data1[2];</code></td><td class="bad">✗ 不定長不在最後</td></tr>
+<tr><td><code>int foo; float data[2]; float data1[];</code></td><td class="ok">✓</td></tr>
+</table></div>
+<pre><code><span class="c">// GLSL：binding 3 的 SSBO，一個 int + 不定長 float 陣列</span>
+layout (std430, binding = 3) buffer LayoutName {
+    int   foo;
+    float data[];
+};
+
+<span class="c">// C++：建立並接到 binding point 3</span>
+GLuint ssbo;
+glGenBuffers(1, &amp;ssbo);
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+glBufferStorage(GL_SHADER_STORAGE_BUFFER,
+                sizeof(int) + N * sizeof(float),
+                nullptr, GL_DYNAMIC_STORAGE_BIT);  <span class="c">// 之後要 glBufferSubData</span>
+glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+                sizeof(int), &amp;foo);                 <span class="c">// foo 在 offset 0</span>
+glBufferSubData(GL_SHADER_STORAGE_BUFFER, sizeof(int),
+                N * sizeof(float), data);            <span class="c">// data 從 offset 4 開始</span>
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, ssbo);
+
+<span class="c">// 陣列裡放 struct 也可以</span>
+struct SSBO_DATA { int data0; float data1; };
+layout (std430, binding = 3) buffer LayoutName {
+    SSBO_DATA data[];
+};</code></pre></div>
+<p class="mut"><code>binding = 3</code> 和 UBO 一樣是「插座」編號：C++ 的 <code>glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, ssbo)</code> 把 buffer 插到 3 號，shader 的 block 從 3 號讀（UBO 的插座概念見 <a href="l04-objects.html#ubo-three">講義 04</a>）。<code>glBufferStorage</code> 是 4.4 的函式，也可以用 <code>glBufferData</code>。</p>
+
+<!-- ============================================================ -->
+<h2 id="std430">std430 排列規則：C++ struct 要對得上</h2>
+<p>SSBO 裡每個變數的 byte 位置由 <b>std430</b> 決定；C++ 端 <code>memcpy</code> 進去的 struct 必須<b>每個欄位的 offset 都一樣</b>，否則 shader 讀到錯位的資料。</p>
+<table>
+<tr><th>型別</th><th>大小</th><th>對齊（offset 必須是它的倍數）</th></tr>
+<tr><td><code>float / int / uint</code></td><td>4</td><td>4</td></tr>
+<tr><td><code>vec2</code></td><td>8</td><td>8</td></tr>
+<tr><td><code>vec3</code></td><td><b>12</b></td><td><b>16</b> ← 問題來源</td></tr>
+<tr><td><code>vec4</code></td><td>16</td><td>16</td></tr>
+<tr><td>陣列</td><td colspan="2">每個元素間隔（stride）= 元素大小向上取到元素對齊的倍數 → <code>vec3[]</code> 的 stride 是 16；<code>float[]</code> 是 4（std140 會變 16，這是兩者主要差別）</td></tr>
+<tr><td>struct</td><td colspan="2">對齊 = 成員裡最大的對齊；大小向上取到這個對齊的倍數</td></tr>
+</table>
+
+<h3>互動：std430 計算器（GLSL vs C++ 的 glm 型別）</h3>
+<p class="mut">選講義的例子或自己改。上排是 GLSL（std430），下排是「直接把型別換成 glm」寫出的 C++ struct（glm 型別只對齊 4 bytes）。<b class="bad">紅色</b> = offset 對不上。</p>
+<div class="card">
+<div class="ctrl"><select id="laPre"></select><span class="mut">一格 = 4 bytes；一列 64 bytes</span></div>
+<textarea id="laSrc" rows="5" spellcheck="false"></textarea>
+<div id="laOut"></div></div>
+<div class="grid2">
+<div class="card"><b>最佳做法（講義）</b>
+<ul><li><b>不要在 SSBO 用 vec3</b>：改用 vec4（多出的 w 拿來放別的東西，例如粒子的 life）。</li>
+<li>不要在同一個 struct 混 scalar 和 vector：要嘛全是 int / uint，要嘛全是 vec4 / ivec4。</li></ul></div>
+<div class="card"><b>實測（<code>glGetProgramResourceiv</code> 查 <code>GL_OFFSET</code>）</b>
+<table>
+<tr><th>GLSL</th><th>結果</th></tr>
+<tr><td><code>int foo; float data[];</code></td><td>data 在 4、stride 4</td></tr>
+<tr><td><code>vec3 data[];</code></td><td>stride <b>16</b></td></tr>
+<tr><td><code>struct { vec4; int; }</code></td><td>int 在 16、struct stride <b>32</b></td></tr>
+<tr><td><code>float f; vec3 v; float g;</code></td><td>v 在 16、g 在 <b>28</b>（塞進 vec3 後面的空位）</td></tr>
+</table></div></div>
+
+<!-- ============================================================ -->
+<h2 id="ssbo-vs">SSBO 也能直接給 Vertex Shader 用</h2>
+<div>
+<div class="card"><b>方法 1：VS 裡宣告同一個 SSBO</b>
+<pre><code><span class="c">// GLSL：vertex shader</span>
+struct SSBO_DATA { vec4 data; };
+layout (std430, binding = 1) buffer LayoutName {
+    SSBO_DATA datas[];
+};
+void main()
+{
+    gl_Position = datas[gl_VertexID].data;   <span class="c">// 用頂點編號自己去讀</span>
+}</code></pre>
+<p class="mut" style="margin:0">VAO 可以是空的（沒有 attribute），但 core profile 還是要 bind 一個 VAO 才能 draw。</p></div>
+<div class="card"><b>方法 2：同一個 buffer 當 <code>GL_ARRAY_BUFFER</code></b>
+<pre><code><span class="c">// C++：buffer 名稱只是編號，可以綁到不同 target</span>
+glBindVertexArray(vao);
+glBindBuffer(GL_ARRAY_BUFFER, ssbo);
+glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 16, nullptr);
+glEnableVertexAttribArray(0);
+glBindVertexArray(0);
+
+<span class="c">// GLSL：vertex shader，照一般 attribute 讀</span>
+layout (location = 0) in vec4 v_vertex;
+void main() { gl_Position = v_vertex; }</code></pre></div></div>
+
+<!-- ============================================================ -->
+<h2 id="particle">範例：粒子模擬（黑洞）</h2>
+<div class="flow">
+<div><b>SSBO：粒子</b>position、velocity、color、properties（life）</div><i>⇄</i>
+<div class="gpu"><b>Compute shader</b>每個 invocation 更新一顆粒子<br><span class="mut">uniform：滑鼠 = 黑洞</span></div><i>→</i>
+<div class="gpu"><b>VS + FS</b><code>glDrawArrays(GL_POINTS)</code>，VS 用 <code>gl_VertexID</code> 讀同一個 SSBO</div>
+</div>
+<div>
+<pre><code><span class="c">// GLSL：compute shader（講義）</span>
+#version 430 core
+layout (local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+struct ParticleProties {
+    vec4 position;
+    vec4 velocity;
+    vec4 color;
+    vec4 properties;   <span class="c">// x: 壽命, y: 剩餘壽命（全用 vec4 → 不踩 vec3 的坑）</span>
+};
+layout (std430, binding = 1) buffer ParticleData {
+    ParticleProties particleProps[];
+};
+layout (location = 3) uniform vec4 mouseCursor;
+
+float virtualRand(vec2 v)   <span class="c">// 回傳 -1 ~ 1（講義註解寫 [0, 1) 是錯的）</span>
+{
+    return fract(sin(dot(v, vec2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
+}
+
+void main()
+{
+    const uint IDX = gl_GlobalInvocationID.x;
+    vec3 pos = particleProps[IDX].position.xyz;
+    vec3 vel = particleProps[IDX].velocity.xyz;
+    float life = particleProps[IDX].properties.y;
+    if (life &lt;= 0.0) {                          <span class="c">// 壽命到了 → 隨機位置重生</span>
+        pos.x = virtualRand(pos.xy); pos.y = virtualRand(vel.xy);
+        vel.x = 0.0; vel.y = 0.0;
+        particleProps[IDX].properties.x = (virtualRand(pos.xy) + 1.1) * 5.0;
+        life = particleProps[IDX].properties.x;
+    }
+    <span class="c">// 黑洞的引力：大小 100 / 距離，方向指向滑鼠</span>
+    vec3 center = vec3(mouseCursor.xy, 0.0);
+    float dis = length(center - pos);
+    vec3 dir = normalize(center - pos);
+    float forceMagnitude = 0.0;
+    if (dis &gt; 0.00001) forceMagnitude = 100.0 / dis;   <span class="c">// 避免除以 0</span>
+    vec3 force = forceMagnitude * dir;
+    <span class="c">// Euler 積分</span>
+    const float PARTICLE_INV_MASS = 1.0 / 0.1;
+    const float DELTA_TIME = 0.00002;
+    vec3 acl = force * PARTICLE_INV_MASS;
+    vec3 npos = pos + vel * DELTA_TIME + 0.5 * acl * DELTA_TIME * DELTA_TIME;
+    vec3 nvel = vel + acl * DELTA_TIME;
+    particleProps[IDX].position.xyz = npos;
+    particleProps[IDX].velocity.xyz = nvel * 0.99993;   <span class="c">// 阻尼</span>
+    particleProps[IDX].properties.y = life - DELTA_TIME;
+}</code></pre>
+<div>
+<pre><code><span class="c">// GLSL：vertex shader，直接讀同一個 SSBO</span>
+#version 430 core
+out vec4 f_color;
+struct ParticleProties { vec4 position; vec4 velocity; vec4 color; vec4 properties; };
+layout (std430, binding = 1) buffer ParticleData { ParticleProties particleProps[]; };
+void main()
+{
+    ParticleProties p = particleProps[gl_VertexID];
+    float alpha = p.properties.y / p.properties.x;   <span class="c">// 剩餘壽命比例</span>
+    f_color = vec4(p.color.xyz, alpha);
+    gl_Position = p.position;                        <span class="c">// 已經是 NDC</span>
+}
+<span class="c">// GLSL：fragment shader</span>
+in vec4 f_color;
+layout (location = 0) out vec4 fragColor;
+void main() { fragColor = f_color; }</code></pre>
+<pre><code><span class="c">// C++</span>
+const int NUM_PARTICLE = 1024 * 128;
+<span class="c">// 初始化：粒子資料 → SSBO（binding 1），再建一個空的 VAO</span>
+glBufferStorage(GL_SHADER_STORAGE_BUFFER,
+                NUM_PARTICLE * sizeof(ParticleProties), pp, GL_MAP_READ_BIT);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleSSBO);
+glGenVertexArrays(1, &amp;vao);
+
+<span class="c">// 每幀</span>
+glUseProgram(updateCSProgram);
+glUniform4fv(3, 1, mouseCursor);
+glDispatchCompute(128, 1, 1);                    <span class="c">// 128 × 1024 = 131072 顆</span>
+glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);  <span class="c">// VS 接著要讀 SSBO</span>
+glUseProgram(renderProgram);
+glBindVertexArray(vao);
+glDrawArrays(GL_POINTS, 0, NUM_PARTICLE);</code></pre>
+<p class="mut">C++ 的 struct 用 <code>float position[4]</code> 等 4 個 vec4 大小的欄位 → 每顆 64 bytes，和 std430 一致。</p></div></div>
+
+<h3>互動：同一段 compute shader 跑在 JS 上</h3>
+<p class="mut">把上面的 <code>main()</code> 逐行搬到 JS（每顆粒子跑一次），滑鼠移到畫布上就是黑洞。講義在 GPU 上跑 131072 顆、1350 FPS；JS 在 CPU 跑，顆數少很多。</p>
+<div class="card">
+<div class="ctrl">粒子數 <select id="paN"><option>2000</option><option selected>8000</option><option>20000</option></select>
+每幀跑幾次 compute <input type="range" id="paK" min="10" max="400" value="120"> <span id="paKV"></span>
+<button class="b" id="paRun">暫停</button><button class="b" id="paReset">重置</button><span id="paFps" class="mut"></span></div>
+<canvas id="paCv" width="480" height="480" style="background:#000;cursor:crosshair"></canvas></div>
+
+<!-- ============================================================ -->
+<h2 id="gpudriven">GPU-driven Rendering</h2>
+<ul>
+<li><b>GPU 自己決定要畫哪些物件</b>，避免 CPU ↔ GPU 來回。</li>
+<li>講義數據（155,304 個 instance、RTX 2080 super、1344 × 768）：全部 <code>glDrawElementsInstanced</code> → <b>22 FPS</b>；先用 compute shader culling → <b>445 FPS（× 20）</b>。</li>
+</ul>
+<div class="card"><b>傳統：CPU 每幀挑可見的 instance</b>
+<div class="flow"><div class="cpu"><b>CPU</b>初始化 VAO / VBO / IBO</div><i>→</i><div class="cpu"><b>CPU</b>收集可見 instance</div><i>→</i><div class="cpu"><b>CPU → GPU</b>更新 instance buffer</div><i>→</i><div class="gpu"><b>GPU</b>Render</div></div>
+<b>GPU-driven：除了初始化，全部在 GPU</b>
+<div class="flow"><div class="cpu"><b>CPU</b>初始化 VAO / VBO / IBO</div><i>→</i><div class="cpu"><b>CPU</b>初始化 SSBO 與 indirect buffer</div><i>→</i><div class="gpu"><b>GPU（CS #1）</b>reset draw command</div><i>→</i><div class="gpu"><b>GPU（CS #2）</b>收集可見 instance</div><i>→</i><div class="gpu"><b>GPU</b>Render（indirect）</div></div></div>
+<p>三個 SSBO：</p>
+<table>
+<tr><th>binding</th><th>內容</th><th>誰寫</th></tr>
+<tr><td>1</td><td>全部 instance 的資料（例：每根草的位置 vec4）</td><td>CPU 初始化一次</td></tr>
+<tr><td>2</td><td>可見 instance 的資料（一開始是空的）</td><td>CS #2 每幀寫</td></tr>
+<tr><td>3</td><td>draw command：<code>{ count, instanceCount, firstIndex, baseVertex, baseInstance }</code></td><td>CS #1 把 instanceCount 歸 0、CS #2 累加</td></tr>
+</table>
+<p class="mut">逐步動畫（拉視野方向、看三個 buffer 怎麼變）在 <a href="07-mesh-rendering.html#gpudriven">講義 07：GPU 收集可見 instance</a>；DrawElementsIndirectCommand 各欄位見 <a href="07-mesh-rendering.html#indirect">Indirect Draw</a>。</p>
+<div>
+<pre><code><span class="c">// GLSL：CS #1，reset（只有一個 invocation）</span>
+#version 430 core
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+struct DrawCommand {
+    uint count; uint instanceCount; uint firstIndex;
+    uint baseVertex; uint baseInstance;
+};
+layout (std430, binding = 3) buffer DrawCommandsBlock {
+    DrawCommand commands[];
+};
+void main()
+{
+    commands[gl_LocalInvocationID.x].instanceCount = 0;
+}</code></pre>
+<pre><code><span class="c">// GLSL：CS #2，在 clip space 做 frustum culling</span>
+<span class="c">// （struct / 三個 SSBO 的宣告同上）</span>
+uniform int numMaxInstance;
+uniform mat4 viewProjMat;
+void main()
+{
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx &gt;= numMaxInstance) return;     <span class="c">// 最後一個 group 會多出來</span>
+    vec4 c = viewProjMat * vec4(rawInstanceProps[idx].position.xyz, 1.0);
+    c = c / c.w;                               <span class="c">// → NDC</span>
+    bool culled = c.x &lt; -1.0 || c.x &gt; 1.0 || c.y &lt; -1.0
+               || c.y &gt; 1.0 || c.z &lt; -1.0 || c.z &gt; 1.0;
+    if (!culled) {
+        <span class="c">// 拿一個「沒人用過」的位置，同時把 instanceCount + 1</span>
+        const uint UNIQUE_IDX = atomicAdd(commands[0].instanceCount, 1);
+        currValidInstanceProps[UNIQUE_IDX] = rawInstanceProps[idx];
+    }
+}</code></pre></div>
+<p class="mut">只檢查 instance 的<b>中心點</b>：草根在畫面邊緣外一點點就被丟掉，邊緣可能看到草突然消失。實務上會用 bounding sphere / AABB 加一點邊界。</p>
+
+<h3 id="race">Race Condition 與 atomicAdd</h3>
+<div>
+<div>
+<p>講義先寫的版本：</p>
+<pre><code><span class="c">// GLSL：錯誤寫法</span>
+const uint TARGET_IDX = commands[0].instanceCount;     <span class="c">// ① 讀</span>
+currValidInstanceProps[TARGET_IDX] = rawInstanceProps[idx];  <span class="c">// ② 寫資料</span>
+commands[0].instanceCount = commands[0].instanceCount + 1;   <span class="c">// ③ 寫回 +1</span></code></pre>
+<ul>
+<li>上千個 invocation <b>同時</b>執行 ①：大家讀到同一個值 → 寫進同一格、把同一個值 +1 寫回 → 很多次累加被蓋掉。</li>
+<li><b>Atomic operation</b>：「讀 → 改 → 寫」一次做完，中間不會被別人插進來。</li>
+<li><code>uint atomicAdd(inout uint mem, uint data)</code>：把 <code>data</code> 加到 <code>mem</code>，<b>回傳加之前的值</b> → 每個 invocation 拿到不同的位置。GLSL 4.3+，<code>mem</code> 必須是 SSBO 或 shared 變數。</li>
+</ul>
+<div class="card"><b>實測（155,304 個 instance，CPU 算出可見 22,109 個）</b>
+<table>
+<tr><th>寫法</th><th>instanceCount（跑 3 次）</th></tr>
+<tr><td><code>atomicAdd</code></td><td class="ok">22109、22109、22109</td></tr>
+<tr><td>講義的非 atomic 寫法</td><td class="bad">22、22、21</td></tr>
+</table>
+<p class="mut" style="margin:0">不是「偶爾少幾個」，而是幾乎全部遺失：同時執行的一整批 invocation 只留下一次 +1。</p></div></div>
+<div class="card"><b>互動：8 個 invocation 同時執行</b>
+<div class="ctrl"><label><input type="radio" name="rcM" value="race" checked> 講義錯誤寫法</label><label><input type="radio" name="rcM" value="atomic"> atomicAdd</label>
+<button class="b" id="rcStep">▶ 下一步</button><button class="b" id="rcReset">重來</button></div>
+<div><b>commands[0].instanceCount</b><div class="cells" id="rcCnt"></div></div>
+<div style="margin-top:12px"><b>currValidInstanceProps（binding 2）</b><div class="cells" id="rcBuf"></div></div>
+<table class="inv" id="rcTbl" style="margin-top:8px"></table>
+<p id="rcTxt" style="margin:4px 0 0"></p></div></div>
+
+<h3>Render：barrier + indirect draw</h3>
+<div>
+<pre><code><span class="c">// C++：初始化 VAO，可見 instance 的 buffer 當 attribute 3</span>
+glGenVertexArrays(1, &amp;vao);
+glBindVertexArray(vao);
+<span class="c">// … 綁草的 VBO（location 0~2）和 IBO</span>
+glBindBuffer(GL_ARRAY_BUFFER, validInstanceBuffer);   <span class="c">// binding 2 那個 SSBO</span>
+glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+glEnableVertexAttribArray(3);
+glVertexAttribDivisor(3, 1);              <span class="c">// 每個 instance 換一筆</span>
+glBindVertexArray(0);
+
+<span class="c">// draw command 的 SSBO（binding 3），instanceCount 先填 0</span>
+DrawElementsIndirectCommand cmd = { numIndices, 0, 0, 0, 0 };
+glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(cmd), &amp;cmd, GL_MAP_READ_BIT);
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, cmdBuffer);</code></pre>
+<pre><code><span class="c">// C++：每幀</span>
+glUseProgram(resetCS);
+glDispatchCompute(1, 1, 1);
+glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);     <span class="c">// CS #2 要讀寫 SSBO</span>
+
+glUseProgram(cullingCS);
+glUniform1i(locNumMax, NUM_TOTAL_INSTANCE);
+glUniformMatrix4fv(locViewProj, 1, GL_FALSE, glm::value_ptr(P * V));
+glDispatchCompute((NUM_TOTAL_INSTANCE + 1023) / 1024, 1, 1);
+glMemoryBarrier(GL_COMMAND_BARRIER_BIT              <span class="c">// instanceCount 當 draw 參數</span>
+              | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT); <span class="c">// 可見 instance 當 attribute</span>
+
+glUseProgram(renderProgram);
+glBindVertexArray(vao);
+glBindBuffer(GL_DRAW_INDIRECT_BUFFER, cmdBuffer);   <span class="c">// 同一個 buffer 換個身份</span>
+glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, 0);
+<span class="c">// CPU 從頭到尾不知道畫了幾個 instance</span></code></pre></div>
+<pre><code><span class="c">// GLSL：render 的 vertex shader（per-instance 位移從 attribute 3 來）</span>
+layout (location = 0) in vec3 v_vertex;
+layout (location = 3) in vec4 v_worldPosOffset;
+uniform mat4 projMat, viewMat, modelMat;
+void main()
+{
+    vec4 worldVertex = modelMat * vec4(v_vertex, 1.0) + v_worldPosOffset;
+    worldVertex.w = 1.0;   <span class="c">// 兩個 w 都是 1 → 相加變 2，要改回 1</span>
+    gl_Position = projMat * viewMat * worldVertex;
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="template">在作業 template 上用 compute shader</h2>
+<div class="warn">template 不能直接用：<b>context 是 4.1</b>，而且附的 <b>GLAD 只產生到 OpenGL 3.3</b>（<code>builder/external/glad/include/glad/glad.h</code> 開頭寫 <code>APIs: gl=3.3</code>）→ 連 <code>glDispatchCompute</code> 這個函式都沒有，編譯就失敗。</div>
+<ol class="steps">
+<li><b>換 GLAD</b>：到 <a href="https://glad.dav1d.de/">glad.dav1d.de</a> 選 Language C/C++、gl <b>4.6</b>、Profile Core、勾 Generate a loader → 下載後替換 <code>builder/external/glad/</code> 的 <code>glad.h</code>、<code>glad.c</code>（<code>khrplatform.h</code> 一起換）。</li>
+<li><b>改 context 版本</b>：<code>glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1)</code> → <b>3</b>（要 <code>glBufferStorage</code> 就用 <b>4.4</b> 以上，或改用 <code>glBufferData</code>）。</li>
+<li>Shader 寫 <code>#version 430 core</code>；ImGui 的 <code>glsl_version</code> 不用改。</li>
+<li>macOS 沒辦法：最高 4.1，只能在 Windows / Linux 上跑。</li>
+</ol>
+<p class="mut">本頁的實測程式沒有用 template 的 GLAD，而是在 Linux 直接用系統的 <code>GL/glcorearb.h</code> + <code>libOpenGL.so</code>（4.6 context）。</p>
+
+<!-- ============================================================ -->
+<h2 id="errata">講義程式小錯</h2>
+<table>
+<tr><th>位置</th><th>講義寫法</th><th>應改為 / 注意</th></tr>
+<tr><td>粒子 CS</td><td><code>// virtual random number [0, 1)</code></td><td>實際回傳 <b>[-1, 1)</b>（最後 <code>* 2.0 - 1.0</code>）</td></tr>
+<tr><td>SSBO 範例</td><td>說 compute 是 4.3，卻用 <code>glBufferStorage</code></td><td><code>glBufferStorage</code> 是 <b>4.4</b>；4.3 context 要用 <code>glBufferData</code></td></tr>
+<tr><td>Image 範例</td><td><code>mouseCursor</code> 直接用滑鼠座標</td><td>GLFW 原點在左上，image 原點在左下 → <code>y = height - y</code>；視窗和 512 × 512 大小不同時也要換算</td></tr>
+<tr><td>Image 範例 VS</td><td><code>f_uv = f_uv;</code></td><td>多餘的一行，可刪</td></tr>
+<tr><td>GPU-driven render</td><td><code>glUniform1i(/*binding-location*/, …)</code></td><td>這裡是 uniform <b>location</b>，不是 binding</td></tr>
+<tr><td>GPU-driven render</td><td><code>glDispatchCompute((N / 1024) + 1, 1, 1)</code></td><td>可以跑（shader 有檢查 <code>idx &gt;= numMaxInstance</code>），但 N 是 1024 倍數時多一個空的 group；慣用 <code>(N + 1023) / 1024</code></td></tr>
+<tr><td>DrawCommand struct</td><td><code>uint baseVertex</code></td><td>規格是 <code>GLint baseVertex</code>（可為負）；值 ≥ 0 時 bit 一樣，不影響</td></tr>
+<tr><td>粒子初始化</td><td><code>glBlendFunc(GL_SRC_ALPHA, GL_DST_ALPHA)</code></td><td>結果取決於 framebuffer 有沒有 alpha channel；要「越疊越亮」通常用 <code>GL_SRC_ALPHA, GL_ONE</code></td></tr>
+</table>
+<p class="mut">延伸閱讀（講義列的）：<a href="https://learnopengl.com/Guest-Articles/2022/Compute-Shaders/Introduction">LearnOpenGL – Compute Shaders</a>、<a href="https://www.khronos.org/opengl/wiki/Compute_Shader">OpenGL Wiki – Compute Shader</a>、<a href="https://www.khronos.org/opengl/wiki/Memory_Model#Incoherent_memory_access">Memory Model</a>、<a href="https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf">GPU-driven Rendering（SIGGRAPH 2015）</a>。除錯工具見 <a href="02-project-syntax.html#renderdoc">RenderDoc</a>。</p>
+</main>
+<script src="common.js"></script>
+<script src="08-compute.js"></script>
+</body></html>

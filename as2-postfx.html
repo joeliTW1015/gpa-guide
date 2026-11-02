@@ -670,6 +670,7 @@ while (!glfwWindowShouldClose(window))
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 	glfwSwapBuffers(window);
 }</code></pre>
+<p class="mut">attachment 在做什麼、stencil 是什麼、為什麼畫完就能當 texture 用：見 <a href="06-fragment-fbo.html#fbo-faq">講義 06：三個常卡住的問題</a>。</p>
 <p><b>驗收</b>：畫面和直接畫一樣；拉動視窗大小後畫面仍清楚、不變形。</p></details>
 
 <details class="step" id="s6"><summary><input type="checkbox"><span>6. Comparison bar（可拖曳）</span></summary>

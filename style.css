@@ -160,3 +160,8 @@ ol.steps>li{margin:8px 0}
 
 /* ---------- 列印 ---------- */
 @media print{nav.top,aside.side,#totop,#readbar,.sbox,pre button.cp{display:none!important}body{background:#fff}main{max-width:none;margin:0}}
+/* 流程方塊（橫向，窄螢幕自動換行） */
+.flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;font-size:13.5px;margin:10px 0}
+.flow div{flex:1;min-width:140px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.flow div b{display:block;color:var(--acc-ink)}
+.flow i{align-self:center;font-style:normal;color:var(--mut)}

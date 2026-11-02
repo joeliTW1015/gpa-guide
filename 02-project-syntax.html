@@ -13,10 +13,10 @@
 #wrapCv,#magA,#magB{border:1px solid var(--line);image-rendering:auto}
 </style></head>
 <body><main>
-<p class="kicker">Appendix · Project Configuration、GLFW and GLAD、GLSL、GLM、Image Loading</p>
+<p class="kicker">Appendix · Project Configuration、GLFW and GLAD、GLSL、GLM、Image Loading、RenderDoc</p>
 <h1>專案結構與語法</h1>
-<p class="lead">寫作業時的速查頁：template 專案結構、CMake、GLFW + GLAD 程式骨架、callback、shader 建立流程、OpenGL 物件與貼圖的精簡版、GLSL / GLM 速查與常見坑。各主題的完整講解在對應講義頁。</p>
-<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a></div>
+<p class="lead">寫作業時的速查頁：template 專案結構、CMake、GLFW + GLAD 程式骨架、callback、shader 建立流程、OpenGL 物件與貼圖的精簡版、GLSL / GLM 速查、常見坑與 RenderDoc 除錯。各主題的完整講解在對應講義頁。</p>
+<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a><a href="#renderdoc">RenderDoc</a></div>
 
 <h2 id="tree">專案結構（Template）</h2>
 <p class="mut">點資料夾看說明。</p>
@@ -656,7 +656,53 @@ glUniformMatrix4fv(glGetUniformLocation(prog, "mvp"), 1, GL_FALSE, glm::value_pt
 <li>檔案路徑：執行時工作目錄不是專案根 → assets / shaders 讀不到</li>
 <li>Face culling 開著但模型頂點順序是 CW</li>
 </ol>
-<p class="mut">Debug 好用：<code>glGetError()</code>、<code>glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)</code> 看線框、FS 直接輸出常數色或 normal 檢查管線。</p>
+<p class="mut">Debug 好用：<code>glGetError()</code>、<code>glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)</code> 看線框、FS 直接輸出常數色或 normal 檢查管線。還是找不到就用下面的 <a href="#renderdoc">RenderDoc</a> 抓一幀來看。</p>
+
+<!-- ============================================================ -->
+<h2 id="renderdoc">RenderDoc：看 GPU 上發生什麼事（Appendix - RenderDoc）</h2>
+<div class="grid2">
+<div>
+<ul>
+<li><b>是什麼</b>：獨立的圖形除錯器，<b>抓下一整幀</b>（single-frame capture）：這幀所有 OpenGL 呼叫、每個 draw call 用的 shader / buffer / texture / uniform 都能點開看。</li>
+<li><b>為什麼需要</b>：Visual Studio 的中斷點、Call Stack 只看得到 <b>CPU</b>；shader 跑在 GPU，<code>glGetShaderInfoLog</code> 只有語法錯誤。畫面全黑又沒有錯誤訊息時（texture 沒綁、uniform 值錯、FBO 是空的…），只能靠它。</li>
+</ul></div>
+<table>
+<tr><th colspan="2">環境需求（講義）</th></tr>
+<tr><td>作業系統</td><td>只有 <b>Windows、Linux</b>（macOS 不行）</td></tr>
+<tr><td>OpenGL</td><td>講義寫 <b>≥ 4.2、core profile</b>（投影片用 GLUT 示範）。RenderDoc 官方文件寫的下限是 3.2 core，所以 template 的 4.1 core 應該就能抓；抓不到再照講義改成 4.2</td></tr>
+<tr><td>下載</td><td><a href="https://renderdoc.org/">renderdoc.org</a>（Windows 安裝檔；Linux 解壓後執行 <code>bin/qrenderdoc</code>）</td></tr>
+</table></div>
+<pre><code><span class="c">// C++：講義投影片的 GLUT 寫法 glutInitContextVersion(4, 2) 換成 template 的 GLFW</span>
+glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);                   <span class="c">// template 原本是 1</span>
+glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);   <span class="c">// template 已經是 core</span></code></pre>
+
+<h3>操作步驟</h3>
+<ol class="steps">
+<li>開 RenderDoc → 選 <b>Launch Application</b> 分頁。</li>
+<li><b>Executable Path</b> 選你的執行檔（如 <code>build/Debug/CG2025.exe</code>）；<b>Working Directory</b> 設成<b>專案根目錄</b>，不然 shader、assets 讀不到（和直接執行的規則一樣）。</li>
+<li>按 <b>Launch</b>：程式跑起來，左上角會多一行 RenderDoc 的提示文字（看到它才代表有接上）。</li>
+<li>畫面到想看的狀態時按 <b>Print Screen</b>（或 F12）抓一幀 → 回 RenderDoc 雙擊抓到的 capture 打開。</li>
+</ol>
+
+<h3>互動：遇到什麼問題，看哪個面板</h3>
+<p class="mut">版面是示意圖，實際位置可以自己拖。</p>
+<div class="card">
+<div class="ctrl" id="rdQ"></div>
+<div class="grid2">
+<svg id="rdSvg" viewBox="0 0 460 270" style="width:100%" font-size="12" text-anchor="middle"></svg>
+<div id="rdTxt"></div></div></div>
+
+<table>
+<tr><th style="width:24%">面板</th><th>看什麼</th></tr>
+<tr><td>Event Browser</td><td>這一幀所有的 draw call（Colour Pass、<code>glDrawArrays / glDrawElements</code>）。點一個 → 其他面板都切到「畫完這個 draw call 時」的狀態。</td></tr>
+<tr><td>API Inspector</td><td>選中的 draw call 之前呼叫了哪些 OpenGL 函式、參數是什麼。點 texture 之類的資源 → Resource Inspector → View Contents 看內容。</td></tr>
+<tr><td>Pipeline State</td><td>每個 stage（VS、TCS / TES、GS、FS…）綁了哪個 shader、哪些 texture / buffer、viewport、depth / blend 狀態。</td></tr>
+<tr><td>Texture Viewer</td><td>目前的 texture 和 render target（含 FBO 的 color / depth）長什麼樣子、ID 與 binding，以及建立它的 OpenGL 呼叫。</td></tr>
+<tr><td>Mesh Viewer</td><td>這個 draw call 的頂點資料（位置、normal、uv…）表格，和 VS 輸入 / 輸出的 3D 預覽。</td></tr>
+<tr><td>Uniforms / UBO</td><td>Pipeline State 選 stage → 該 stage 用到的 uniform / uniform block → 按 <b>Go</b> 看記憶體裡的實際值。</td></tr>
+</table>
+<p class="mut">另外有 Python API 可以寫腳本自動分析 capture（<a href="https://renderdoc.org/docs/python_api/index.html">文件</a>）。官方說明：<a href="https://renderdoc.org/docs/index.html">RenderDoc Documentation</a>。</p>
 </main>
 <script src="common.js"></script>
 <script>
@@ -710,4 +756,30 @@ function drawWrap(m){const W=wc.width,H=wc.height,img=wx.createImageData(W,H);
  wx.putImageData(img,0,0);wx.strokeStyle='#000';wx.lineWidth=2;wx.strokeRect(W/3,H/3,W/3,H/3);
  document.querySelectorAll('.wm').forEach(b=>b.classList.toggle('on',+b.dataset.m===m));}
 document.querySelectorAll('.wm').forEach(b=>b.onclick=()=>drawWrap(+b.dataset.m));drawWrap(0);
+
+// RenderDoc：症狀 → 面板
+(() => {
+  const $ = id => document.getElementById(id);
+  const P = { eb: [10, 10, 140, 250, 'Event Browser'], api: [160, 190, 140, 70, 'API Inspector'], ps: [310, 10, 140, 120, 'Pipeline State'],
+    tv: [160, 10, 140, 170, 'Texture Viewer'], mv: [310, 140, 140, 120, 'Mesh Viewer'] };
+  const Q = [
+    ['畫面全黑，不知道是哪一步', ['eb', 'tv'], '在 <b>Event Browser</b> 一個一個點 draw call，同時看 <b>Texture Viewer</b> 的 render target：找出「點到哪個 draw call 之後畫面才不對」。AS2：先看 Pass 1 的 FBO color texture 有沒有場景，就知道是 Pass 1 還是 Pass 2 的問題。'],
+    ['模型沒出現 / 形狀怪', ['eb', 'mv'], '選那個 draw call，看 <b>Mesh Viewer</b>：VS 輸入的位置、uv 是不是你上傳的值（stride / offset 算錯會很明顯），VS 輸出的位置是不是在 -1 ~ 1 裡面。'],
+    ['貼圖是黑的 / 錯的', ['ps', 'tv'], '<b>Pipeline State</b> → FS：看每個 sampler 綁到哪個 texture unit、unit 上是哪張 texture；沒綁（或綁錯 unit）會一眼看出來。再到 <b>Texture Viewer</b> 看那張 texture 本身有沒有內容。'],
+    ['uniform 好像沒傳進去', ['ps'], '<b>Pipeline State</b> 選 VS 或 FS → 看 uniform / uniform block 的實際值（按 Go）。全是 0 → 多半是 <code>glUniform*</code> 時沒先 <code>glUseProgram</code>，或 location 是 -1。'],
+    ['想知道某個 texture 是誰、怎麼建的', ['api', 'tv'], '<b>Texture Viewer</b> 有目前 texture 的 ID 和 binding，以及和它有關的 OpenGL 呼叫；<b>API Inspector</b> 點資源 → Resource Inspector 看建立它的所有呼叫（大小、格式、filter）。'],
+  ];
+  let cur = 0;
+  function draw() {
+    const on = Q[cur][1];
+    $('rdSvg').innerHTML = Object.entries(P).map(([k, [x, y, w, h, n]]) =>
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${on.includes(k) ? '#fde7b6' : '#f3f2ed'}" stroke="${on.includes(k) ? '#c2410c' : '#ccc'}" stroke-width="${on.includes(k) ? 2.5 : 1}"/>` +
+      `<text x="${x + w / 2}" y="${y + h / 2 + 4}" font-weight="${on.includes(k) ? 700 : 400}">${n}</text>`).join('');
+    $('rdTxt').innerHTML = Q[cur][2];
+    $('rdQ').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === cur));
+  }
+  $('rdQ').innerHTML = Q.map(q => `<button class="b">${q[0]}</button>`).join('');
+  $('rdQ').querySelectorAll('button').forEach((b, i) => b.onclick = () => { cur = i; draw(); });
+  draw();
+})();
 </script></body></html>

@@ -28,9 +28,9 @@
 <body><main>
 <div class="hero">
 <h1>繪圖程式設計與應用 速成指南</h1>
-<p>CS5507 · 2026 Fall · 依講義 00–07、Appendix 與作業說明整理的互動式筆記</p>
+<p>CS5507 · 2026 Fall · 依講義 00–08、Appendix 與作業說明整理的互動式筆記</p>
 <p>每章：本章重點 → 講義內容（重製的架構圖與表格）→ 互動示範 → 程式碼。按 <code style="background:rgba(255,255,255,.18);color:#fff">/</code> 搜尋全站。</p>
-<div class="chips"><span>7 章講義</span><span>40+ 個互動示範</span><span>154 個 API 說明</span><span>作業 1、2 完整指南</span></div>
+<div class="chips"><span>8 章講義</span><span>40+ 個互動示範</span><span>159 個 API 說明</span><span>作業 1、2 完整指南</span></div>
 </div>
 
 <div class="sec">講義：建議依序閱讀</div>
@@ -62,6 +62,10 @@
 <div class="lec" data-n="07"><h3><a href="07-mesh-rendering.html">Mesh Rendering 與場景加速</a></h3><div class="sub">講義 07 + Appendix - Assimp · 讀模型、畫場景、畫得更快</div>
 <p>3D 模型結構與格式、OBJ / MTL、per-face vs per-vertex normal、Assimp 載入、frustum culling、driver overhead、instancing 矩陣、multi-draw、indirect、GPU-driven rendering。</p>
 <div class="t"><span>aiScene 結構</span><span>AABB / 平面測試</span><span>BVH</span><span>DrawElementsIndirectCommand</span><span class="i">互動：OBJ 解析</span><span class="i">互動：frustum culling</span><span class="i">互動：multi-draw</span><span class="i">互動：GPU 收集可見 instance</span></div></div>
+
+<div class="lec" data-n="08"><h3><a href="08-compute.html">Compute Shader 與 GPU-driven Rendering</a></h3><div class="sub">講義 08 · 不在 pipeline 裡的 GPU 平行程式</div>
+<p>invocation / work group / dispatch、image load / store、SSBO 與 std430、memory barrier、粒子模擬、race condition 與 atomicAdd、用 compute shader 做 GPU-driven culling。程式已在 OpenGL 4.6 實測。</p>
+<div class="t"><span>gl_GlobalInvocationID</span><span>glMemoryBarrier bit 表</span><span>std430 vs C++</span><span>atomicAdd</span><span>template 要換 GLAD</span><span class="i">互動：compute space</span><span class="i">互動：std430 計算器</span><span class="i">互動：粒子黑洞</span><span class="i">互動：race condition</span></div></div>
 </div>
 
 <div class="sec">實作、作業與參考</div>
@@ -70,8 +74,8 @@
 <p class="mut">Appendix - Project Configuration、Syllabus</p>
 <ul><li>Windows（官方）與 Linux（已實測）建置</li><li>GitLab、submodule、private repo 備份</li><li>MD5 繳交、抄襲與 Demo 規則、配分</li></ul></div>
 <div class="card"><h3><a href="02-project-syntax.html">專案結構與語法（速查）</a></h3>
-<p class="mut">Appendix - GLFW and GLAD、GLSL、GLM、Image Loading</p>
-<ul><li>Template 結構、CMake、GLFW + GLAD 骨架</li><li>Shader program 完整流程與常見錯誤</li><li>GLSL / GLM 速查、黑畫面檢查表</li></ul></div>
+<p class="mut">Appendix - GLFW and GLAD、GLSL、GLM、Image Loading、RenderDoc</p>
+<ul><li>Template 結構、CMake、GLFW + GLAD 骨架</li><li>Shader program 完整流程與常見錯誤</li><li>GLSL / GLM 速查、黑畫面檢查表、RenderDoc 除錯</li></ul></div>
 <div class="card"><h3><a href="as1-robot.html">作業 1：Animated Robot</a></h3>
 <p class="mut">已於 2026/10/19 截止</p>
 <ul><li>評分項目、先備知識、Demo 練習題</li><li>階層模型互動圖、11 個實作步驟</li><li>作業用到的 74 個 API、繳交流程</li></ul></div>
@@ -80,7 +84,7 @@
 <ul><li>Assimp 載入 Sponza、trackball、FBO 兩階段 rendering</li><li>6 種後製效果 + 比較線，WebGL 互動示範</li><li>16 個實作步驟（程式已實測）、繳交流程</li></ul></div>
 </div>
 <div class="card"><h3 style="margin:0 0 6px"><a href="04-api.html">常用 API 參考</a></h3>
-<p style="margin:0">GLFW / Shader / Buffer / Uniform / Draw / Texture / FBO / GLSL / GLM / ImGui / OBJ / Assimp 共 154 個函式，每個都有簽名、回傳型別、參數表、範例與官方文件連結，可搜尋與分類篩選。各講義頁的函式名稱都連到這裡。</p></div>
+<p style="margin:0">GLFW / Shader / Buffer / Uniform / Draw / Texture / FBO / GLSL / GLM / ImGui / OBJ / Assimp / Compute 共 159 個函式，每個都有簽名、回傳型別、參數表、範例與官方文件連結，可搜尋與分類篩選。各講義頁的函式名稱都連到這裡。</p></div>
 
 <div class="sec">怎麼用這份指南</div>
 <div class="grid2">

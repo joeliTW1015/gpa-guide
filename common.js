@@ -1,9 +1,9 @@
 // 共用：頂部導覽（依講義順序分組）、側欄目錄、標題錨點、表格外框、閱讀進度、上一頁 / 下一頁、code 複製按鈕、tabs
 (function () {
-  // 閱讀順序：講義 01 → 07 → 實作 / 附錄 → 作業 → 參考
+  // 閱讀順序：講義 01 → 08 → 實作 / 附錄 → 作業 → 參考
   const groups = [['', [['index.html', '首頁']]],
     ['講義', [['l01-transform.html', '01 轉換'], ['l02-overview.html', '02 概觀'], ['01-pipeline.html', '03 Pipeline'],
-      ['l04-objects.html', '04 Objects'], ['05-vertex-draw.html', '05 Vertex'], ['06-fragment-fbo.html', '06 Fragment'], ['07-mesh-rendering.html', '07 Mesh']]],
+      ['l04-objects.html', '04 Objects'], ['05-vertex-draw.html', '05 Vertex'], ['06-fragment-fbo.html', '06 Fragment'], ['07-mesh-rendering.html', '07 Mesh'], ['08-compute.html', '08 Compute']]],
     ['實作', [['03-env-git.html', '環境 / 繳交'], ['02-project-syntax.html', '專案與語法']]],
     ['作業', [['as1-robot.html', 'AS1 機器人'], ['as2-postfx.html', 'AS2 後製']]],
     ['參考', [['04-api.html', 'API']]]];
