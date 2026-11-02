@@ -16,7 +16,7 @@
 <p class="kicker">Appendix · Project Configuration、GLFW and GLAD、GLSL、GLM、Image Loading、RenderDoc</p>
 <h1>專案結構與語法</h1>
 <p class="lead">寫作業時的速查頁：template 專案結構、CMake、GLFW + GLAD 程式骨架、callback、shader 建立流程、OpenGL 物件與貼圖的精簡版、GLSL / GLM 速查、常見坑與 RenderDoc 除錯。各主題的完整講解在對應講義頁。</p>
-<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a><a href="#renderdoc">RenderDoc</a></div>
+<div class="toc"><a href="#tree">專案結構</a><a href="#cmake">CMake</a><a href="#skel">程式骨架</a><a href="#cb">Callbacks</a><a href="#shader">Shader Program</a><a href="#obj">OpenGL Objects</a><a href="#tex">Texture</a><a href="#stb">stb_image</a><a href="#glsl">GLSL</a><a href="#glm">GLM</a><a href="#pit">常見坑</a><a href="#renderdoc">RenderDoc</a><a href="#renderdoc-cli">renderdoccmd</a></div>
 
 <h2 id="tree">專案結構（Template）</h2>
 <p class="mut">點資料夾看說明。</p>
@@ -663,46 +663,149 @@ glUniformMatrix4fv(glGetUniformLocation(prog, "mvp"), 1, GL_FALSE, glm::value_pt
 <div class="grid2">
 <div>
 <ul>
-<li><b>是什麼</b>：獨立的圖形除錯器，<b>抓下一整幀</b>（single-frame capture）：這幀所有 OpenGL 呼叫、每個 draw call 用的 shader / buffer / texture / uniform 都能點開看。</li>
+<li><b>是什麼</b>：獨立的圖形除錯器，<b>抓下一整幀</b>（single-frame capture）：這幀所有 OpenGL 呼叫，以及每個 draw call 用到的 shader、buffer、texture、uniform 都能點開看。</li>
 <li><b>為什麼需要</b>：Visual Studio 的中斷點、Call Stack 只看得到 <b>CPU</b>；shader 跑在 GPU，<code>glGetShaderInfoLog</code> 只有語法錯誤。畫面全黑又沒有錯誤訊息時（texture 沒綁、uniform 值錯、FBO 是空的…），只能靠它。</li>
 </ul></div>
 <table>
-<tr><th colspan="2">環境需求（講義）</th></tr>
+<tr><th colspan="2">環境（講義 + 實測 v1.47）</th></tr>
 <tr><td>作業系統</td><td>只有 <b>Windows、Linux</b>（macOS 不行）</td></tr>
-<tr><td>OpenGL</td><td>講義寫 <b>≥ 4.2、core profile</b>（投影片用 GLUT 示範）。RenderDoc 官方文件寫的下限是 3.2 core，所以 template 的 4.1 core 應該就能抓；抓不到再照講義改成 4.2</td></tr>
-<tr><td>下載</td><td><a href="https://renderdoc.org/">renderdoc.org</a>（Windows 安裝檔；Linux 解壓後執行 <code>bin/qrenderdoc</code>）</td></tr>
+<tr><td>OpenGL</td><td>講義寫 ≥ 4.2 core。<b>實測 template 原本的 4.1 core 就能抓、能看</b>，不用改版本（log 只提示 compute 相關功能關閉）</td></tr>
+<tr><td>下載</td><td><a href="https://renderdoc.org/">renderdoc.org</a>：Windows 用安裝檔；Linux 下載 <code>renderdoc_1.47.tar.gz</code> 解壓即可，不用安裝</td></tr>
 </table></div>
-<pre><code><span class="c">// C++：講義投影片的 GLUT 寫法 glutInitContextVersion(4, 2) 換成 template 的 GLFW</span>
-glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);                   <span class="c">// template 原本是 1</span>
-glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);   <span class="c">// template 已經是 core</span></code></pre>
+<div class="warn"><b>Linux + Wayland（實測）</b>：程式用 Wayland 視窗時，被 RenderDoc 注入後會直接結束。讓它走 X11：在 Launch Application 的 Environment Variables 刪掉 <code>WAYLAND_DISPLAY</code>，或用 <code>env -u WAYLAND_DISPLAY</code> 啟動 RenderDoc。Windows 沒有這個問題。</div>
 
-<h3>操作步驟</h3>
-<ol class="steps">
-<li>開 RenderDoc → 選 <b>Launch Application</b> 分頁。</li>
-<li><b>Executable Path</b> 選你的執行檔（如 <code>build/Debug/CG2025.exe</code>）；<b>Working Directory</b> 設成<b>專案根目錄</b>，不然 shader、assets 讀不到（和直接執行的規則一樣）。</li>
-<li>按 <b>Launch</b>：程式跑起來，左上角會多一行 RenderDoc 的提示文字（看到它才代表有接上）。</li>
-<li>畫面到想看的狀態時按 <b>Print Screen</b>（或 F12）抓一幀 → 回 RenderDoc 雙擊抓到的 capture 打開。</li>
+<h3 id="rd-steps">操作步驟（用 AS2 實際抓的畫面）</h3>
+<p class="mut">截圖是 RenderDoc 1.47 抓作業 2（Sponza + 後製）。紅框編號對應下面的說明；<b>點圖片可以開原尺寸</b>。</p>
+
+<h4>① Launch Application：設定要跑的程式</h4>
+<figure class="fig"><a href="img/rd-launch.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-launch.jpg" alt="Launch Application 分頁" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li><b>Executable Path</b>：你的執行檔（Windows 是 <code>build\Debug\CG2025.exe</code>，Linux 是 <code>build/CG2025</code>）。</li>
+<li><b>Working Directory</b>：一定要設成<b>專案根目錄</b>（有 <code>shaders/</code>、<code>assets/</code> 的那層）。空著的話預設是執行檔所在資料夾 → shader、模型讀不到，畫面全黑（實測）。</li>
+<li><b>Queue Capture</b>（可選）：勾起來並填 Frame N，程式跑到第 N 幀自動抓，不用自己按鍵。</li>
+<li>按 <b>Launch</b>：RenderDoc 啟動程式並注入自己。</li>
 </ol>
 
+<h4>② 程式跑起來：看左上角的提示，按 F12 抓一幀</h4>
+<div>
+<figure class="fig" style="max-width:620px;margin:12px auto"><a href="img/rd-overlay.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-overlay.jpg" alt="程式左上角的 RenderDoc overlay" style="width:100%" loading="lazy"></a></figure>
+<div>
+<ol>
+<li>左上角出現 <code>Capturing OpenGL. Frame: … F12, PrtScrn to capture</code> → 代表 RenderDoc 有接上。沒有這行就是沒注入成功（例如 Wayland 的情況）。</li>
+</ol>
+<ul>
+<li>把畫面調到想檢查的狀態（例如切到有問題的效果），按 <b>F12</b> 或 <b>Print Screen</b>。</li>
+<li>抓到後提示變成 <code>1 Captures saved. Captured frame …</code>。</li>
+<li>一次只會抓<b>一幀</b>：之後看到的所有東西都是這一幀的。</li>
+</ul></div></div>
+
+<h4>③ 連線視窗：拿到 capture、打開它</h4>
+<figure class="fig"><a href="img/rd-live.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-live.jpg" alt="Live capture 連線視窗" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li><b>Status</b>：Connection Established、API OpenGL (Active) → 連線正常。</li>
+<li><b>Tools</b>：不想切回程式按鍵的話，在這裡按 <b>Capture Frame(s) Immediately</b>；也可以 Capture After Delay（倒數幾秒）、Capture Specific Frame。</li>
+<li><b>Captures collected</b>：抓到的幀。<b>雙擊縮圖</b>打開。</li>
+<li>Save：存成 <code>.rdc</code> 檔（AS2 一幀約 300 MB），之後用 File → Open Capture 開，或傳給別人看。</li>
+</ol>
+
+<h4>④ Event Browser + Texture Viewer：一個 draw call 一個 draw call 看</h4>
+<figure class="fig"><a href="img/rd-texture.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-texture.jpg" alt="Event Browser 與 Texture Viewer" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li><b>Event Browser</b>：這幀所有 draw call。AS2 分成兩段：<b>Colour Pass #1</b> = 畫進 FBO 的 393 個 <code>glDrawElements</code>（Sponza 每個 mesh 一次）、<b>Colour Pass #2</b> = 畫到螢幕的後製 quad + ImGui。點一行（這裡選 EID 2293），其他面板都跳到「畫完這一個 draw call 的當下」。</li>
+<li><b>Texture Viewer</b>：目前 render target 的內容。現在的 target 是 <b>Texture 1242</b>（759 × 780）＝ FBO 的 color texture；畫到 2293 時場景只畫了一部分。用鍵盤上下鍵逐個 draw call 往下走，可以看到物件一個一個出現 → 找出「從哪一個 draw call 開始不對」。</li>
+<li><b>Outputs</b>：這個 pass 寫入的 attachment：FB0 = color（Texture 1242）、DS = depth（Renderbuffer 1243，就是 <code>fboDepth</code>）。</li>
+<li><b>API Inspector</b>：這個 draw call 之前呼叫了哪些 OpenGL 函式和參數（綁了哪張 texture、設了哪些 uniform）。</li>
+</ol>
+<p class="mut">在 Texture Viewer 的圖上<b>按右鍵</b>選一個 pixel，右下 <b>History</b> 會列出這個 pixel 被哪些 draw call 寫過、有沒有被 depth test 擋掉。</p>
+
+<h4>⑤ Mesh Viewer：頂點有沒有傳對</h4>
+<figure class="fig"><a href="img/rd-mesh.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-mesh.jpg" alt="Mesh Viewer" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li><b>VS Input</b>：每個頂點進 vertex shader 的 attribute。這裡 <code>aPos</code> 是 (-92.9, 435.1, 250.0)：Sponza 的單位是公分，所以程式要乘 <code>scale(0.01)</code>。stride / offset 算錯的話這裡會是亂七八糟的數字。</li>
+<li><b>VS Output</b>：vertex shader 算出的 <code>gl_Position</code>（clip space）。全部都在畫面外 → 矩陣有問題。</li>
+<li><b>Preview</b>：這個 draw call 的 3D 預覽（VS In = 模型空間、VS Out = 轉換後），可以拖曳旋轉。</li>
+</ol>
+
+<h4>⑥ Pipeline State：shader 綁了什麼</h4>
+<figure class="fig"><a href="img/rd-pipe.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-pipe.jpg" alt="Pipeline State 的 FS 階段" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li>上排是 pipeline 的各個 stage（VTX、VS、…、FS、FB），點 <b>FS</b> 看 fragment shader 的狀態；Program / Shader 旁的 View 可以看 shader 原始碼。</li>
+<li><b>Textures</b>：每個 sampler 讀到哪張 texture。<code>uDiffuse</code> = Texture 48（1024 × 1024 的牆面貼圖）。<code>uMask</code> 是<b>紅色 No Resource</b>：這個 unit 沒綁 texture。這裡是正常的（這個材質沒有鏤空遮罩，shader 也不會讀）；但如果紅的是你<b>需要</b>的貼圖，畫出來就是黑的。</li>
+<li><b>Uniforms and UBOs</b>：按右邊的 <b>Go</b> 看每個 uniform 的實際值（矩陣、<code>uMode</code>、<code>uHasTex</code>…）。全是 0 → 多半是 <code>glUniform*</code> 前沒 <code>glUseProgram</code>，或 location 是 -1。</li>
+</ol>
+
+<h4>⑦ 第二個 pass：同一張 texture 變成輸入</h4>
+<figure class="fig"><a href="img/rd-pass2.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-pass2.jpg" alt="Pass 2 的輸入 Texture 1242" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li>選 Colour Pass #2 的 <code>glDrawArrays(4)</code>：就是畫全螢幕 quad 的那一次（後面兩個 <code>glDrawElementsBaseVertex</code> 是 ImGui）。</li>
+<li>在 Texture Viewer 打開 <b>Texture 1242</b>：正是 ④ 裡被寫入的那張 FBO texture，現在是完整的場景。</li>
+<li>API Inspector 裡的 <code>glBindTexture(GL_TEXTURE_2D, Texture 1242)</code>：Pass 2 把它當成貼圖綁上去。</li>
+</ol>
+<figure class="fig"><a href="img/rd-pipe2.jpg" target="_blank" title="點開看原尺寸"><img src="img/rd-pipe2.jpg" alt="Pass 2 的 Pipeline State" style="width:100%" loading="lazy"></a></figure>
+<ol>
+<li>同一個 draw call（EID 3178）。</li>
+<li>FS 的 textures：<code>uTex</code> = Texture 1242（759 × 780，ClampEdge）、<code>uNoise</code> = Texture 1240（256 × 256，Repeat）→ 和程式的 <code>createFBO</code>、<code>createNoiseTexture</code> 設定一致。</li>
+<li>Uniforms：8 個變數（<code>uEffect</code>、<code>uBar</code>、<code>uMouse</code>…），按 Go 檢查值。</li>
+</ol>
+<p class="note">④ 和 ⑦ 一起看就是 <a href="06-fragment-fbo.html#fbo-faq">「Draw 完怎麼就變成 texture」</a>：Texture 1242 在 Pass 1 是 FBO 的 color attachment（Outputs），在 Pass 2 是 FS 的輸入（Textures）——同一張、沒有複製。</p>
+
 <h3>互動：遇到什麼問題，看哪個面板</h3>
-<p class="mut">版面是示意圖，實際位置可以自己拖。</p>
 <div class="card">
 <div class="ctrl" id="rdQ"></div>
 <div class="grid2">
 <svg id="rdSvg" viewBox="0 0 460 270" style="width:100%" font-size="12" text-anchor="middle"></svg>
 <div id="rdTxt"></div></div></div>
 
+<!-- ============================================================ -->
+<h3 id="renderdoc-cli">命令列工具：renderdoccmd</h3>
+<p>RenderDoc 附一個命令列程式 <code>renderdoccmd</code>（Windows：<code>C:\Program Files\RenderDoc\renderdoccmd.exe</code>；Linux：解壓目錄的 <code>bin/renderdoccmd</code>）。不開 GUI 就能啟動程式、抓 capture、轉檔。<code>renderdoccmd &lt;指令&gt; --help</code> 看每個指令的參數。</p>
 <table>
-<tr><th style="width:24%">面板</th><th>看什麼</th></tr>
-<tr><td>Event Browser</td><td>這一幀所有的 draw call（Colour Pass、<code>glDrawArrays / glDrawElements</code>）。點一個 → 其他面板都切到「畫完這個 draw call 時」的狀態。</td></tr>
-<tr><td>API Inspector</td><td>選中的 draw call 之前呼叫了哪些 OpenGL 函式、參數是什麼。點 texture 之類的資源 → Resource Inspector → View Contents 看內容。</td></tr>
-<tr><td>Pipeline State</td><td>每個 stage（VS、TCS / TES、GS、FS…）綁了哪個 shader、哪些 texture / buffer、viewport、depth / blend 狀態。</td></tr>
-<tr><td>Texture Viewer</td><td>目前的 texture 和 render target（含 FBO 的 color / depth）長什麼樣子、ID 與 binding，以及建立它的 OpenGL 呼叫。</td></tr>
-<tr><td>Mesh Viewer</td><td>這個 draw call 的頂點資料（位置、normal、uv…）表格，和 VS 輸入 / 輸出的 3D 預覽。</td></tr>
-<tr><td>Uniforms / UBO</td><td>Pipeline State 選 stage → 該 stage 用到的 uniform / uniform block → 按 <b>Go</b> 看記憶體裡的實際值。</td></tr>
+<tr><th style="width:18%">指令</th><th>做什麼</th></tr>
+<tr><td><code>capture</code></td><td>啟動程式並注入 RenderDoc（= GUI 的 Launch）。程式裡按 F12 抓的幀存成檔案</td></tr>
+<tr><td><code>inject</code></td><td>注入一個<b>已經在跑</b>的程式（<code>--PID</code>）</td></tr>
+<tr><td><code>replay</code></td><td>開一個視窗重播 capture 的最後畫面</td></tr>
+<tr><td><code>thumb</code></td><td>把 capture 裡的縮圖存成 png / jpg</td></tr>
+<tr><td><code>convert</code></td><td>轉成 XML / Chrome profiler JSON 等格式</td></tr>
+<tr><td><code>remoteserver</code></td><td>在另一台機器上當 replay 主機（GUI 左下 Replay Context 選它）</td></tr>
+<tr><td><code>version</code></td><td>版本</td></tr>
 </table>
-<p class="mut">另外有 Python API 可以寫腳本自動分析 capture（<a href="https://renderdoc.org/docs/python_api/index.html">文件</a>）。官方說明：<a href="https://renderdoc.org/docs/index.html">RenderDoc Documentation</a>。</p>
+<pre><code><span class="c"># 在專案根目錄執行（以下都在 v1.47 / Linux 實測過）</span>
+<span class="c"># 1. 啟動程式；-d 一定要給專案根目錄，-c 是 capture 檔名的開頭，-w 等程式結束才回來</span>
+renderdoccmd capture -d . -c captures/as2 -w ./build/CG2025
+<span class="c">#    → 程式裡按 F12，存成 captures/as2_frame&lt;幀號&gt;.rdc</span>
+
+<span class="c"># 2. 存縮圖，快速確認抓到的畫面對不對</span>
+renderdoccmd thumb -o thumb.png captures/as2_frame1184.rdc
+
+<span class="c"># 3. 轉成 XML：所有 OpenGL 呼叫和參數變成文字，可以 grep</span>
+renderdoccmd convert -f captures/as2_frame1184.rdc -o as2.xml -c xml
+grep -c 'name="glDrawElements"' as2.xml     <span class="c"># 393（Sponza 的 mesh 數）</span>
+grep -c 'name="glDrawArrays"' as2.xml       <span class="c"># 1（後製的全螢幕 quad）</span>
+
+<span class="c"># 4. 用 GUI 打開</span>
+qrenderdoc captures/as2_frame1184.rdc</code></pre>
+<div class="warn"><b>忘了 <code>-d</code> 的結果（實測）</b>：working directory 會是執行檔所在的 <code>build/</code>，程式印出 <code>Cannot open shaders/scene.vs.glsl</code>、<code>Assimp: Unable to open file "assets/sponza/sponza.obj"</code>，畫面只剩 ImGui。</div>
+
+<details><summary>進階：用 Python 腳本自動抓幀（不用按鍵）</summary>
+<p class="mut">qrenderdoc 內建 Python（<code>qrenderdoc --python 腳本.py</code>），可以自動啟動程式、等幾秒、抓一幀。本頁的截圖就是這樣抓的：</p>
+<pre><code><span class="c"># Python（在 qrenderdoc 內執行）</span>
+import renderdoc as rd, time, os
+root = "/path/to/113000107_AS2"
+res = rd.ExecuteAndInject(root + "/build/CG2025", root, "", [],
+                          "/tmp/as2", rd.CaptureOptions(), False)
+tc = rd.CreateTargetControl("", res.ident, "script", True)
+t0 = time.time(); asked = False
+while time.time() - t0 &lt; 60:
+    msg = tc.ReceiveMessage(None)
+    if not asked and time.time() - t0 &gt; 5:
+        tc.TriggerCapture(1); asked = True      <span class="c"># = 按一次 F12</span>
+    if msg.type == rd.TargetControlMessageType.NewCapture:
+        print(msg.newCapture.path); break
+tc.Shutdown()
+os._exit(0)</code></pre>
+<p class="mut">Python API 文件：<a href="https://renderdoc.org/docs/python_api/index.html">renderdoc.org/docs/python_api</a>。</p></details>
+
+<p class="mut">官方說明：<a href="https://renderdoc.org/docs/index.html">RenderDoc Documentation</a>。</p>
 </main>
 <script src="common.js"></script>
 <script>
