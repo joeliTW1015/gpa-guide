@@ -621,7 +621,7 @@ $id = "112062000"
 robocopy "${id}_AS1" "$env:TEMP\${id}_AS1" /E /XD builder build .git .vs
 Compress-Archive -Path "$env:TEMP\${id}_AS1" -DestinationPath "${id}_AS1.zip"</code></pre></div></li>
 <li><b>算 MD5</b>（之後不能再動 zip）：<code>md5sum 學號_AS1.zip</code>（Linux）／<code>certutil -hashfile 學號_AS1.zip MD5</code>（Windows）／<code>md5 學號_AS1.zip</code>（macOS）／<a href="https://emn178.github.io/online-tools/md5_checksum.html">MD5 online generator</a>。</li>
-<li><b>期限前</b>把 MD5 填入 <a href="https://forms.gle/UUSoweG5YgUfV2VaA">MD5 checksum 登記表單</a>，到 <a href="https://docs.google.com/spreadsheets/d/1AFlJleIm2oGq2cHx0rPh-zMtCzic43JY_CJqxisaf8A/edit?usp=sharing">登記查看</a> 確認。<a href="https://drive.google.com/file/d/1nBTy6rKcB7a_KtfqedX88GZHfTxXFDu_/view?usp=sharing">MD5 使用方法</a>。多筆以<b>時間最晚</b>的為準。</li>
+<li><b>期限前</b>把 MD5 填入 <a href="https://docs.google.com/forms/d/e/1FAIpQLSeyIu7XNDOuFyTR-7KzzAZ3v1ufPQht9_Y3De7wsr-WiEzaVQ/viewform">MD5 checksum 登記表單</a>，到 <a href="https://docs.google.com/spreadsheets/d/1AFlJleIm2oGq2cHx0rPh-zMtCzic43JY_CJqxisaf8A/edit?gid=1817704165#gid=1817704165">登記查看</a> 確認。<a href="https://drive.google.com/file/d/1nBTy6rKcB7a_KtfqedX88GZHfTxXFDu_/view?usp=sharing">MD5 使用方法</a>。多筆以<b>時間最晚</b>的為準。</li>
 <li><b>FTP 上傳</b>：
 <div class="card kv" style="max-width:420px"><b>Host</b><span><code>cgv.cs.nthu.edu.tw</code></span><b>Account</b><span><code>GPA2026</code></span><b>Password</b><span><code>2026GPA</code></span><b>Directory</b><span><code>Assignment_01/</code></span></div>
 <div class="tabs"><button class="b" data-pane="ftpGui">FileZilla（建議）</button><button class="b" data-pane="ftpCli">指令列</button></div>
