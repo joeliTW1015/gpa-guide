@@ -219,9 +219,8 @@ f 10/10/10 11/11/11 12/12/12</code></pre></div>
 </table></div>
 
 <h3>aiScene 的資料結構（點方塊看說明）</h3>
-<div class="grid2">
-<svg id="aiSvg" viewBox="0 0 600 330" style="width:100%" font-size="12"></svg>
-<div class="card" id="aiTxt">點左圖的方塊。</div></div>
+<svg id="aiSvg" viewBox="0 0 780 520" style="width:100%;max-width:820px;display:block;margin:0 auto"></svg>
+<div class="card" id="aiTxt">點上圖的方塊。</div>
 
 <!-- ============================================================ -->
 <h2 id="load">載入流程</h2>
@@ -896,28 +895,37 @@ document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => { nMode = b
 
 // ---------- aiScene 結構 ----------
 (() => {
+  // [x, y, w, 標題, 欄位, 標籤（對應欄位的右側小字）, 說明]；欄位用等寬字，寬度可預期，不會因字型不同而超出方塊
   const B = {
-    scene: [215, 8, 230, 118, 'aiScene', ['mRootNode', 'mAnimations[mNumAnimations]', 'mMeshes[mNumMeshes]', 'mTextures[mNumTextures]', 'mMaterials[mNumMaterials]'], '整個檔案的根。<b>所有 mesh 和 material 都存在這裡的陣列</b>；node 只存 index。<br><code>scene-&gt;mNumMeshes</code> / <code>mMeshes[i]</code>、<code>mNumMaterials</code> / <code>mMaterials[i]</code>。'],
-    node1: [10, 150, 180, 66, 'aiNode（root）', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], '場景圖（scene graph）的節點：<code>mMeshes</code> 是<b>指向 scene-&gt;mMeshes 的 index</b>，<code>mChildren</code> 是子節點；還有 <code>mTransformation</code>（相對父節點的矩陣）。講義的簡化做法直接走訪 <code>scene-&gt;mMeshes</code>，忽略 node 階層與變換。'],
-    node2: [10, 240, 180, 66, 'aiNode', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], '子節點，可以再往下（…）。要正確擺放物件時需遞迴走訪並累乘 mTransformation（像作業 1 的階層矩陣）。'],
-    mesh: [370, 150, 225, 100, 'aiMesh', ['mVertices[mNumVertices]', 'mNormals[mNumVertices]', 'mTextureCoords[0][mNumVertices]', 'mFaces[mNumFaces]', 'mMaterialIndex'], '一個 mesh 只用<b>一種材質</b>。<br>mVertices / mNormals / mTextureCoords → 放進 <b>VBO</b>（同長度、同 index）。<br>mFaces[f].mIndices[0~2] → 放進 <b>EBO / IBO</b>。<br>mMaterialIndex → <b>指向 scene-&gt;mMaterials 的 index</b>。'],
-    mat: [215, 262, 150, 58, 'aiMaterial', ['Get(KEY, ...)', 'GetTexture(TYPE, ...)'], '<code>Get(AI_MATKEY_COLOR_DIFFUSE, color)</code> 讀材質參數（MAT）；<code>GetTexture(aiTextureType_DIFFUSE, 0, &amp;path)</code> 讀貼圖路徑（TEX），路徑通常相對於模型檔所在資料夾。']
+    scene: [265, 10, 250, 'aiScene', ['mRootNode', 'mAnimations[mNumAnimations]', 'mMeshes[mNumMeshes]', 'mTextures[mNumTextures]', 'mMaterials[mNumMaterials]'], [], '整個檔案的根。<b>所有 mesh 和 material 都存在這裡的陣列</b>；node 只存 index。<br><code>scene-&gt;mNumMeshes</code> / <code>mMeshes[i]</code>、<code>mNumMaterials</code> / <code>mMaterials[i]</code>。'],
+    node1: [10, 200, 220, 'aiNode（root）', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], [], '場景圖（scene graph）的節點：<code>mMeshes</code> 是<b>指向 scene-&gt;mMeshes 的 index</b>，<code>mChildren</code> 是子節點；還有 <code>mTransformation</code>（相對父節點的矩陣）。講義的簡化做法直接走訪 <code>scene-&gt;mMeshes</code>，忽略 node 階層與變換。'],
+    node2: [10, 340, 220, 'aiNode', ['mMeshes[mNumMeshes]', 'mChildren[mNumChildren]'], [], '子節點，可以再往下（…）。要正確擺放物件時需遞迴走訪並累乘 mTransformation（像作業 1 的階層矩陣）。'],
+    mesh: [440, 200, 330, 'aiMesh', ['mVertices[mNumVertices]', 'mNormals[mNumVertices]', 'mTextureCoords[0][mNumVertices]', 'mFaces[mNumFaces]', 'mMaterialIndex'], ['VBO', 'VBO', 'VBO', 'EBO', ''], '一個 mesh 只用<b>一種材質</b>。<br>mVertices / mNormals / mTextureCoords → 放進 <b>VBO</b>（同長度、同 index）。<br>mFaces[f].mIndices[0~2] → 放進 <b>EBO / IBO</b>。<br>mMaterialIndex → <b>指向 scene-&gt;mMaterials 的 index</b>。'],
+    mat: [265, 420, 250, 'aiMaterial', ['Get(KEY, ...)', 'GetTexture(TYPE, ...)'], ['MAT', 'TEX'], '<code>Get(AI_MATKEY_COLOR_DIFFUSE, color)</code> 讀材質參數（MAT）；<code>GetTexture(aiTextureType_DIFFUSE, 0, &amp;path)</code> 讀貼圖路徑（TEX），路徑通常相對於模型檔所在資料夾。'],
   };
+  const HEAD = 28, LINE = 22, h = k => HEAD + B[k][4].length * LINE + 12;
   function draw(sel) {
-    let s = AR;
-    for (const [k, [x, y, w, h, t, f]] of Object.entries(B)) {
-      const on = k === sel;
-      s += `<rect data-k="${k}" x="${x}" y="${y}" width="${w}" height="${h}" fill="${on ? '#fde7b6' : '#f3f4f6'}" stroke="${on ? '#c53030' : '#999'}" stroke-width="${on ? 2.5 : 1}"/>`;
-      s += `<rect data-k="${k}" x="${x}" y="${y}" width="${w}" height="20" fill="${on ? '#f6ad55' : '#bbb'}"/><text x="${x + w / 2}" y="${y + 15}" text-anchor="middle" fill="#1d4ed8" style="pointer-events:none">${t}</text>`;
-      f.forEach((l, i) => s += `<text x="${x + 6}" y="${y + 36 + i * 16}" font-size="11" style="pointer-events:none">${l}</text>`);
+    let s = AR + '<style>#aiSvg .f{font:14px ui-monospace,Menlo,Consolas,monospace}#aiSvg .t{font:600 15px system-ui,sans-serif}#aiSvg .g{font:600 12px system-ui,sans-serif;fill:#2563eb}#aiSvg .r{font:13px system-ui,sans-serif;fill:#c53030}</style>';
+    for (const [k, [x, y, w, t, f, tag]] of Object.entries(B)) {
+      const on = k === sel, H = h(k);
+      s += `<g data-k="${k}" style="cursor:pointer"><rect x="${x}" y="${y}" width="${w}" height="${H}" rx="6" fill="${on ? '#fde7b6' : '#f3f4f6'}" stroke="${on ? '#c53030' : '#999'}" stroke-width="${on ? 2.5 : 1}"/>`;
+      s += `<path d="M${x} ${y + HEAD}V${y + 6}a6 6 0 0 1 6-6H${x + w - 6}a6 6 0 0 1 6 6V${y + HEAD}z" fill="${on ? '#f6ad55' : '#cbd5e1'}"/><text class="t" x="${x + w / 2}" y="${y + 19}" text-anchor="middle" fill="#1e3a8a">${t}</text>`;
+      f.forEach((l, i) => {
+        s += `<text class="f" x="${x + 10}" y="${y + HEAD + 18 + i * LINE}">${l}</text>`;
+        if (tag[i] && tag[i] !== tag[i - 1]) s += `<text class="g" x="${x + w - 10}" y="${y + HEAD + 18 + i * LINE}" text-anchor="end">${tag[i]}</text>`;
+      });
+      s += '</g>';
     }
-    const P = (d, col, dash) => s += `<path d="${d}" stroke="${col}" stroke-width="2" fill="none" ${dash ? 'stroke-dasharray="4 3"' : ''} marker-end="url(#aX)"/>`;
-    P('M215 35 H100 V148', '#111'); P('M100 216 V238', '#111'); P('M445 75 H480 V148', '#111'); P('M290 126 V260', '#111');
-    P('M190 172 Q205 170 212 72', '#c53030', 1); P('M370 240 Q330 240 330 260', '#c53030', 1);
-    s += '<text x="200" y="140" font-size="10" fill="#c53030">index → mesh</text><text x="340" y="232" font-size="10" fill="#c53030">index → material</text>';
-    s += '<g font-size="10" fill="#2563eb"><text x="560" y="182">VBO</text><text x="560" y="230">EBO</text><text x="330" y="292">MAT</text><text x="330" y="309">TEX</text></g>';
+    const P = (d, col, dash) => s += `<path d="${d}" stroke="${col}" stroke-width="2" fill="none" ${dash ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#aX)"/>`;
+    P('M265 45 H120 V196', '#111');          // scene → root node
+    P('M120 278 V336', '#111');              // root → child
+    P('M515 45 H605 V196', '#111');          // scene → mesh
+    P('M420 148 V416', '#111');              // scene → material
+    P('M230 225 C260 225 285 195 290 152', '#c53030', 1);   // node.mMeshes → scene.mMeshes
+    P('M500 352 C500 440 560 456 519 456', '#c53030', 1);   // mesh.mMaterialIndex → material
+    s += '<text class="r" x="236" y="262">index → scene 的 mesh</text><text class="r" x="540" y="400">mMaterialIndex：index →</text><text class="r" x="540" y="418">scene 的 material</text>';
     $('aiSvg').innerHTML = s;
-    $('aiSvg').querySelectorAll('[data-k]').forEach(r => r.onclick = () => { draw(r.dataset.k); $('aiTxt').innerHTML = `<b>${B[r.dataset.k][4]}</b><br>${B[r.dataset.k][6]}`; });
+    $('aiSvg').querySelectorAll('[data-k]').forEach(r => r.onclick = () => { draw(r.dataset.k); $('aiTxt').innerHTML = `<b>${B[r.dataset.k][3]}</b><br>${B[r.dataset.k][6]}`; });
   }
   draw('scene'); $('aiTxt').innerHTML = `<b>aiScene</b><br>${B.scene[6]}`;
 })();

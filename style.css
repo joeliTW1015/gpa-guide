@@ -100,6 +100,9 @@ figure{margin:0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 @media(max-width:860px){.grid2,.grid3{grid-template-columns:1fr}}
+/* 欄內容不撐破欄寬（pre 改成自己橫向捲動）；平板以下有程式碼的兩欄改成單欄 */
+.grid2>*,.grid3>*{min-width:0}
+@media(max-width:1180px){.grid2:has(pre),.grid3:has(pre){grid-template-columns:1fr}}
 .grid2>.card,.grid3>.card{margin:0}
 
 /* ---------- 表格 ---------- */
