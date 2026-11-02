@@ -26,7 +26,7 @@ svg text{font-family:system-ui,sans-serif}
 <li>加速（演算法面）：AABB + 平面測試做 <b>frustum culling</b>、階層式 culling（BVH 等）。</li>
 <li>加速（實作面）：減少 draw call（instancing、multi-draw）、indirect draw 把參數放 GPU、GPU-driven rendering（compute shader 自己挑要畫什麼）、multi-thread。</li>
 </ul></div>
-<div class="toc"><a href="#model">3D Model 結構</a><a href="#formats">模型格式</a><a href="#obj">Wavefront OBJ</a><a href="#mtl">材質 MTL</a><a href="#problems">格式問題</a><a href="#normal">Per-face / Per-vertex Normal</a><a href="#assimp">Assimp</a><a href="#load">載入流程</a><a href="#accel">加速總覽</a><a href="#aabb">AABB 與平面</a><a href="#frustum">Frustum Culling</a><a href="#hier">階層式 Culling</a><a href="#overhead">Driver Overhead</a><a href="#instance">Instancing 矩陣</a><a href="#multidraw">Multi-draw</a><a href="#indirect">Indirect Draw</a><a href="#gpudriven">GPU-driven</a><a href="#thread">Multi-thread</a><a href="#errata">講義程式小錯</a></div>
+<div class="toc"><a href="#model">3D Model 結構</a><a href="#formats">模型格式</a><a href="#obj">Wavefront OBJ</a><a href="#vn">vn 法向量</a><a href="#face">f 面</a><a href="#mtl">材質 MTL</a><a href="#problems">格式問題</a><a href="#normal">Per-face / Per-vertex Normal</a><a href="#assimp">Assimp</a><a href="#load">載入流程</a><a href="#accel">加速總覽</a><a href="#aabb">AABB 與平面</a><a href="#frustum">Frustum Culling</a><a href="#hier">階層式 Culling</a><a href="#overhead">Driver Overhead</a><a href="#instance">Instancing 矩陣</a><a href="#multidraw">Multi-draw</a><a href="#indirect">Indirect Draw</a><a href="#gpudriven">GPU-driven</a><a href="#thread">Multi-thread</a><a href="#errata">講義程式小錯</a></div>
 
 <!-- ============================================================ -->
 <h2 id="model">3D Model 的組成</h2>
@@ -88,6 +88,59 @@ glDrawElements(...);
 <tr><td><code>f 7//1 8//2 9//3</code></td><td>位置 // 法向量（沒有貼圖座標）</td></tr>
 </table></div>
 <div class="note">Index <b>從 1 開始</b>，而且 <b>v、vt、vn 各自編號</b>：<code>f 1/1/1 2/2/2 3/3/3</code> 的第一個角 = 第 1 個 v + 第 1 個 vt + 第 1 個 vn。</div>
+
+<h3 id="vn">vn：頂點法向量是什麼</h3>
+<div class="grid2">
+<div>
+<ul>
+<li><b>法向量（normal）</b>：垂直於表面、指向外側、長度 1 的方向。它告訴光照計算「這裡的表面朝哪裡」。</li>
+<li><b>為什麼需要</b>：亮度取決於表面朝向和光線的夾角，最基本的 diffuse 光照是
+<code>亮度 = max(dot(N, L), 0)</code>（N = 法向量、L = 指向光源的方向）。正對光源最亮，側面變暗，背對光源全黑。沒有 N 就算不出明暗，模型看起來是一片平的色塊。</li>
+<li><b>為什麼是「頂點」的</b>：模型只在頂點存 normal。三角形內部的 normal 由 rasterizer 把三個頂點的 normal <b>內插</b>出來（和 uv 一樣）。所以頂點 normal 不一定要垂直於某個三角形；美術可以把它設成「原本那個曲面在這點的方向」，讓幾十個三角形拼成的球<b>看起來</b>是圓的。</li>
+<li>OBJ 的 <code>vn</code> 行就是一串這樣的方向；哪個角用哪個 normal，由 <code>f</code> 指定（下一段）。檔案沒有 vn 時可以自己算（三角形兩邊做 cross product），Assimp 的 <code>aiProcess_GenSmoothNormals</code> 就是在做這件事。</li>
+</ul></div>
+<div class="card"><b>互動：normal 決定亮度</b>
+<canvas id="vnCv" width="420" height="240"></canvas>
+<div class="ctrl">光源方向 <input type="range" id="vnL" min="-80" max="80" value="35"><span id="vnLV"></span>
+<label><input type="radio" name="vnM" value="flat"> 每段一個 normal</label><label><input type="radio" name="vnM" value="smooth" checked> 頂點 normal + 內插</label></div>
+<p class="mut" style="margin:0">剖面是同一條由 5 段直線組成的「曲面」。藍箭頭 = 頂點 normal、下方色帶 = 每個位置算出的亮度 <code>max(dot(N, L), 0)</code>。</p></div></div>
+
+<h3 id="face">f：面存了什麼？為什麼一定要有</h3>
+<div class="grid2">
+<div>
+<p><b>v 只是一串編了號的點</b>，沒有說誰跟誰相連。<b>f 才說「哪幾個點圍成一個面」</b>：</p>
+<pre><code>v 0 0 0     <span class="c"># 1 號點</span>
+v 1 0 0     <span class="c"># 2 號點</span>
+v 1 1 0     <span class="c"># 3 號點</span>
+v 0 1 0     <span class="c"># 4 號點</span>
+f 1 2 3     <span class="c"># 一個三角形：1、2、3 號點</span>
+f 1 3 4     <span class="c"># 另一個三角形：1、3、4 號點</span></code></pre>
+<p>每個 <code>f</code> 存的是：</p>
+<ol>
+<li><b>這個面有哪幾個角</b>（三角形 3 個、四邊形 4 個…）。</li>
+<li><b>每個角用哪個 v、哪個 vt、哪個 vn</b>（<code>v/vt/vn</code> 三個編號）。</li>
+<li><b>角的順序</b>：從正面看逆時針（CCW）＝ 這面朝外。face culling、自己算 normal 都靠這個順序。</li>
+</ol></div>
+<div class="card"><b>「頂點不會自己連成面嗎？」→ 不會</b>
+<ul>
+<li>GPU 不會猜形狀。<code>glDrawArrays(GL_TRIANGLES)</code> 就是<b>每 3 個頂點照順序湊一個三角形</b>，不管它們在空間上近不近。</li>
+<li>同一組點可以連成完全不同的面（例如正方形可以沿兩條不同對角線切）。只看點，無法知道美術要的是哪一種。</li>
+<li>所以面的資訊一定要存下來，載入時轉成 <b>index buffer（EBO）</b>：<code>f 1 2 3</code> → index <code>0, 1, 2</code>（減 1），再用 <code>glDrawElements</code> 畫。</li>
+<li>一個點常被很多面共用（立方體 8 個點、12 個三角形、36 個角），用編號引用就不必重複存位置。</li>
+</ul></div></div>
+
+<h4>互動：同樣的點，有沒有 f、f 怎麼寫</h4>
+<div class="card">
+<div class="ctrl" id="faBtn"></div>
+<div class="grid2">
+<canvas id="faCv" width="420" height="300"></canvas>
+<div><pre><code id="faObj"></code></pre><p id="faTxt"></p></div></div></div>
+
+<div class="card"><b>為什麼 vt、vn 要在 f 裡配對，不直接跟 v 綁在一起？</b>
+<p style="margin:4px 0">因為<b>同一個位置在不同的面上，可能要不同的 normal 或 uv</b>。立方體的一個角被 3 個面共用：在上面那面 normal 朝上、在前面那面 normal 朝前、在側面那面 normal 朝側邊。所以 OBJ 讓每個面的每個角自己選：</p>
+<pre><code>f 1/1/<b>1</b> 2/2/1 3/3/1     <span class="c"># 上面：1 號點配 1 號 normal（朝上）</span>
+f 1/4/<b>2</b> 5/5/2 6/6/2     <span class="c"># 前面：同一個 1 號點，配 2 號 normal（朝前）</span></code></pre>
+<p class="mut" style="margin:0">GPU 的一個頂點必須是一整組（位置、uv、normal），所以載入時同一個位置配到不同 normal 就要<b>拆成兩個 GPU 頂點</b>，見下面的互動和 <a href="#normal">Per-face vs Per-vertex Normal</a>。</p></div>
 
 <h3>互動：解析 OBJ → GPU 需要幾個頂點？</h3>
 <p class="mut">GPU 的一個頂點 = 一組 (位置, uv, 法向量)。同一個位置搭配不同 normal / uv 就必須拆成不同頂點。編輯左邊文字或選範例。</p>
@@ -693,6 +746,77 @@ void main() {
 <script>
 const $ = id => document.getElementById(id);
 const AR = '<defs><marker id="aX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>';
+
+// ---------- vn：normal 決定亮度 ----------
+(() => {
+  const cv = $('vnCv'), g = cv.getContext('2d');
+  // 剖面上的 6 個頂點（一段拱起的曲面）
+  const P = [[40, 150], [105, 102], [175, 78], [245, 78], [315, 102], [380, 150]];
+  const segN = P.slice(0, -1).map((p, i) => { const dx = P[i + 1][0] - p[0], dy = P[i + 1][1] - p[1], l = Math.hypot(dx, dy); return [dy / l, -dx / l]; });   // 每段的法向量（朝上 = 朝外）
+  const vN = P.map((_, i) => { const a = segN[Math.max(0, i - 1)], b = segN[Math.min(segN.length - 1, i)]; const x = a[0] + b[0], y = a[1] + b[1], l = Math.hypot(x, y); return [x / l, y / l]; });
+  function draw() {
+    const ang = +$('vnL').value * Math.PI / 180, L = [Math.sin(ang), -Math.cos(ang)], flat = document.querySelector('input[name=vnM]:checked').value === 'flat';
+    $('vnLV').textContent = $('vnL').value + '°';
+    g.clearRect(0, 0, cv.width, cv.height);
+    // 光源
+    const lx = 210 + L[0] * 160, ly = 130 + L[1] * 110;
+    g.fillStyle = '#f6ad55'; g.beginPath(); g.arc(lx, ly, 9, 0, 7); g.fill();
+    // 曲面 + 亮度色帶
+    for (let i = 0; i < P.length - 1; i++) for (let s = 0; s < 1; s += 1 / 40) {
+      const n = flat ? segN[i] : (() => { const x = vN[i][0] * (1 - s) + vN[i + 1][0] * s, y = vN[i][1] * (1 - s) + vN[i + 1][1] * s, l = Math.hypot(x, y); return [x / l, y / l]; })();
+      const b = Math.max(0, n[0] * L[0] + n[1] * L[1]);
+      const x = P[i][0] + (P[i + 1][0] - P[i][0]) * s, y = P[i][1] + (P[i + 1][1] - P[i][1]) * s;
+      g.fillStyle = `rgb(${40 + 200 * b},${50 + 170 * b},${70 + 120 * b})`;
+      g.fillRect(x - 1, 190, (P[i + 1][0] - P[i][0]) / 40 + 2, 30);
+      g.fillRect(x - 1, y, (P[i + 1][0] - P[i][0]) / 40 + 2, 5);
+    }
+    g.strokeStyle = '#333'; g.lineWidth = 1.5; g.beginPath(); P.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke();
+    // normal 箭頭
+    const arrow = (x, y, n, col) => { g.strokeStyle = g.fillStyle = col; g.lineWidth = 2; g.beginPath(); g.moveTo(x, y); g.lineTo(x + n[0] * 40, y + n[1] * 40); g.stroke(); g.beginPath(); g.arc(x + n[0] * 40, y + n[1] * 40, 3, 0, 7); g.fill(); };
+    if (flat) segN.forEach((n, i) => arrow((P[i][0] + P[i + 1][0]) / 2, (P[i][1] + P[i + 1][1]) / 2, n, '#2563eb'));
+    else vN.forEach((n, i) => arrow(P[i][0], P[i][1], n, '#2563eb'));
+    P.forEach(([x, y]) => { g.fillStyle = '#111'; g.beginPath(); g.arc(x, y, 3.5, 0, 7); g.fill(); });
+    g.fillStyle = '#666'; g.font = '11px system-ui'; g.fillText('亮度（展開成一條）', 40, 186);
+  }
+  $('vnL').oninput = draw; document.querySelectorAll('input[name=vnM]').forEach(r => r.onchange = draw); draw();
+})();
+
+// ---------- f：同樣的點，不同的面 ----------
+(() => {
+  const cv = $('faCv'), g = cv.getContext('2d');
+  // 一棟小房子的 5 個點（螢幕座標），1-based 編號對應 OBJ
+  const V = [[110, 250], [310, 250], [310, 130], [210, 50], [110, 130]];
+  const C = ['#93c5fd', '#fcd34d', '#86efac', '#f9a8d4', '#c4b5fd'];
+  const M = [
+    ['只有 v（照順序每 3 個湊一個）', null, '沒有 f 時只能照 v 的順序每 3 個點湊一個三角形（= 直接把 v 丟給 <code>glDrawArrays(GL_TRIANGLES, 0, 5)</code>）：只湊出 1 個三角形（1、2、3），剩下 4、5 不夠 3 個被丟掉，屋頂不見了。'],
+    ['f：房子', [[1, 2, 3], [1, 3, 5], [5, 3, 4]], '照 f 連：牆壁切成兩個三角形 + 一個屋頂三角形，完整的房子。'],
+    ['f：同樣的點換一種連法', [[1, 2, 5], [2, 3, 5], [5, 3, 4]], '點完全一樣，牆壁改沿另一條對角線切：外形相同，但三角形不同（內插的 normal / uv 結果也會不同）。'],
+    ['f：連成別的形狀', [[1, 3, 4], [2, 4, 5]], '同樣 5 個點也可以連成兩個交叉的尖三角形。只有點，根本無法知道美術要的是哪一種 → 一定要存 f。'],
+    ['f：順序寫反', [[1, 3, 2], [1, 5, 3], [5, 4, 3]], '同樣的面，但角的順序改成順時針（CW）。開了 <code>glEnable(GL_CULL_FACE)</code> 時，這些面被當成背面 → 整個消失。'],
+  ];
+  let cur = 1;
+  function draw() {
+    const [, F, txt] = M[cur];
+    const tris = F || [[1, 2, 3]];
+    g.clearRect(0, 0, cv.width, cv.height);
+    tris.forEach((t, i) => {
+      const cw = (() => { const [a, b, c] = t.map(k => V[k - 1]); return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]); })() > 0;   // 螢幕 y 向下：>0 = 順時針
+      g.globalAlpha = cur === 4 && cw ? 0.15 : 0.75; g.fillStyle = C[i % C.length];
+      g.beginPath(); t.forEach((k, j) => j ? g.lineTo(...V[k - 1]) : g.moveTo(...V[k - 1])); g.closePath(); g.fill();
+      g.globalAlpha = 1; g.strokeStyle = '#333'; g.lineWidth = 1.5; g.stroke();
+      if (cur === 4 && cw) { const cx = t.reduce((s, k) => s + V[k - 1][0], 0) / 3, cy = t.reduce((s, k) => s + V[k - 1][1], 0) / 3; g.fillStyle = '#c53030'; g.font = '12px system-ui'; g.fillText('被 cull', cx - 18, cy + 4); }
+    });
+    if (!F) { g.setLineDash([4, 4]); g.strokeStyle = '#c53030'; g.beginPath(); g.moveTo(...V[3]); g.lineTo(...V[4]); g.stroke(); g.setLineDash([]); }
+    V.forEach(([x, y], i) => { g.fillStyle = '#111'; g.beginPath(); g.arc(x, y, 5, 0, 7); g.fill(); g.font = 'bold 14px system-ui'; g.fillText(i + 1, x + (x > 200 ? 9 : -18), y + (y > 200 ? 18 : -6)); });
+    $('faObj').textContent = V.map(([x, y]) => `v ${((x - 110) / 200).toFixed(1)} ${((250 - y) / 200).toFixed(1)} 0`).join('\n') + '\n' +
+      (F ? F.map(t => 'f ' + t.join(' ')).join('\n') + `\n\n// 載入後的 index buffer（減 1）\nGLuint indices[] = { ${F.map(t => t.map(k => k - 1).join(', ')).join(',  ')} };\nglDrawElements(GL_TRIANGLES, ${F.length * 3}, GL_UNSIGNED_INT, 0);` : '# 沒有 f\n\nglDrawArrays(GL_TRIANGLES, 0, 5);   // 每 3 個一組');
+    $('faTxt').innerHTML = txt;
+    $('faBtn').querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === cur));
+  }
+  $('faBtn').innerHTML = M.map(m => `<button class="b">${m[0]}</button>`).join('');
+  $('faBtn').querySelectorAll('button').forEach((b, i) => b.onclick = () => { cur = i; draw(); });
+  draw();
+})();
 
 // ---------- 3D model 結構 ----------
 (() => {
