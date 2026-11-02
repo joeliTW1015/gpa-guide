@@ -417,19 +417,56 @@ void main(void) {
 </div>
 
 <!-- ============================================================ -->
-<h2 id="smooth">smoothstep</h2>
+<h2 id="smooth">smoothstep：柔和的開關</h2>
+<div class="key"><b>一句話</b>
+<p style="margin:4px 0"><code>smoothstep(edge0, edge1, x)</code> 回答「x 在 edge0 到 edge1 之間<b>走到幾成了</b>」，結果是 0 ~ 1，而且起步和收尾都<b>慢慢來</b>。拿它乘在顏色或透明度上，就能讓東西<b>柔和地出現 / 消失</b>，而不是「啪」一下切換。</p></div>
+
+<table>
+<tr><th style="width:26%">寫法</th><th>結果</th><th>畫面上看起來</th></tr>
+<tr><td><code>x &lt; e ? 0.0 : 1.0</code><br>（= <code>step(e, x)</code>）</td><td>只有 0 或 1</td><td>硬邊、鋸齒</td></tr>
+<tr><td><code>clamp((x - e0) / (e1 - e0), 0, 1)</code></td><td>線性 0 → 1</td><td>有過渡，但在 e0、e1 兩處突然轉彎，看得出一圈「折線」</td></tr>
+<tr><td><code>smoothstep(e0, e1, x)</code></td><td>S 形 0 → 1，兩端斜率 0</td><td>過渡完全看不出接縫</td></tr>
+</table>
+
 <div class="grid2">
 <div><canvas id="ssCv" width="420" height="220"></canvas>
-<div class="ctrl">edge0 <input type="range" id="e0" min="-100" max="100" value="-50"><span id="e0V"></span> edge1 <input type="range" id="e1" min="-100" max="100" value="50"><span id="e1V"></span></div></div>
+<div class="ctrl">edge0 <input type="range" id="e0" min="-100" max="100" value="-50"><span id="e0V"></span> edge1 <input type="range" id="e1" min="-100" max="100" value="50"><span id="e1V"></span></div>
+<div class="ctrl">x <input type="range" id="ssX" min="-100" max="100" value="20"><span id="ssXV"></span></div>
+<p class="mut" style="margin:0">紅 = step（硬切）、灰虛線 = 線性 clamp、藍 = smoothstep。</p></div>
 <div class="card">
-<pre><code>genType smoothstep(genType edge0, genType edge1, genType x);</code></pre>
-<ul><li><b>edge0 / edge1</b>：Hermite 曲線的下 / 上邊界</li><li><b>x</b>：輸入值</li>
-<li>x ≤ edge0 → 0；x ≥ edge1 → 1；中間平滑過渡（兩端斜率為 0）</li></ul>
-<pre><code><span class="c">// 等價於</span>
-genType t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+<pre><code>float smoothstep(float edge0, float edge1, float x);
+<span class="c">// 等價於：先算「走到幾成」t，再把 t 彎成 S 形</span>
+float t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
 return t * t * (3.0 - 2.0 * t);</code></pre>
-<p class="mut">藍 = smoothstep、灰虛線 = 線性 clamp。DoG 用它把邊緣值平滑地映射到黑白；星空範例用它讓小星星淡出。</p></div>
+<ul>
+<li>x ≤ edge0 → 0；x ≥ edge1 → 1；中間平滑過渡。</li>
+<li><code>t·t·(3 − 2t)</code>：t = 0 和 t = 1 時斜率都是 0，所以和外面的 0、1 接得很順。</li>
+<li>要「由 1 變 0」就用 <code>1.0 - smoothstep(…)</code>。</li>
+<li><code>edge0 ≥ edge1</code> 時結果未定義（GLSL 規格）。</li>
+</ul>
+<div id="ssVal"></div></div>
 </div>
+
+<h3>例子：畫一個圓的邊緣</h3>
+<p>FS 裡算出 pixel 到圓心的距離 <code>d</code>，決定這個 pixel 有多「在圓裡」：</p>
+<pre><code><span class="c">// GLSL：fragment shader，半徑 r、邊緣寬 w</span>
+float d = length(uv - center);
+float a1 = d &lt; r ? 1.0 : 0.0;                    <span class="c">// 硬邊：鋸齒</span>
+float a2 = 1.0 - smoothstep(r - w, r, d);        <span class="c">// 柔邊：d 從 r-w 到 r 慢慢淡出</span>
+color = vec4(circleColor, a2);</code></pre>
+<div class="card">
+<div class="ctrl">邊緣寬 w <input type="range" id="ssW" min="0" max="30" value="8"><span id="ssWV"></span><span class="mut">（放大 4 倍顯示，一格 = 一個 pixel）</span></div>
+<div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">
+<div style="text-align:center"><canvas id="ssA" width="48" height="48" style="width:192px;height:192px;image-rendering:pixelated"></canvas><div class="mut"><code>d &lt; r ? 1 : 0</code></div></div>
+<div style="text-align:center"><canvas id="ssB" width="48" height="48" style="width:192px;height:192px;image-rendering:pixelated"></canvas><div class="mut"><code>1 - smoothstep(r - w, r, d)</code></div></div>
+</div></div>
+
+<h3>本課用到的地方</h3>
+<table>
+<tr><th style="width:26%">哪裡</th><th>寫法</th><th>作用</th></tr>
+<tr><td><a href="#sprite">星空（point sprite）</a></td><td><code>color * smoothstep(1.0, 7.0, starSize)</code></td><td>星星很小（遠）時是 0、長到 7 px 以上是 1 → 遠方的星星<b>淡入</b>，不會突然冒出來</td></tr>
+<tr><td><a href="#post">DoG 邊緣</a></td><td><code>2.0 * smoothstep(-2.0, 2.0, phi * H)</code></td><td>把差值 H 換成黑白：H 很負 → 黑線、接近 0 → 白，中間灰階 → 線條邊緣不會鋸齒</td></tr>
+</table>
 
 <!-- ============================================================ -->
 <h2 id="sprite">Point Sprites</h2>
@@ -688,16 +725,38 @@ ppSel('gray');
 
 // ---------- smoothstep ----------
 function ssDraw() {
-  const e0 = $('e0').value / 50, e1 = $('e1').value / 50, c = $('ssCv').getContext('2d'), X = x => 30 + (x + 2) / 4 * 370, Y = y => 190 - y * 160;
-  $('e0V').textContent = e0.toFixed(2); $('e1V').textContent = e1.toFixed(2);
+  const e0 = $('e0').value / 50, e1 = $('e1').value / 50, x0 = $('ssX').value / 50, c = $('ssCv').getContext('2d'), X = x => 30 + (x + 2) / 4 * 370, Y = y => 190 - y * 160;
+  $('e0V').textContent = e0.toFixed(2); $('e1V').textContent = e1.toFixed(2); $('ssXV').textContent = x0.toFixed(2);
   c.clearRect(0, 0, 420, 220); c.strokeStyle = '#ccc'; c.lineWidth = 1; c.beginPath(); c.moveTo(X(-2), Y(0)); c.lineTo(X(2), Y(0)); c.moveTo(X(0), Y(-0.1)); c.lineTo(X(0), Y(1.1)); c.moveTo(X(-2), Y(1)); c.lineTo(X(2), Y(1)); c.stroke();
   c.fillStyle = '#666'; c.font = '11px sans-serif'; c.fillText('1', X(0) + 4, Y(1) - 2); c.fillText('0', X(0) + 4, Y(0) - 2); c.fillText('x', X(2) - 8, Y(0) - 4);
-  const plot = (f, col, dash) => { c.strokeStyle = col; c.setLineDash(dash); c.lineWidth = 2; c.beginPath(); for (let i = 0; i <= 200; i++) { const x = -2 + 4 * i / 200; i ? c.lineTo(X(x), Y(f(x))) : c.moveTo(X(x), Y(f(x))); } c.stroke(); c.setLineDash([]); };
-  if (e1 > e0) { plot(x => Math.max(0, Math.min(1, (x - e0) / (e1 - e0))), '#999', [4, 4]); plot(x => sstep(e0, e1, x), '#2563eb', []); }
-  else { c.fillStyle = '#c53030'; c.fillText('edge0 ≥ edge1：結果未定義', 140, 100); }
+  const plot = (f, col, dash) => { c.strokeStyle = col; c.setLineDash(dash); c.lineWidth = 2; c.beginPath(); for (let i = 0; i <= 400; i++) { const x = -2 + 4 * i / 400; i ? c.lineTo(X(x), Y(f(x))) : c.moveTo(X(x), Y(f(x))); } c.stroke(); c.setLineDash([]); };
+  const mid = (e0 + e1) / 2, lin = x => Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  if (e1 > e0) {
+    plot(x => x < mid ? 0 : 1, '#e07a6a', []); plot(lin, '#999', [4, 4]); plot(x => sstep(e0, e1, x), '#2563eb', []);
+    const v = sstep(e0, e1, x0);
+    c.fillStyle = '#2563eb'; c.beginPath(); c.arc(X(x0), Y(v), 5, 0, 7); c.fill();
+    c.strokeStyle = '#2563eb'; c.setLineDash([2, 3]); c.beginPath(); c.moveTo(X(x0), Y(0)); c.lineTo(X(x0), Y(v)); c.stroke(); c.setLineDash([]);
+    const t = lin(x0);
+    $('ssVal').innerHTML = `x = ${x0.toFixed(2)}：走到 t = <b>${(t * 100).toFixed(0)}%</b> → step <b>${x0 < mid ? 0 : 1}</b>、線性 <b>${t.toFixed(2)}</b>、smoothstep <b>${v.toFixed(2)}</b>`;
+  } else { c.fillStyle = '#c53030'; c.fillText('edge0 ≥ edge1：結果未定義', 140, 100); $('ssVal').innerHTML = ''; }
   [[e0, 'edge0'], [e1, 'edge1']].forEach(([e, n]) => { c.strokeStyle = '#c53030'; c.setLineDash([2, 3]); c.beginPath(); c.moveTo(X(e), Y(-0.1)); c.lineTo(X(e), Y(1.1)); c.stroke(); c.setLineDash([]); c.fillStyle = '#c53030'; c.fillText(n, X(e) - 14, 212); });
 }
-['e0', 'e1'].forEach(id => $(id).oninput = ssDraw); ssDraw();
+['e0', 'e1', 'ssX'].forEach(id => $(id).oninput = ssDraw); ssDraw();
+
+// 圓的邊緣：硬邊 vs smoothstep
+function ssCircle() {
+  const w = $('ssW').value / 100, r = 0.38;
+  $('ssWV').textContent = w.toFixed(2);
+  [['ssA', d => d < r ? 1 : 0], ['ssB', d => 1 - (w > 0 ? sstep(r - w, r, d) : (d < r ? 0 : 1))]].forEach(([id, f]) => {
+    const g = $(id).getContext('2d'), im = g.createImageData(48, 48);
+    for (let y = 0; y < 48; y++) for (let x = 0; x < 48; x++) {
+      const d = Math.hypot((x + 0.5) / 48 - 0.5, (y + 0.5) / 48 - 0.5), a = f(d), k = (y * 48 + x) * 4;
+      im.data[k] = 255 + (37 - 255) * a; im.data[k + 1] = 255 + (99 - 255) * a; im.data[k + 2] = 255 + (235 - 255) * a; im.data[k + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+  });
+}
+$('ssW').oninput = ssCircle; ssCircle();
 
 // ---------- 星空 ----------
 (() => {
